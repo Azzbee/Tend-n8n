@@ -21,7 +21,7 @@ export interface LiveServerOptions {
   clock?: () => Date;
 }
 const setupPage = (nonce: string) =>
-  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(document.getElementById('secret').value);</script></html>`;
+  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
 export function createLiveServer(options: LiveServerOptions): Server {
   const { policy, auth, store } = options,
     clock = options.clock ?? (() => new Date());
@@ -182,6 +182,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           sources: store.sourceStatus(owner),
           telegram_delivery: store.telegramDeliveryCounts(),
           unavailable_record_count: store.quarantineCount(owner),
+          extraction_review_count: store.extractionReviewCount(owner),
         });
         return;
       }
@@ -192,8 +193,15 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const states = store
           .sourceStatus(owner)
           .filter((x) => x.source === source);
-        const interrupted = states.find((x) => x.status !== "current");
-        const selected = interrupted ?? states[calendarTurn++ % states.length];
+        const available = states.filter(
+          (x) =>
+            x.status !== "revoked" &&
+            (!x.retry_after_until ||
+              Date.parse(x.retry_after_until) <= clock().getTime()),
+        );
+        const pool = available.length ? available : states;
+        const interrupted = pool.find((x) => x.status !== "current");
+        const selected = interrupted ?? pool[calendarTurn++ % pool.length];
         if (!selected) throw new Error("source missing");
         const range =
           source === "gmail"
@@ -234,6 +242,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
               x.source === "gmail" &&
               x.eligible_for_extraction &&
               x.attribution === "direct" &&
+              x.authored_spans?.some((s) =>
+                /^I (?:will|promise to)\b/i.test(s.text),
+              ) &&
+              (key !== null || !store.extractionAttempted(x)) &&
               !store
                 .commitments(owner)
                 .some((c) => c.record_key === x.record_key),
@@ -251,6 +263,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         respond(200, {
           eligible: true,
           record_key: record.record_key,
+          content_hash: record.content_hash,
           record: { authored_span: span.text, direction: record.direction },
           request: {
             model: "qwen3:0.6b",
@@ -294,6 +307,23 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      if (url.pathname === "/api/live/extraction-attempt") {
+        if (
+          typeof value.record_key !== "string" ||
+          typeof value.content_hash !== "string" ||
+          Object.keys(value).some(
+            (k) => !["record_key", "content_hash"].includes(k),
+          )
+        )
+          throw new Error("invalid extraction attempt");
+        store.markExtractionAttempt(
+          owner,
+          value.record_key,
+          value.content_hash,
+        );
+        respond(200, { attempted: true });
+        return;
+      }
       if (url.pathname === "/api/live/reconnect") {
         if (
           value.manual_reconnect !== true ||

@@ -287,6 +287,7 @@ describe("private Google Telegram boundary", () => {
               ],
               contacts_total: 2,
               unavailable_record_count: 3,
+              extraction_review_count: 2,
               meetings: [
                 {
                   occurred_at: "2026-10-13T22:00:00Z",
@@ -323,6 +324,9 @@ describe("private Google Telegram boundary", () => {
     ) as { json: { chat_id: string; text: string } }[];
     expect(output[0]?.json.chat_id).toBe("424242");
     const text = output[0]!.json.text;
+    expect(text).toContain(
+      "Unvalidated extraction attempts needing review: 2.",
+    );
     expect(text).toContain("Private Gmail and Calendar summary");
     expect(text).toContain("a@example.invalid");
     expect(text).toContain("Unavailable source records needing review: 3");

@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-13T22:59:49.062Z",
+  "checked_at": "2026-10-13T23:24:26.230Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -14,15 +14,15 @@
     "11-google-gmail-readonly.json": "8c9dbcd32e30ae9d28ea3e28b2a51d6322a11435da876a43a7dd0907697660ec",
     "12-google-calendar-readonly.json": "e203afea6bc10c28f79affcca2a0986b85eeea3ea9e47ce63796b897f09a6c5c",
     "13-google-normalize-store.json": "04c4703ed941417e62144c624ead612ac13ad9b9eee63fdcc6545e9c71156194",
-    "14-google-telegram-private.json": "feb358e995d8bc4c6e4c743678fef236a42c835c031b3407ceaa9621ef383940",
-    "15-google-extract-commitments.json": "8921770c8cff5208b63cfa50e68926af6803cd542b858896a94068a6ac88b0be"
+    "14-google-telegram-private.json": "15bc911faae39b5552b9374543530379bc14519b62bbf941d5d896c8722646a3",
+    "15-google-extract-commitments.json": "da0be1805eeb9044b1f7ee95511af93e66415fe1acdb9106df21df8e2e354b92"
   },
   "source_sha256": {
-    "engine.ts": "886ae92f03251e7e5b9ec6df48ab7ced783be91f142f87231179d4fdfa00304e",
-    "server.ts": "b4b48e857a82ce4b18a8d8874304d4c00d61d77b711425d78e10bacf14d3a30e",
-    "build-workflows.ts": "b236ee313f9a984734326cdaa19e2c10c5807a2b779838bc911a122b4b4da905",
+    "engine.ts": "adce7ed8523cae09236bfb19975e45cd2cefcac7a3a39a421d26e8a104ddd9b4",
+    "server.ts": "34f812d3a23d0a1d6db6b85d0f484bc9a736742c1eaea6c89d8e3280345d147c",
+    "build-workflows.ts": "580bd54ff914b00dfdcf3dd296fb9f704ca8c193a9a0bde417cb2ab2821e22f6",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "b71e95c2395b7d7bea39782034c29111b8d976721c634f8c85178e073b59025f"
+    "integration.ts": "1230ba8d58440848493f5e2efb1183b7f9339cee33bab243b3e20c3483f75c3c"
   },
   "runtime": {
     "node": "v24.5.0",
@@ -37,6 +37,14 @@
       "name": "Missing-file survival",
       "pass": true,
       "detail": "Missing allowlisted artifact returns an error; server remains available"
+    },
+    {
+      "name": "Review artifact links and private path isolation",
+      "pass": true,
+      "detail": {
+        "working_local_links": 29,
+        "private_paths_denied": 3
+      }
     },
     {
       "name": "Isolated synthetic retries",

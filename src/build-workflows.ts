@@ -966,27 +966,40 @@ const readyModel = code(
   500,
 );
 const branchModel = condition("Eligible authored promise", "eligible", 710);
+const markLiveExtraction = liveHttp(
+  "Record extraction attempt before model",
+  "/api/live/extraction-attempt",
+  930,
+  "={{ JSON.stringify({record_key:$json.record_key,content_hash:$json.content_hash}) }}",
+);
+const restoreLiveInput = code(
+  "Restore current authored model input",
+  "return [{json:$('Read eligible authored span').first().json}];",
+  1190,
+);
 const liveChain = structuredClone(ai);
-liveChain.position = [930, 0];
+liveChain.position = [1450, 0];
 const validateLiveCandidate = code(
   "Validate exact authored quote",
   "const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!/^I (?:will|promise to)\\b/i.test(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,candidate}}];",
-  1190,
+  1710,
 );
 const saveLiveCandidate = liveHttp(
   "Persist owner-scoped pending promise",
   "/api/live/candidates",
-  1450,
+  1970,
   "={{ JSON.stringify($json) }}",
 );
 const liveModel = structuredClone(model);
-liveModel.position = [930, 260];
+liveModel.position = [1450, 260];
 liveAI.nodes.push(
   modelStart,
   modelSchedule,
   getLiveModel,
   readyModel,
   branchModel,
+  markLiveExtraction,
+  restoreLiveInput,
   liveChain,
   validateLiveCandidate,
   saveLiveCandidate,
@@ -996,7 +1009,9 @@ connect(liveAI, modelStart.name, getLiveModel.name);
 connect(liveAI, modelSchedule.name, getLiveModel.name);
 connect(liveAI, getLiveModel.name, readyModel.name);
 connect(liveAI, readyModel.name, branchModel.name);
-connect(liveAI, branchModel.name, liveChain.name);
+connect(liveAI, branchModel.name, markLiveExtraction.name);
+connect(liveAI, markLiveExtraction.name, restoreLiveInput.name);
+connect(liveAI, restoreLiveInput.name, liveChain.name);
 connect(liveAI, liveChain.name, validateLiveCandidate.name);
 connect(liveAI, validateLiveCandidate.name, saveLiveCandidate.name);
 liveAI.connections[liveModel.name] = {

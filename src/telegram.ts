@@ -116,7 +116,7 @@ const lines =`,
   )
   .replace(
     " if(record(reply.contact))",
-    " if(typeof reply.unavailable_record_count==='number')lines.push('Unavailable source records needing review: '+reply.unavailable_record_count+'.');\n if(record(reply.contact))",
+    " if(typeof reply.unavailable_record_count==='number')lines.push('Unavailable source records needing review: '+reply.unavailable_record_count+'.');\n if(typeof reply.extraction_review_count==='number')lines.push('Unvalidated extraction attempts needing review: '+reply.extraction_review_count+'.');\n if(record(reply.contact))",
   )
   .replace("Upcoming fixture meetings:", "Upcoming meetings:")
   .replace(

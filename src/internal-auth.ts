@@ -38,8 +38,11 @@ export class InternalAuth {
     return this.hash !== null;
   }
   verify(header: string | undefined): boolean {
-    if (!this.hash || !header?.startsWith("Bearer ")) return false;
-    const supplied = verificationHash(header.slice(7));
+    if (!this.hash || !header) return false;
+    // Native Header Auth also supports the exact bare key saved by the first setup UI.
+    const secret = header.startsWith("Bearer ") ? header.slice(7) : header;
+    if (!/^[A-Za-z0-9_-]{43,128}$/.test(secret)) return false;
+    const supplied = verificationHash(secret);
     return timingSafeEqual(
       Buffer.from(supplied, "hex"),
       Buffer.from(this.hash, "hex"),

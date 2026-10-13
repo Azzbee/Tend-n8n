@@ -107,6 +107,7 @@ export function parseLivePolicy(input: unknown): LivePolicy {
     /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+$/;
   if (
     !email.test(account) ||
+    account !== account.toLowerCase() ||
     aliases.some((a) => !email.test(a)) ||
     !aliases.includes(account)
   )
@@ -189,7 +190,7 @@ function localParts(date: Date, timezone: string): LocalParts {
 function wallMillis(p: LocalParts): number {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
 }
-/** Local dates are converted with IANA offsets. Ambiguous/gap event times fail closed. */
+/** Provider event times are strict; rolling windows choose the earlier fold or advance by a gap. */
 export function zonedLocalInstant(
   value: string,
   timezone: string,
@@ -205,14 +206,21 @@ export function zonedLocalInstant(
     throw new Error("invalid local date/time");
   const target = reference.getTime(),
     candidates = new Set<number>();
+  const gapCandidates: { instant: number; wall: number }[] = [];
   for (const shift of [-86_400_000, 0, 86_400_000]) {
     const probe = new Date(target + shift);
     const offset = wallMillis(localParts(probe, timezone)) - probe.getTime();
     const instant = target - offset;
-    if (wallMillis(localParts(new Date(instant), timezone)) === target)
-      candidates.add(instant);
+    const wall = wallMillis(localParts(new Date(instant), timezone));
+    if (wall === target) candidates.add(instant);
+    else if (wall > target) gapCandidates.push({ instant, wall });
   }
   const found = [...candidates].sort((a, b) => a - b);
+  if (!found.length && allowAmbiguous && gapCandidates.length) {
+    // Rolling windows move forward by a spring gap. Provider event times stay strict.
+    gapCandidates.sort((a, b) => a.wall - b.wall || a.instant - b.instant);
+    return new Date(gapCandidates[0]!.instant);
+  }
   if (!found.length || (found.length !== 1 && !allowAmbiguous))
     throw new Error("ambiguous/nonexistent local date/time");
   return new Date(found[0]!);

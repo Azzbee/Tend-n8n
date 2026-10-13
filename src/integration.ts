@@ -568,6 +568,36 @@ try {
       detail:
         "Missing allowlisted artifact returns an error; server remains available",
     });
+    const guide = await (await fetch(fixtureBase + "/")).text();
+    const artifactLinks = [
+      ...new Set(
+        [...guide.matchAll(/href="([^"]+)"/g)]
+          .map((m) => m[1]!)
+          .filter((link) => !link.includes(":") && !link.startsWith("#")),
+      ),
+    ];
+    for (const link of artifactLinks)
+      assert(
+        (await fetch(new URL(link, fixtureBase))).status === 200,
+        `review artifact unavailable: ${link}`,
+      );
+    for (const privatePath of [
+      "/.scratch/live-private/policy.json",
+      "/.scratch/live-private/auth.json",
+      "/.scratch/live-google/header-configured.json",
+    ])
+      assert(
+        (await fetch(fixtureBase + privatePath)).status === 404,
+        "private operator artifact exposed",
+      );
+    checks.push({
+      name: "Review artifact links and private path isolation",
+      pass: true,
+      detail: {
+        working_local_links: artifactLinks.length,
+        private_paths_denied: 3,
+      },
+    });
     for (const runId of ["stray-review", "another-review"]) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const result = await fetch(

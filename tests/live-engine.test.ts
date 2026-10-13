@@ -61,8 +61,8 @@ function raw(id = "m1"): LiveRecord {
     eligible_for_extraction: true,
   };
 }
-function makeStore(): TendStore {
-  const store = new TendStore(":memory:", {
+function makeStore(path = ":memory:"): TendStore {
+  const store = new TendStore(path, {
     mode: "live",
     principal,
     clock: now,
@@ -83,6 +83,66 @@ function makeStore(): TendStore {
   return store;
 }
 describe("private live owner store", () => {
+  it("persists attempted evidence without storing model output and permits changed evidence", () => {
+    const directory = mkdtempSync(join(tmpdir(), "tend-extraction-")),
+      path = join(directory, "private.sqlite");
+    let store = makeStore(path);
+    try {
+      const record = store.ingest(raw());
+      store.markExtractionAttempt(
+        principal.owner_id,
+        record.record_key,
+        record.content_hash,
+      );
+      expect(store.extractionReviewCount(principal.owner_id)).toBe(1);
+      store.close();
+      store = makeStore(path);
+      expect(store.extractionAttempted(record)).toBe(true);
+      const text = "I will send revised notes by 2026-10-15.";
+      const updated = store.ingest({
+        ...raw(),
+        body_text: text,
+        authored_text: text,
+        authored_spans: [{ start: 0, end: text.length, text }],
+      });
+      expect(store.extractionAttempted(updated)).toBe(false);
+      expect(store.extractionReviewCount(principal.owner_id)).toBe(0);
+      store.expireLiveEvidence(
+        principal.owner_id,
+        "2026-10-15T12:00:00Z",
+        "2026-10-14T12:00:00Z",
+        "2026-10-21T12:00:00Z",
+      );
+      expect(store.extractionAttempted(record)).toBe(false);
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it("cannot clear revocation with a later transient error", () => {
+    const store = makeStore();
+    try {
+      store.markLiveSyncError(
+        principal.owner_id,
+        "gmail",
+        "owner@example.invalid",
+        true,
+      );
+      expect(() =>
+        store.markLiveSyncError(
+          principal.owner_id,
+          "gmail",
+          "owner@example.invalid",
+          false,
+          null,
+          503,
+        ),
+      ).toThrow(/reconnect|revoked/);
+      expect(store.sourceStatus(principal.owner_id)[0]?.status).toBe("revoked");
+    } finally {
+      store.close();
+    }
+  });
   it("scrubs prior candidate text/date when current accepted evidence changes", () => {
     const store = makeStore(),
       record = raw();

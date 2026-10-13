@@ -322,7 +322,8 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS live_quarantines(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,reason TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
  CREATE TABLE IF NOT EXISTS live_sources(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id));
  CREATE TABLE IF NOT EXISTS live_sync_seen(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
- CREATE TABLE IF NOT EXISTS live_telegram_updates(owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(owner_id,channel_id,update_id));`);
+ CREATE TABLE IF NOT EXISTS live_telegram_updates(owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(owner_id,channel_id,update_id));
+ CREATE TABLE IF NOT EXISTS live_extraction_attempts(owner_id TEXT NOT NULL,record_key TEXT NOT NULL,content_hash TEXT NOT NULL,attempted_at TEXT NOT NULL,PRIMARY KEY(owner_id,record_key));`);
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),mode TEXT NOT NULL,principal_id TEXT NOT NULL)",
     );
@@ -868,6 +869,8 @@ export class TendStore {
       (x) => x.source === source && x.account_id === accountId,
     );
     if (!state) throw new Error("unknown source");
+    if (state.status === "revoked")
+      throw new Error("source revoked; explicit reconnect required");
     this.db
       .prepare(
         "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
@@ -914,6 +917,11 @@ export class TendStore {
       });
     this.db
       .prepare("DELETE FROM interactions WHERE owner_id=? AND record_key=?")
+      .run(owner, record.record_key);
+    this.db
+      .prepare(
+        "DELETE FROM live_extraction_attempts WHERE owner_id=? AND record_key=?",
+      )
       .run(owner, record.record_key);
     this.scrubReplyCache(owner);
   }
@@ -1039,6 +1047,51 @@ export class TendStore {
       )
       .all(owner)
       .map((r) => JSON.parse(String(r.data)) as NormalizedRecord);
+  }
+  extractionAttempted(record: NormalizedRecord): boolean {
+    this.assertOwner(record.owner_id);
+    const row = this.db
+      .prepare(
+        "SELECT content_hash FROM live_extraction_attempts WHERE owner_id=? AND record_key=?",
+      )
+      .get(record.owner_id, record.record_key);
+    return row?.content_hash === record.content_hash;
+  }
+  markExtractionAttempt(
+    owner: string,
+    recordKey: string,
+    expectedHash: string,
+  ): void {
+    this.assertOwner(owner);
+    const record = this.interactions(owner).find(
+      (r) => r.record_key === recordKey,
+    );
+    if (
+      this.mode !== "live" ||
+      !record ||
+      record.content_hash !== expectedHash ||
+      record.source !== "gmail" ||
+      record.attribution !== "direct" ||
+      !record.eligible_for_extraction ||
+      !record.authored_spans?.some((s) =>
+        /^I (?:will|promise to)\b/i.test(s.text),
+      )
+    )
+      throw new Error("current eligible authored evidence required");
+    this.db
+      .prepare(
+        "INSERT INTO live_extraction_attempts VALUES(?,?,?,?) ON CONFLICT(owner_id,record_key) DO UPDATE SET content_hash=excluded.content_hash,attempted_at=excluded.attempted_at",
+      )
+      .run(owner, recordKey, expectedHash, this.clock().toISOString());
+  }
+  extractionReviewCount(owner: string): number {
+    this.assertOwner(owner);
+    const candidates = new Set(
+      this.commitments(owner).map((c) => c.record_key),
+    );
+    return this.interactions(owner).filter(
+      (r) => this.extractionAttempted(r) && !candidates.has(r.record_key),
+    ).length;
   }
   resolveContact(owner: string, query: string): Contact {
     this.assertOwner(owner);
@@ -1322,7 +1375,10 @@ export class TendStore {
         sources: this.sourceStatus(owner),
         counts: this.counts(owner),
         ...(this.mode === "live"
-          ? { unavailable_record_count: this.quarantineCount(owner) }
+          ? {
+              unavailable_record_count: this.quarantineCount(owner),
+              extraction_review_count: this.extractionReviewCount(owner),
+            }
           : {}),
       };
     if (cmd === "/prep") {

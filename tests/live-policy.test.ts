@@ -19,6 +19,10 @@ describe("private read-only live policy", () => {
       { verified_owner_emails: ["someone@example.invalid"] },
       { limits: { ...exampleLivePolicy.limits, max_attempts: 100 } },
       { writes_allowed: true },
+      {
+        account_email: "Owner@example.invalid",
+        verified_owner_emails: ["Owner@example.invalid"],
+      },
     ])
       expect(() =>
         parseLivePolicy({ ...exampleLivePolicy, ...override }),
@@ -61,6 +65,14 @@ describe("private read-only live policy", () => {
     ).toEqual({
       start: "2026-10-24T12:00:00.000Z",
       end: "2026-10-31T13:00:00.000Z",
+    });
+  });
+  it("moves a rolling-window endpoint forward through a spring clock gap", () => {
+    expect(
+      calendarWindow(exampleLivePolicy, new Date("2027-03-21T01:30:00Z")),
+    ).toEqual({
+      start: "2027-03-21T01:30:00.000Z",
+      end: "2027-03-28T01:30:00.000Z",
     });
   });
 });

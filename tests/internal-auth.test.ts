@@ -16,6 +16,9 @@ describe("private internal credential", () => {
       expect(() => auth.configure(fictionalKey, "wrong nonce")).toThrow();
       auth.configure(fictionalKey, auth.setupNonce);
       expect(auth.verify("Bearer " + fictionalKey)).toBe(true);
+      expect(auth.verify(fictionalKey)).toBe(true);
+      expect(auth.verify(" " + fictionalKey)).toBe(false);
+      expect(auth.verify(fictionalKey + "wrong")).toBe(false);
       expect(auth.verify("Bearer " + fictionalKey + "wrong")).toBe(false);
       expect(readFileSync(file, "utf8")).not.toContain(fictionalKey);
       expect(statSync(file).mode & 0o077).toBe(0);

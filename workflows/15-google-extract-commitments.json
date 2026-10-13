@@ -86,11 +86,50 @@
       }
     },
     {
+      "id": "record-extraction-attempt-before-model",
+      "name": "Record extraction attempt before model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [930, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/extraction-attempt",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({record_key:$json.record_key,content_hash:$json.content_hash}) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "restore-current-authored-model-input",
+      "name": "Restore current authored model input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1190, 0],
+      "parameters": {
+        "jsCode": "return [{json:$('Read eligible authored span').first().json}];"
+      }
+    },
+    {
       "id": "local-ai-extraction-basic-llm-chain-",
       "name": "Local AI extraction (Basic LLM Chain)",
       "type": "@n8n/n8n-nodes-langchain.chainLlm",
       "typeVersion": 1.9,
-      "position": [930, 0],
+      "position": [1450, 0],
       "parameters": {
         "promptType": "define",
         "text": "={{ $json.request.messages[1].content }}",
@@ -110,7 +149,7 @@
       "name": "Validate exact authored quote",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1190, 0],
+      "position": [1710, 0],
       "parameters": {
         "jsCode": "const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!/^I (?:will|promise to)\\b/i.test(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,candidate}}];"
       }
@@ -120,7 +159,7 @@
       "name": "Persist owner-scoped pending promise",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1450, 0],
+      "position": [1970, 0],
       "parameters": {
         "url": "http://host.docker.internal:18768/api/live/candidates",
         "method": "POST",
@@ -149,7 +188,7 @@
       "name": "Local Ollama Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
       "typeVersion": 1,
-      "position": [930, 260],
+      "position": [1450, 260],
       "parameters": {
         "model": "qwen3:0.6b",
         "options": {
@@ -196,6 +235,28 @@
       ]
     },
     "Eligible authored promise": {
+      "main": [
+        [
+          {
+            "node": "Record extraction attempt before model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record extraction attempt before model": {
+      "main": [
+        [
+          {
+            "node": "Restore current authored model input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore current authored model input": {
       "main": [
         [
           {

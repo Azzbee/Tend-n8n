@@ -12,6 +12,167 @@ async function listen(server: Server): Promise<number> {
   return a.port;
 }
 describe("private live API", () => {
+  it("moves extraction past non-promises and failed attempts while retaining them for review", async () => {
+    const policy = exampleLivePolicy,
+      clock = () => new Date("2026-10-14T12:00:00Z");
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: policy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+      clock,
+    });
+    const server = createLiveServer({
+      policy,
+      store,
+      auth: new InternalAuth(undefined, verificationHash(key)),
+      clock,
+    });
+    const base = `http://127.0.0.1:${await listen(server)}`;
+    const headers = {
+      Authorization: "Bearer " + key,
+      "Content-Type": "application/json",
+    };
+    try {
+      const state = (await (
+        await fetch(base + "/api/live/sync-state?source=gmail", { headers })
+      ).json()) as Record<string, unknown>;
+      const records = [
+        "Hello, how are you?",
+        "I will send the notes by 2026-10-15.",
+        "I will send the slides by 2026-10-16.",
+      ].map((text, i) => ({
+        id: String(i),
+        threadId: "fictional-thread-" + i,
+        labelIds: ["INBOX"],
+        internalDate: String(Date.parse("2026-10-14T11:00:00Z")),
+        payload: {
+          mimeType: "text/plain",
+          headers: [
+            { name: "From", value: "mira@example.invalid" },
+            { name: "To", value: policy.account_email },
+          ],
+          body: { data: Buffer.from(text).toString("base64url") },
+        },
+      }));
+      expect(
+        (
+          await fetch(base + "/api/live/sync", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              source: "gmail",
+              account_email: policy.account_email,
+              profile_account_email: policy.account_email,
+              records,
+              previous_cursor: null,
+              cursor: null,
+              complete: true,
+              reconcile: true,
+              window_start: state.window_start,
+              window_end: state.window_end,
+              seen_record_ids: [],
+            }),
+          })
+        ).status,
+      ).toBe(200);
+      const first = (await (
+        await fetch(base + "/api/live/model-input", { headers })
+      ).json()) as Record<string, unknown>;
+      expect(first.eligible).toBe(true);
+      expect(first.record_key).toBe(
+        store.interactions(policy.principal_id)[1]?.record_key,
+      );
+      expect(
+        (
+          await fetch(base + "/api/live/extraction-attempt", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              record_key: first.record_key,
+              content_hash: "stale",
+            }),
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await fetch(base + "/api/live/extraction-attempt", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              record_key: first.record_key,
+              content_hash: first.content_hash,
+            }),
+          })
+        ).status,
+      ).toBe(200);
+      const second = (await (
+        await fetch(base + "/api/live/model-input", { headers })
+      ).json()) as Record<string, unknown>;
+      expect(second.eligible).toBe(true);
+      expect(second.record_key).toBe(
+        store.interactions(policy.principal_id)[2]?.record_key,
+      );
+      expect(second.record_key).not.toBe(first.record_key);
+      expect((await fetch(base + "/api/live/status", { headers })).status).toBe(
+        200,
+      );
+      const status = (await (
+        await fetch(base + "/api/live/status", { headers })
+      ).json()) as Record<string, unknown>;
+      expect(status.extraction_review_count).toBe(1);
+      expect(store.counts(policy.principal_id).interactions).toBe(3);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      store.close();
+    }
+  });
+  it("continues another selected calendar while the first is in retry backoff", async () => {
+    const policy = exampleLivePolicy,
+      clock = () => new Date("2026-10-14T12:00:00Z");
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: policy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+      clock,
+    });
+    const server = createLiveServer({
+      policy,
+      store,
+      auth: new InternalAuth(undefined, verificationHash(key)),
+      clock,
+    });
+    const base = `http://127.0.0.1:${await listen(server)}`;
+    try {
+      const deferred = store
+        .sourceStatus(policy.principal_id)
+        .find((s) => s.source === "calendar")!;
+      store.markLiveSyncError(
+        policy.principal_id,
+        "calendar",
+        deferred.account_id,
+        false,
+        "2026-10-15T12:00:00Z",
+        429,
+      );
+      const result = (await (
+        await fetch(base + "/api/live/sync-state?source=calendar", {
+          headers: { Authorization: "Bearer " + key },
+        })
+      ).json()) as Record<string, unknown>;
+      expect(result.calendar_id).not.toBe(deferred.account_id);
+      expect(result.retry_after_until).toBe(null);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      store.close();
+    }
+  });
   it("blocks unauthenticated/private diagnostics and account mismatch before ingest", async () => {
     const clock = () => new Date("2026-10-14T12:00:00Z");
     const policy = exampleLivePolicy;
