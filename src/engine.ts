@@ -640,7 +640,10 @@ export class TendStore {
       if (c.status !== "confirmed") throw new Error("unconfirmed draft");
       return {
         outbound_sent: false,
-        preview: `Review-only draft: Following up on "${c.quote}". Could you confirm progress?`,
+        preview:
+          c.direction === "owed_by_me"
+            ? `Review-only draft: Update on my promise "${c.quote}". [Add my actual progress before sending]`
+            : `Review-only draft: Following up on "${c.quote}". Could you confirm progress?`,
         evidence: c.record_key,
       };
     }

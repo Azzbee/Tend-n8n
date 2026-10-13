@@ -135,6 +135,9 @@ describe("model output boundary and explicit state", () => {
     expect(store.command({ ...demoAuth, text: "/today" }).commitments).toEqual(
       [],
     );
+    expect(() =>
+      store.command({ ...demoAuth, text: `/draft ${c.commitment_id}` }),
+    ).toThrow("unconfirmed draft");
   });
   it("rejects fabricated quotes, dates, action and tool fields", () => {
     const r = fixtureRecords[0]!;
@@ -171,6 +174,53 @@ describe("model output boundary and explicit state", () => {
     expect(() =>
       store.command({ ...demoAuth, text: `/cancel ${c.commitment_id}` }),
     ).toThrow("transition");
+  });
+  it("asks the contact for progress only on an incoming promise", () => {
+    const record = fixtureRecords[0]!;
+    store.ingest(record);
+    const candidate = store.addCandidate(record, proposed);
+    store.command({
+      ...demoAuth,
+      text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+    });
+    const before = store.commitments("demo-owner");
+    const draft = store.command({
+      ...demoAuth,
+      text: `/draft ${candidate.commitment_id}`,
+    });
+    expect(candidate.direction).toBe("owed_to_me");
+    expect(draft.preview).toContain("Could you confirm progress?");
+    expect(draft.preview).toContain(candidate.quote);
+    expect(draft.evidence).toBe(candidate.record_key);
+    expect(draft.outbound_sent).toBe(false);
+    expect(store.commitments("demo-owner")).toEqual(before);
+  });
+  it("previews an owner update for an outgoing promise without inventing progress", () => {
+    const record = fixtureRecords.find((r) => r.direction === "sent")!;
+    store.ingest(record);
+    const candidate = store.addCandidate(record, {
+      quote: record.body_text,
+      action: "review your demo",
+      suggested_due: "2026-10-16",
+    });
+    store.command({
+      ...demoAuth,
+      text: `/confirm ${candidate.commitment_id} 2026-10-16`,
+    });
+    const before = store.commitments("demo-owner");
+    const draft = store.command({
+      ...demoAuth,
+      text: `/draft ${candidate.commitment_id}`,
+    });
+    expect(candidate.direction).toBe("owed_by_me");
+    expect(draft.preview).toContain("Update on my promise");
+    expect(draft.preview).toContain(candidate.quote);
+    expect(draft.preview).toContain("[Add my actual progress before sending]");
+    expect(draft.preview).not.toContain("Could you confirm progress?");
+    expect(draft.preview).not.toMatch(/\b(?:done|completed|finished|sent)\b/i);
+    expect(draft.evidence).toBe(candidate.record_key);
+    expect(draft.outbound_sent).toBe(false);
+    expect(store.commitments("demo-owner")).toEqual(before);
   });
   it("keeps prompt-injection text as inert data", () => {
     const r = fixtureRecords[6]!;
