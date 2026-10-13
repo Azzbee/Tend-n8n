@@ -1,6 +1,11 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
-import { telegramGuardCode, telegramReplyCode } from "./telegram.ts";
+import {
+  telegramGuardCode,
+  telegramReplyCode,
+  telegramLiveGuardCode,
+  telegramLiveReplyCode,
+} from "./telegram.ts";
 async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(
     path,
@@ -45,6 +50,7 @@ type Workflow = {
     saveDataSuccessExecution: "all" | "none";
     saveDataErrorExecution: "all" | "none";
     timezone: "Europe/Paris";
+    saveManualExecutions?: boolean;
   };
   tags: never[];
   pinData: Record<string, unknown>;
@@ -371,7 +377,10 @@ for (const w of workflows.slice(0, 5)) {
   };
 }
 const telegramCredential = {
-  telegramApi: { id: "TendReviewTelegram", name: "TendReviewTelegram" },
+  telegramApi: {
+    id: "CONFIGURE_TELEGRAM_CREDENTIAL_ID",
+    name: "CONFIGURE_TELEGRAM_CREDENTIAL",
+  },
 };
 const liveTelegram = workflow(
   "TendLiveTelegram",
@@ -446,10 +455,561 @@ const liveTelegram = workflow(
 liveTelegram.settings.saveDataSuccessExecution = "none";
 liveTelegram.settings.saveDataErrorExecution = "none";
 workflows.push(liveTelegram);
+// Live templates never carry saved connection values or an actual owner account.
+const internalCredential = {
+  httpHeaderAuth: {
+    id: "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+    name: "CONFIGURE_INTERNAL_API_CREDENTIAL",
+  },
+};
+const gmailCredential = {
+  gmailOAuth2: {
+    id: "CONFIGURE_GMAIL_READONLY_CREDENTIAL_ID",
+    name: "CONFIGURE_GMAIL_READONLY_CREDENTIAL",
+  },
+};
+const calendarCredential = {
+  googleCalendarOAuth2Api: {
+    id: "CONFIGURE_CALENDAR_READONLY_CREDENTIAL_ID",
+    name: "CONFIGURE_CALENDAR_READONLY_CREDENTIAL",
+  },
+};
+function liveHttp(name: string, path: string, x: number, body?: string): Node {
+  const n = http(name, path, x, body);
+  n.parameters = {
+    ...n.parameters,
+    url: `http://host.docker.internal:18768${path}`,
+    authentication: "genericCredentialType",
+    genericAuthType: "httpHeaderAuth",
+    options: { timeout: 5000 },
+  };
+  n.credentials = internalCredential;
+  n.retryOnFail = false;
+  n.notes =
+    "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.";
+  n.notesInFlow = true;
+  return n;
+}
+function condition(name: string, field: string, x: number): Node {
+  return node(
+    name,
+    "if",
+    {
+      conditions: {
+        options: { caseSensitive: true, typeValidation: "strict", version: 2 },
+        conditions: [
+          {
+            id: "condition",
+            leftValue: `={{ $json.${field} }}`,
+            rightValue: true,
+            operator: { type: "boolean", operation: "true", singleValue: true },
+          },
+        ],
+        combinator: "and",
+      },
+      options: {},
+    },
+    x,
+    0,
+    2.2,
+  );
+}
+function connect(w: Workflow, from: string, to: string, output = 0): void {
+  const prior = w.connections[from]?.main ?? [];
+  while (prior.length <= output) prior.push([]);
+  prior[output]!.push({ node: to, type: "main", index: 0 });
+  w.connections[from] = { main: prior };
+}
+function privateWorkflow(id: string, title: string): Workflow {
+  const w = workflow(id, title, [], {});
+  w.settings.saveDataSuccessExecution = "none";
+  w.settings.saveDataErrorExecution = "none";
+  w.settings.saveManualExecutions = false;
+  return w;
+}
+const approvedStateCode = `const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000)||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.reconnect_required!==true&&wait<=Date.now()}}];`;
+const failureBody =
+  "={{ JSON.stringify({source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}";
+function addReadStage(
+  w: Workflow,
+  phase: string,
+  url: string,
+  credential: NonNullable<Node["credentials"]>,
+  accept: string,
+  x: number,
+  query?: string,
+): { start: string; success: string } {
+  const prepName = `Prepare ${phase}`;
+  const prepare = code(
+    prepName,
+    `const x=$input.first().json;const attempts={...(x.attempts||{})};attempts[${JSON.stringify(phase)}]=(attempts[${JSON.stringify(phase)}]||0)+1;const request_allowed=Date.now()+5000<=x.deadline_at&&attempts[${JSON.stringify(phase)}]<=x.budget.max_attempts;return [{json:{...x,attempts,request_allowed,status_code:request_allowed?0:599,failure_kind:request_allowed?null:'budget-exhausted',retry_allowed:false}}];`,
+    x,
+  );
+  const budget = condition(
+    `${phase} request budget`,
+    "request_allowed",
+    x + 150,
+  );
+  const requestNode: Node = {
+    ...node(
+      `Read ${phase}`,
+      "httpRequest",
+      {
+        method: "GET",
+        url,
+        authentication: "predefinedCredentialType",
+        nodeCredentialType: phase.startsWith("Calendar")
+          ? "googleCalendarOAuth2Api"
+          : "gmailOAuth2",
+        ...(query
+          ? { sendQuery: true, specifyQuery: "json", jsonQuery: query }
+          : {}),
+        options: {
+          timeout: 5000,
+          response: {
+            response: {
+              fullResponse: true,
+              neverError: true,
+              responseFormat: "json",
+            },
+          },
+        },
+      },
+      x + 300,
+      0,
+      4.2,
+    ),
+    credentials: credential,
+    retryOnFail: false,
+    continueOnFail: true,
+  };
+  const check = code(
+    `Check ${phase}`,
+    `const response=$input.first().json;const ctx=$(${JSON.stringify(prepName)}).item.json;const status=Number(response.statusCode)||599;const rateLimited=status===403&&Array.isArray(response.body?.error?.errors)&&response.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const headers=response.headers||{};const raw=headers['retry-after']??headers['Retry-After'];const seconds=typeof raw==='string'&&/^\\d+$/.test(raw)?Number(raw):typeof raw==='string'?Math.max(0,Math.ceil((Date.parse(raw)-Date.now())/1000)):NaN;const retry_delay_seconds=Number.isFinite(seconds)?seconds:Math.min(8,2**(ctx.attempts[${JSON.stringify(phase)}]-1));let out={...ctx,ok:false,status_code:status,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds,retry_allowed:(status===429||rateLimited||status>=500)&&ctx.attempts[${JSON.stringify(phase)}]<ctx.budget.max_attempts&&Date.now()+retry_delay_seconds*1000+5000<=ctx.deadline_at};if(status>=200&&status<300){const body=response.body;try{${accept}}catch{out={...out,status_code:502,failure_kind:'provider-contract',retry_allowed:false,reconnect_required:false};}}return [{json:out}];`,
+    x + 450,
+  );
+  const success = condition(`${phase} succeeded`, "ok", x + 600);
+  const retry = condition(
+    `${phase} retry within budget`,
+    "retry_allowed",
+    x + 600,
+  );
+  retry.position[1] = 200;
+  const wait = node(
+    `Wait ${phase} Retry-After`,
+    "wait",
+    {
+      resume: "timeInterval",
+      amount: "={{ $json.retry_delay_seconds }}",
+      unit: "seconds",
+    },
+    x + 450,
+    360,
+    1.1,
+  );
+  w.nodes.push(prepare, budget, requestNode, check, success, retry, wait);
+  connect(w, prepare.name, budget.name);
+  connect(w, budget.name, requestNode.name);
+  connect(w, budget.name, "Record resumable failure", 1);
+  connect(w, requestNode.name, check.name);
+  connect(w, check.name, success.name);
+  connect(w, success.name, retry.name, 1);
+  connect(w, retry.name, wait.name);
+  connect(w, retry.name, "Record resumable failure", 1);
+  connect(w, wait.name, prepare.name);
+  return { start: prepare.name, success: success.name };
+}
+function addSyncStart(w: Workflow, source: "gmail" | "calendar"): string {
+  const start = node("Run approved initial sync", "manualTrigger", {}, 0);
+  const schedule = node(
+    "Poll approved window",
+    "scheduleTrigger",
+    { rule: { interval: [{ field: "minutes", minutesInterval: 1 }] } },
+    0,
+    180,
+    1.2,
+  );
+  const clock = code(
+    "Set sync clock",
+    "return [{json:{started_at:Date.now()}}];",
+    180,
+  );
+  const state = liveHttp(
+    "Read approved sync state",
+    `/api/live/sync-state?source=${source}`,
+    360,
+  );
+  const validate = code(
+    "Validate approved sync window",
+    approvedStateCode,
+    540,
+  );
+  const allowed = condition(
+    "Provider retry window ready",
+    "request_allowed",
+    700,
+  );
+  const deferred = code(
+    "Leave deferred checkpoint unchanged",
+    "return [{json:{deferred:true,source:$json.source,retry_after_until:$json.retry_after_until??null}}];",
+    880,
+  );
+  deferred.position[1] = 200;
+  const error = liveHttp(
+    "Record resumable failure",
+    "/api/live/sync-error",
+    850,
+    failureBody,
+  );
+  error.position[1] = 560;
+  w.nodes.push(
+    start,
+    schedule,
+    clock,
+    state,
+    validate,
+    allowed,
+    deferred,
+    error,
+  );
+  connect(w, start.name, clock.name);
+  connect(w, schedule.name, clock.name);
+  connect(w, clock.name, state.name);
+  connect(w, state.name, validate.name);
+  connect(w, validate.name, allowed.name);
+  connect(w, allowed.name, deferred.name, 1);
+  return allowed.name;
+}
+const profileAccept = `if(!body||typeof body.emailAddress!=='string')throw new Error('profile shape');const email=body.emailAddress.toLowerCase();out=email===ctx.account_email?{...out,ok:true,profile_account_email:email,retry_allowed:false,reconnect_required:false}:{...out,status_code:403,profile_account_email:null,reconnect_required:true,retry_allowed:false,failure_kind:'account-mismatch'};`;
+const normalizeLive = privateWorkflow(
+  "TendGoogle13",
+  "Tend 13: Approved Google normalize and store",
+);
+const normalizeTrigger = node(
+  "When called by Google adapter",
+  "executeWorkflowTrigger",
+  { inputSource: "passthrough" },
+  0,
+  0,
+  1.1,
+);
+const normalizeCheck = code(
+  "Validate approved raw input",
+  `const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');return [{json:x}];`,
+  250,
+);
+const normalizeCall = liveHttp(
+  "Normalize and commit approved record",
+  "/api/live/sync",
+  500,
+  "={{ JSON.stringify({source:$json.context.source,account_email:$json.context.account_email,profile_account_email:$json.context.profile_account_email,...($json.context.calendar_id?{calendar_id:$json.context.calendar_id}:{}),records:[$json.record],previous_cursor:$json.context.cursor,cursor:$json.context.cursor,complete:false,reconcile:false,window_start:$json.context.window_start,window_end:$json.context.window_end,seen_record_ids:[$json.record.id]}) }}",
+);
+const normalizedReceipt = code(
+  "Return committed page context",
+  "const saved=$input.first().json;const x=$('Validate approved raw input').item.json;if(saved.error)throw new Error('record storage failed');return [{json:{context:x.context,source_record_id:x.record.id,committed:true}}];",
+  760,
+);
+normalizeLive.nodes.push(
+  normalizeTrigger,
+  normalizeCheck,
+  normalizeCall,
+  normalizedReceipt,
+);
+connect(normalizeLive, normalizeTrigger.name, normalizeCheck.name);
+connect(normalizeLive, normalizeCheck.name, normalizeCall.name);
+connect(normalizeLive, normalizeCall.name, normalizedReceipt.name);
+function addCommitPage(
+  w: Workflow,
+  from: string,
+  recordsExpression: string,
+  x: number,
+): void {
+  const fan = code(
+    "Prepare bounded provider records",
+    `const ctx=$input.first().json;const records=${recordsExpression};if(!Array.isArray(records)||records.length>ctx.page_size)throw new Error('page budget exceeded');if(records.length===0)return [{json:{context:ctx,empty:true}}];return records.map(record=>{if(!record||typeof record.id!=='string'||!record.id)throw new Error('missing provider id');const bytes=Buffer.byteLength(JSON.stringify(record),'utf8');const bounded=bytes<=ctx.budget.max_body_bytes?record:{id:record.id,oversized:true};return {json:{context:ctx,record:bounded,empty:false}};});`,
+    x,
+  );
+  const empty = condition("Provider page is empty", "empty", x + 200);
+  const child = node(
+    "Normalize each approved provider record",
+    "executeWorkflow",
+    {
+      source: "parameter",
+      workflowJson: JSON.stringify(normalizeLive),
+      mode: "each",
+      options: { waitForSubWorkflow: true },
+    },
+    x + 450,
+    0,
+    1.3,
+  );
+  const collect = code(
+    "Acknowledge only the committed complete page",
+    `const original=$('Prepare bounded provider records').first().json.context;const items=$input.all().map(x=>x.json);const records=${recordsExpression.replaceAll("ctx.", "original.")};const expected=records.map(r=>r.id);if(Date.now()+5000>original.deadline_at)throw new Error('page acknowledgement budget exhausted; checkpoint unchanged');if(expected.length&&(!items.every(x=>x.committed===true)||items.length!==expected.length||new Set(items.map(x=>x.source_record_id)).size!==expected.length||items.some(x=>!expected.includes(x.source_record_id))))throw new Error('incomplete provider page remains resumable');return [{json:{source:original.source,account_email:original.account_email,profile_account_email:original.profile_account_email,...(original.calendar_id?{calendar_id:original.calendar_id}:{}),records:[],previous_cursor:original.cursor,cursor:original.next_cursor,complete:original.next_cursor===null,reconcile:original.next_cursor===null,window_start:original.window_start,window_end:original.window_end,seen_record_ids:expected}}];`,
+    x + 720,
+  );
+  const final = liveHttp(
+    "Commit provider page checkpoint",
+    "/api/live/sync",
+    x + 980,
+    "={{ JSON.stringify($json) }}",
+  );
+  w.nodes.push(fan, empty, child, collect, final);
+  connect(w, from, fan.name);
+  connect(w, fan.name, empty.name);
+  connect(w, empty.name, collect.name);
+  connect(w, empty.name, child.name, 1);
+  connect(w, child.name, collect.name);
+  connect(w, collect.name, final.name);
+}
+const liveGmail = privateWorkflow(
+  "TendGoogle11",
+  "Tend 11: Read-only Gmail approved-window sync",
+);
+const gStart = addSyncStart(liveGmail, "gmail");
+const gProfile = addReadStage(
+  liveGmail,
+  "Gmail profile",
+  "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  gmailCredential,
+  profileAccept,
+  1000,
+);
+connect(liveGmail, gStart, gProfile.start);
+const gList = addReadStage(
+  liveGmail,
+  "Gmail message page",
+  "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+  gmailCredential,
+  `if(!body||typeof body!=='object'||(!Array.isArray(body.messages)&&body.resultSizeEstimate!==0)||!(body.nextPageToken===undefined||typeof body.nextPageToken==='string'))throw new Error('message page shape');const refs=body.messages||[];if(refs.length>ctx.page_size||refs.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(refs.map(r=>r.id)).size!==refs.length)throw new Error('message references');out={...out,ok:true,message_refs:refs,next_cursor:body.nextPageToken||null,retry_allowed:false,reconnect_required:false};`,
+  2200,
+  "={{ JSON.stringify({q:'after:'+Math.floor(Date.parse($json.window_start)/1000)+' before:'+Math.ceil(Date.parse($json.window_end)/1000)+' -in:spam -in:trash -is:draft',includeSpamTrash:false,maxResults:$json.page_size,...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+);
+connect(liveGmail, gProfile.success, gList.start);
+const refEmpty = code(
+  "Choose message details or empty page",
+  "const x=$input.first().json;const details_allowed=Date.now()+Math.ceil(x.message_refs.length/4)*5250+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];",
+  3500,
+);
+const refBranch = condition("Message references empty", "empty", 3650);
+liveGmail.nodes.push(refEmpty, refBranch);
+connect(liveGmail, gList.success, refEmpty.name);
+connect(liveGmail, refEmpty.name, refBranch.name);
+const directEmpty = code(
+  "Empty message page",
+  "return [{json:{...$json,provider_records:[]}}];",
+  3800,
+);
+directEmpty.position[1] = 180;
+liveGmail.nodes.push(directEmpty);
+connect(liveGmail, refBranch.name, directEmpty.name);
+const detailFan = code(
+  "Prepare message detail batch",
+  "const ctx=$input.first().json;if(Date.now()+5000>ctx.deadline_at)throw new Error('detail budget exhausted; checkpoint unchanged');return ctx.message_refs.map(r=>({json:{...ctx,message_id:r.id}}));",
+  3800,
+);
+const details: Node = {
+  ...node(
+    "Read Gmail full messages",
+    "httpRequest",
+    {
+      method: "GET",
+      url: "={{ 'https://gmail.googleapis.com/gmail/v1/users/me/messages/'+encodeURIComponent($json.message_id) }}",
+      authentication: "predefinedCredentialType",
+      nodeCredentialType: "gmailOAuth2",
+      sendQuery: true,
+      specifyQuery: "json",
+      jsonQuery: '={{ JSON.stringify({format:"full"}) }}',
+      options: {
+        timeout: 5000,
+        batching: { batch: { batchSize: 4, batchInterval: 250 } },
+        response: {
+          response: {
+            fullResponse: true,
+            neverError: true,
+            responseFormat: "json",
+          },
+        },
+      },
+    },
+    4050,
+    0,
+    4.2,
+  ),
+  credentials: gmailCredential,
+  retryOnFail: false,
+  continueOnFail: true,
+};
+const detailCollect = code(
+  "Check every message detail before page storage",
+  `const ctx=$('Prepare message detail batch').first().json;const responses=$input.all().map(x=>x.json);const ok=responses.length===ctx.message_refs.length&&responses.every(r=>r.statusCode===200&&r.body&&typeof r.body.id==='string')&&new Set(responses.map(r=>r.body&&r.body.id)).size===ctx.message_refs.length&&responses.every(r=>ctx.message_refs.some(m=>m.id===r.body.id));if(!ok){const bad=responses.find(r=>r.statusCode!==200)||{};const status=Number(bad.statusCode)||599;const rateLimited=status===403&&Array.isArray(bad.body?.error?.errors)&&bad.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const header=(bad.headers||{})['retry-after'];const retry_delay_seconds=typeof header==='string'&&/^\\d+$/.test(header)?Number(header):typeof header==='string'?Math.max(0,Math.ceil((Date.parse(header)-Date.now())/1000)):1;return [{json:{...ctx,ok:false,status_code:status,profile_account_email:ctx.profile_account_email,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds:Number.isFinite(retry_delay_seconds)?retry_delay_seconds:1}}];}return [{json:{...ctx,ok:true,provider_records:responses.map(r=>r.body)}}];`,
+  4300,
+);
+const detailGood = condition("Every message detail read", "ok", 4550);
+liveGmail.nodes.push(detailFan, details, detailCollect, detailGood);
+const detailBudget = condition(
+  "Detail batch fits run budget",
+  "details_allowed",
+  3760,
+);
+liveGmail.nodes.push(detailBudget);
+connect(liveGmail, refBranch.name, detailBudget.name, 1);
+connect(liveGmail, detailBudget.name, detailFan.name);
+connect(liveGmail, detailBudget.name, "Record resumable failure", 1);
+connect(liveGmail, detailFan.name, details.name);
+connect(liveGmail, details.name, detailCollect.name);
+connect(liveGmail, detailCollect.name, detailGood.name);
+connect(liveGmail, detailGood.name, "Record resumable failure", 1);
+addCommitPage(liveGmail, detailGood.name, "ctx.provider_records", 4800);
+connect(liveGmail, directEmpty.name, "Prepare bounded provider records");
+const liveCalendar = privateWorkflow(
+  "TendGoogle12",
+  "Tend 12: Read-only chosen Calendar approved-window sync",
+);
+const cStart = addSyncStart(liveCalendar, "calendar");
+const cProfile = addReadStage(
+  liveCalendar,
+  "Gmail profile",
+  "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+  gmailCredential,
+  profileAccept,
+  1000,
+);
+connect(liveCalendar, cStart, cProfile.start);
+const cPrimary = addReadStage(
+  liveCalendar,
+  "Calendar primary account",
+  "={{ 'https://www.googleapis.com/calendar/v3/users/me/calendarList/'+encodeURIComponent($json.account_email) }}",
+  calendarCredential,
+  `if(!body||body.id!==ctx.account_email||body.primary!==true)out={...out,ok:false,status_code:403,reconnect_required:true,retry_allowed:false,failure_kind:'calendar-account-mismatch'};else out={...out,ok:true,retry_allowed:false,reconnect_required:false};`,
+  2200,
+);
+connect(liveCalendar, cProfile.success, cPrimary.start);
+const cChosen = addReadStage(
+  liveCalendar,
+  "Calendar selected metadata",
+  "={{ 'https://www.googleapis.com/calendar/v3/users/me/calendarList/'+encodeURIComponent($json.calendar_id) }}",
+  calendarCredential,
+  `if(!body||(ctx.calendar_id==='primary'?!(body.primary===true&&body.id===ctx.account_email):body.id!==ctx.calendar_id)||!['reader','writer','owner'].includes(body.accessRole))out={...out,ok:false,status_code:403,reconnect_required:true,retry_allowed:false,failure_kind:'calendar-not-approved-or-readable'};else out={...out,ok:true,retry_allowed:false,reconnect_required:false};`,
+  3400,
+);
+connect(liveCalendar, cPrimary.success, cChosen.start);
+const cEvents = addReadStage(
+  liveCalendar,
+  "Calendar event page",
+  "={{ 'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent($json.calendar_id)+'/events' }}",
+  calendarCredential,
+  `if(!body||body.kind!=='calendar#events'||!(body.items===undefined||Array.isArray(body.items))||!(body.nextPageToken===undefined||typeof body.nextPageToken==='string'))throw new Error('event page shape');const items=body.items||[];if(items.length>ctx.page_size||items.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(items.map(r=>r.id)).size!==items.length)throw new Error('event references');out={...out,ok:true,provider_records:items,next_cursor:body.nextPageToken||null,retry_allowed:false,reconnect_required:false};`,
+  4600,
+  "={{ JSON.stringify({timeMin:$json.window_start,timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+);
+connect(liveCalendar, cChosen.success, cEvents.start);
+addCommitPage(liveCalendar, cEvents.success, "ctx.provider_records", 5800);
+// Preserve the generic owner guard. Root patches its owned private deployment in place;
+// importing this inactive template must never register a second active bot webhook.
+const googleTelegram = structuredClone(liveTelegram);
+googleTelegram.id = "TendGoogle14";
+googleTelegram.name = "Tend 14: Private approved Google owner control";
+googleTelegram.settings.saveManualExecutions = false;
+googleTelegram.versionId = "00000000-0000-4000-8000-000000000014";
+for (const n of googleTelegram.nodes) {
+  if (n.credentials?.telegramApi)
+    n.credentials = {
+      telegramApi: {
+        id: "CONFIGURE_TELEGRAM_CREDENTIAL_ID",
+        name: "CONFIGURE_TELEGRAM_CREDENTIAL",
+      },
+    };
+  if (n.name === "Authorize Telegram owner")
+    n.parameters.jsCode = telegramLiveGuardCode;
+  if (n.type === "n8n-nodes-base.httpRequest") {
+    const p = String(n.parameters.url);
+    n.parameters = {
+      ...n.parameters,
+      url: p
+        .replace("18767", "18768")
+        .replace("/api/telegram/", "/api/live/telegram/"),
+      authentication: "genericCredentialType",
+      genericAuthType: "httpHeaderAuth",
+    };
+    n.credentials = internalCredential;
+  }
+  if (n.name === "Format private owner reply")
+    n.parameters.jsCode = telegramLiveReplyCode;
+}
+const liveAI = privateWorkflow(
+  "TendGoogle15",
+  "Tend 15: Local AI on eligible newly authored Google evidence",
+);
+const modelStart = node(
+  "Run approved local extraction",
+  "manualTrigger",
+  {},
+  0,
+);
+const modelSchedule = node(
+  "Poll eligible authored spans",
+  "scheduleTrigger",
+  { rule: { interval: [{ field: "minutes", minutesInterval: 1 }] } },
+  0,
+  180,
+  1.2,
+);
+const getLiveModel = liveHttp(
+  "Read eligible authored span",
+  "/api/live/model-input",
+  260,
+);
+const readyModel = code(
+  "Check eligible authored source",
+  "const x=$input.first().json;return [{json:{...x,eligible:typeof x.record_key==='string'&&x.record_key.length>0&&x.record&&typeof x.record.authored_span==='string'&&x.record.authored_span.length>0&&x.request&&Array.isArray(x.request.messages)&&x.request.messages.length>=2}}];",
+  500,
+);
+const branchModel = condition("Eligible authored promise", "eligible", 710);
+const liveChain = structuredClone(ai);
+liveChain.position = [930, 0];
+const validateLiveCandidate = code(
+  "Validate exact authored quote",
+  "const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!/^I (?:will|promise to)\\b/i.test(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,candidate}}];",
+  1190,
+);
+const saveLiveCandidate = liveHttp(
+  "Persist owner-scoped pending promise",
+  "/api/live/candidates",
+  1450,
+  "={{ JSON.stringify($json) }}",
+);
+const liveModel = structuredClone(model);
+liveModel.position = [930, 260];
+liveAI.nodes.push(
+  modelStart,
+  modelSchedule,
+  getLiveModel,
+  readyModel,
+  branchModel,
+  liveChain,
+  validateLiveCandidate,
+  saveLiveCandidate,
+  liveModel,
+);
+connect(liveAI, modelStart.name, getLiveModel.name);
+connect(liveAI, modelSchedule.name, getLiveModel.name);
+connect(liveAI, getLiveModel.name, readyModel.name);
+connect(liveAI, readyModel.name, branchModel.name);
+connect(liveAI, branchModel.name, liveChain.name);
+connect(liveAI, liveChain.name, validateLiveCandidate.name);
+connect(liveAI, validateLiveCandidate.name, saveLiveCandidate.name);
+liveAI.connections[liveModel.name] = {
+  ai_languageModel: [
+    [{ node: liveChain.name, type: "ai_languageModel", index: 0 }],
+  ],
+};
+workflows.push(liveGmail, liveCalendar, normalizeLive, googleTelegram, liveAI);
+
 await mkdir("workflows", { recursive: true });
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
-    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private"][i]}.json`,
+    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments"][i]}.json`,
     workflows[i],
   );
 await mkdir("fixtures", { recursive: true });

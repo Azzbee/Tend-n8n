@@ -15,6 +15,19 @@ if (!text.startsWith('/')) return [];
 const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel)(?:\\s|$)/.test(text);
 return [{json:{reply_chat_id:allowedChatId,help,telegram_update_id:update.update_id,telegram_channel_id:'tend-course-control',command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
 `;
+export const telegramLiveGuardCode = telegramGuardCode
+  .replace(
+    "status|today|prep|draft|confirm|done|cancel",
+    "status|today|contacts|prep|draft|confirm|done|cancel",
+  )
+  .replace("demo-owner", "CONFIGURE_LIVE_PRINCIPAL_ID")
+  .replace("demo-user", "live-owner")
+  .replace("demo-private", "live-private")
+  .replace("tend-course-control", "CONFIGURE_LIVE_CHANNEL_ID")
+  .replace(
+    "const update =",
+    `if (!/^[A-Za-z0-9_-]{1,100}$/.test("CONFIGURE_LIVE_PRINCIPAL_ID") || "CONFIGURE_LIVE_PRINCIPAL_ID".startsWith("CONFIGURE_") || !/^[a-z0-9-]{1,80}$/.test("CONFIGURE_LIVE_CHANNEL_ID")) return [];\nconst update =`,
+  );
 
 export const telegramReplyCode = `
 const authorized = $('Authorize Telegram owner').first().json;
@@ -58,3 +71,63 @@ export function configuredGuard(userId: string, chatId: string): string {
     .replace("CONFIGURE_OWNER_USER_ID", userId)
     .replace("CONFIGURE_OWNER_CHAT_ID", chatId);
 }
+export function configuredLiveGuard(
+  userId: string,
+  chatId: string,
+  principalId: string,
+  channelId: string,
+): string {
+  configuredGuard(userId, chatId);
+  if (
+    !/^[A-Za-z0-9_-]{1,100}$/.test(principalId) ||
+    principalId.startsWith("CONFIGURE_") ||
+    !/^[a-z0-9-]{1,80}$/.test(channelId)
+  )
+    throw new Error("invalid live binding");
+  return telegramLiveGuardCode
+    .replaceAll("CONFIGURE_OWNER_USER_ID", userId)
+    .replaceAll("CONFIGURE_OWNER_CHAT_ID", chatId)
+    .replaceAll("CONFIGURE_LIVE_PRINCIPAL_ID", principalId)
+    .replaceAll("CONFIGURE_LIVE_CHANNEL_ID", channelId);
+}
+export const telegramLiveReplyCode = telegramReplyCode
+  .replace(
+    "['Course demo • fictional data']",
+    "['Private Gmail and Calendar summary']",
+  )
+  .replace(
+    "Commands: /status, /today, /prep F17,",
+    "Commands: /status, /today, /contacts query, /prep email-or-ID,",
+  )
+  .replace(
+    "Your private control chat uses fictional evidence only. No personal inbox history is imported.",
+    "Approved scope: recent Gmail and selected upcoming calendars. Replies stay in your enrolled private control chat; no contact receives an action.",
+  )
+  .replace(
+    "const lines =",
+    `const localDate = value => {const date=new Date(value);if(!Number.isFinite(date.getTime()))return 'unknown date';const p=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);const get=t=>p.find(x=>x.type===t).value;return get('year')+'-'+get('month')+'-'+get('day');};
+const localTime=value=>{const date=new Date(value);return Number.isFinite(date.getTime())?new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Paris',dateStyle:'medium',timeStyle:'short'}).format(date)+' Europe/Paris':'unknown time';};
+const lines =`,
+  )
+  .replace("Fixture clock:", "Clock:")
+  .replace(
+    "string(item.occurred_at) + ': ' + string(item.body_text)",
+    "(item.all_day ? 'All-day '+localDate(item.occurred_at)+' (end-exclusive '+localDate(item.end_at)+')' : localTime(item.occurred_at)+(item.end_at?' to '+localTime(item.end_at):'')) + ': ' + string(item.body_text) + (item.evidence_reference?' ['+string(item.evidence_reference)+']':'')",
+  )
+  .replace(
+    " if(record(reply.contact))",
+    " if(typeof reply.unavailable_record_count==='number')lines.push('Unavailable source records needing review: '+reply.unavailable_record_count+'.');\n if(record(reply.contact))",
+  )
+  .replace("Upcoming fixture meetings:", "Upcoming meetings:")
+  .replace(
+    "None in the fixture window.",
+    "None in the imported window; check coverage before inferring absence.",
+  )
+  .replace(
+    " if(record(reply.contact))",
+    " if(Array.isArray(reply.contacts)){lines.push('Contacts ('+reply.contacts.length+' of '+reply.contacts_total+' matches):');for(const c of reply.contacts.filter(record))lines.push(string(c.name)+' ('+string(c.contact_id)+') '+(Array.isArray(c.emails)?c.emails.map(string).join(', '):''));if(typeof reply.lookup_note==='string')lines.push(reply.lookup_note);}\n if(record(reply.contact))",
+  )
+  .replace(
+    "string(source.mode) + '.'",
+    "string(source.mode) + '. Last success: '+string(source.last_success)+'. Window: '+string(source.coverage_start)+' to '+string(source.coverage_end)",
+  );

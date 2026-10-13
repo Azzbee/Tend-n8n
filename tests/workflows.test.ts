@@ -46,9 +46,9 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships nine inactive exports without private account credentials or external recipients", () => {
+  it("ships fifteen inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(10);
+    expect(files).toHaveLength(15);
     for (const f of files) {
       const raw = readFileSync(`workflows/${f}`, "utf8");
       expect(load(f).active).toBe(false);
@@ -56,8 +56,8 @@ describe("import and node boundaries", () => {
         expect(raw).toContain('"ollamaApi"');
       else if (f === "10-telegram-private.json")
         expect(raw).toContain('"telegramApi"');
-      else expect(raw).not.toContain('"credentials"');
-      if (f !== "10-telegram-private.json")
+      else if (/^0[1-9]-/.test(f)) expect(raw).not.toContain('"credentials"');
+      if (/^0[1-9]-/.test(f))
         expect(raw).not.toMatch(/n8n-nodes-base\.(gmail|telegram|whatsApp)/);
     }
   });

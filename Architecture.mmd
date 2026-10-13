@@ -17,3 +17,19 @@ flowchart LR
  B --> OUT[Private preview only]
  RETRY[Synthetic 429 endpoint] --> ERR[n8n bounded retry]
  ERR --> REC[Recovery result]
+
+ subgraph Approved_Google_Extension[Inactive approved Google extension]
+  S[Manual initial sync or n8n Schedule] --> GS[Authenticated anchored window and cursor]
+  GS --> GP[Native Gmail profile and Calendar metadata checks]
+  GP --> GET[Native read-only Google GET bounded page]
+  GET --> NS[Callable normalize and store child]
+  NS --> LS[(Separate private SQLite evidence and seen IDs)]
+  NS --> ACK[Advance checkpoint only after complete page]
+  GET --> RA[Bounded Retry-After or persisted deferral]
+  LS --> SP[Newly authored eligible direct span]
+  SP --> LA[Native LLM Chain and local Ollama]
+  LA --> EQ[Exact span and date validation]
+  EQ --> LP[Pending owner confirmation]
+  TG[Verified private Telegram transport] --> LG[Exact owner guard and Header Auth]
+  LG --> LS
+ end

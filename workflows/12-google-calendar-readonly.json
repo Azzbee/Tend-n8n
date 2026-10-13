@@ -1,0 +1,1228 @@
+{
+  "id": "TendGoogle12",
+  "name": "Tend 12: Read-only chosen Calendar approved-window sync",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-approved-initial-sync",
+      "name": "Run approved initial sync",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "poll-approved-window",
+      "name": "Poll approved window",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 180],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] }
+      }
+    },
+    {
+      "id": "set-sync-clock",
+      "name": "Set sync clock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [180, 0],
+      "parameters": { "jsCode": "return [{json:{started_at:Date.now()}}];" }
+    },
+    {
+      "id": "read-approved-sync-state",
+      "name": "Read approved sync state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [360, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/sync-state?source=calendar",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "validate-approved-sync-window",
+      "name": "Validate approved sync window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000)||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.reconnect_required!==true&&wait<=Date.now()}}];"
+      }
+    },
+    {
+      "id": "provider-retry-window-ready",
+      "name": "Provider retry window ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [700, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.request_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "leave-deferred-checkpoint-unchanged",
+      "name": "Leave deferred checkpoint unchanged",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200],
+      "parameters": {
+        "jsCode": "return [{json:{deferred:true,source:$json.source,retry_after_until:$json.retry_after_until??null}}];"
+      }
+    },
+    {
+      "id": "record-resumable-failure",
+      "name": "Record resumable failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 560],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/sync-error",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "prepare-gmail-profile",
+      "name": "Prepare Gmail profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const attempts={...(x.attempts||{})};attempts[\"Gmail profile\"]=(attempts[\"Gmail profile\"]||0)+1;const request_allowed=Date.now()+5000<=x.deadline_at&&attempts[\"Gmail profile\"]<=x.budget.max_attempts;return [{json:{...x,attempts,request_allowed,status_code:request_allowed?0:599,failure_kind:request_allowed?null:'budget-exhausted',retry_allowed:false}}];"
+      }
+    },
+    {
+      "id": "gmail-profile-request-budget",
+      "name": "Gmail profile request budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1150, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.request_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "read-gmail-profile",
+      "name": "Read Gmail profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "CONFIGURE_GMAIL_READONLY_CREDENTIAL_ID",
+          "name": "CONFIGURE_GMAIL_READONLY_CREDENTIAL"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "check-gmail-profile",
+      "name": "Check Gmail profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 0],
+      "parameters": {
+        "jsCode": "const response=$input.first().json;const ctx=$(\"Prepare Gmail profile\").item.json;const status=Number(response.statusCode)||599;const rateLimited=status===403&&Array.isArray(response.body?.error?.errors)&&response.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const headers=response.headers||{};const raw=headers['retry-after']??headers['Retry-After'];const seconds=typeof raw==='string'&&/^\\d+$/.test(raw)?Number(raw):typeof raw==='string'?Math.max(0,Math.ceil((Date.parse(raw)-Date.now())/1000)):NaN;const retry_delay_seconds=Number.isFinite(seconds)?seconds:Math.min(8,2**(ctx.attempts[\"Gmail profile\"]-1));let out={...ctx,ok:false,status_code:status,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds,retry_allowed:(status===429||rateLimited||status>=500)&&ctx.attempts[\"Gmail profile\"]<ctx.budget.max_attempts&&Date.now()+retry_delay_seconds*1000+5000<=ctx.deadline_at};if(status>=200&&status<300){const body=response.body;try{if(!body||typeof body.emailAddress!=='string')throw new Error('profile shape');const email=body.emailAddress.toLowerCase();out=email===ctx.account_email?{...out,ok:true,profile_account_email:email,retry_allowed:false,reconnect_required:false}:{...out,status_code:403,profile_account_email:null,reconnect_required:true,retry_allowed:false,failure_kind:'account-mismatch'};}catch{out={...out,status_code:502,failure_kind:'provider-contract',retry_allowed:false,reconnect_required:false};}}return [{json:out}];"
+      }
+    },
+    {
+      "id": "gmail-profile-succeeded",
+      "name": "Gmail profile succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1600, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gmail-profile-retry-within-budget",
+      "name": "Gmail profile retry within budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1600, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.retry_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wait-gmail-profile-retry-after",
+      "name": "Wait Gmail profile Retry-After",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1450, 360],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.retry_delay_seconds }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "prepare-calendar-primary-account",
+      "name": "Prepare Calendar primary account",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const attempts={...(x.attempts||{})};attempts[\"Calendar primary account\"]=(attempts[\"Calendar primary account\"]||0)+1;const request_allowed=Date.now()+5000<=x.deadline_at&&attempts[\"Calendar primary account\"]<=x.budget.max_attempts;return [{json:{...x,attempts,request_allowed,status_code:request_allowed?0:599,failure_kind:request_allowed?null:'budget-exhausted',retry_allowed:false}}];"
+      }
+    },
+    {
+      "id": "calendar-primary-account-request-budget",
+      "name": "Calendar primary account request budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2350, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.request_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "read-calendar-primary-account",
+      "name": "Read Calendar primary account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/calendar/v3/users/me/calendarList/'+encodeURIComponent($json.account_email) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL_ID",
+          "name": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "check-calendar-primary-account",
+      "name": "Check Calendar primary account",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 0],
+      "parameters": {
+        "jsCode": "const response=$input.first().json;const ctx=$(\"Prepare Calendar primary account\").item.json;const status=Number(response.statusCode)||599;const rateLimited=status===403&&Array.isArray(response.body?.error?.errors)&&response.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const headers=response.headers||{};const raw=headers['retry-after']??headers['Retry-After'];const seconds=typeof raw==='string'&&/^\\d+$/.test(raw)?Number(raw):typeof raw==='string'?Math.max(0,Math.ceil((Date.parse(raw)-Date.now())/1000)):NaN;const retry_delay_seconds=Number.isFinite(seconds)?seconds:Math.min(8,2**(ctx.attempts[\"Calendar primary account\"]-1));let out={...ctx,ok:false,status_code:status,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds,retry_allowed:(status===429||rateLimited||status>=500)&&ctx.attempts[\"Calendar primary account\"]<ctx.budget.max_attempts&&Date.now()+retry_delay_seconds*1000+5000<=ctx.deadline_at};if(status>=200&&status<300){const body=response.body;try{if(!body||body.id!==ctx.account_email||body.primary!==true)out={...out,ok:false,status_code:403,reconnect_required:true,retry_allowed:false,failure_kind:'calendar-account-mismatch'};else out={...out,ok:true,retry_allowed:false,reconnect_required:false};}catch{out={...out,status_code:502,failure_kind:'provider-contract',retry_allowed:false,reconnect_required:false};}}return [{json:out}];"
+      }
+    },
+    {
+      "id": "calendar-primary-account-succeeded",
+      "name": "Calendar primary account succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2800, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "calendar-primary-account-retry-within-budget",
+      "name": "Calendar primary account retry within budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2800, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.retry_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wait-calendar-primary-account-retry-after",
+      "name": "Wait Calendar primary account Retry-After",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2650, 360],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.retry_delay_seconds }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "prepare-calendar-selected-metadata",
+      "name": "Prepare Calendar selected metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3400, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const attempts={...(x.attempts||{})};attempts[\"Calendar selected metadata\"]=(attempts[\"Calendar selected metadata\"]||0)+1;const request_allowed=Date.now()+5000<=x.deadline_at&&attempts[\"Calendar selected metadata\"]<=x.budget.max_attempts;return [{json:{...x,attempts,request_allowed,status_code:request_allowed?0:599,failure_kind:request_allowed?null:'budget-exhausted',retry_allowed:false}}];"
+      }
+    },
+    {
+      "id": "calendar-selected-metadata-request-budget",
+      "name": "Calendar selected metadata request budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3550, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.request_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "read-calendar-selected-metadata",
+      "name": "Read Calendar selected metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3700, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/calendar/v3/users/me/calendarList/'+encodeURIComponent($json.calendar_id) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL_ID",
+          "name": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "check-calendar-selected-metadata",
+      "name": "Check Calendar selected metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3850, 0],
+      "parameters": {
+        "jsCode": "const response=$input.first().json;const ctx=$(\"Prepare Calendar selected metadata\").item.json;const status=Number(response.statusCode)||599;const rateLimited=status===403&&Array.isArray(response.body?.error?.errors)&&response.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const headers=response.headers||{};const raw=headers['retry-after']??headers['Retry-After'];const seconds=typeof raw==='string'&&/^\\d+$/.test(raw)?Number(raw):typeof raw==='string'?Math.max(0,Math.ceil((Date.parse(raw)-Date.now())/1000)):NaN;const retry_delay_seconds=Number.isFinite(seconds)?seconds:Math.min(8,2**(ctx.attempts[\"Calendar selected metadata\"]-1));let out={...ctx,ok:false,status_code:status,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds,retry_allowed:(status===429||rateLimited||status>=500)&&ctx.attempts[\"Calendar selected metadata\"]<ctx.budget.max_attempts&&Date.now()+retry_delay_seconds*1000+5000<=ctx.deadline_at};if(status>=200&&status<300){const body=response.body;try{if(!body||(ctx.calendar_id==='primary'?!(body.primary===true&&body.id===ctx.account_email):body.id!==ctx.calendar_id)||!['reader','writer','owner'].includes(body.accessRole))out={...out,ok:false,status_code:403,reconnect_required:true,retry_allowed:false,failure_kind:'calendar-not-approved-or-readable'};else out={...out,ok:true,retry_allowed:false,reconnect_required:false};}catch{out={...out,status_code:502,failure_kind:'provider-contract',retry_allowed:false,reconnect_required:false};}}return [{json:out}];"
+      }
+    },
+    {
+      "id": "calendar-selected-metadata-succeeded",
+      "name": "Calendar selected metadata succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4000, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "calendar-selected-metadata-retry-within-budget",
+      "name": "Calendar selected metadata retry within budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4000, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.retry_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wait-calendar-selected-metadata-retry-after",
+      "name": "Wait Calendar selected metadata Retry-After",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3850, 360],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.retry_delay_seconds }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "prepare-calendar-event-page",
+      "name": "Prepare Calendar event page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4600, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const attempts={...(x.attempts||{})};attempts[\"Calendar event page\"]=(attempts[\"Calendar event page\"]||0)+1;const request_allowed=Date.now()+5000<=x.deadline_at&&attempts[\"Calendar event page\"]<=x.budget.max_attempts;return [{json:{...x,attempts,request_allowed,status_code:request_allowed?0:599,failure_kind:request_allowed?null:'budget-exhausted',retry_allowed:false}}];"
+      }
+    },
+    {
+      "id": "calendar-event-page-request-budget",
+      "name": "Calendar event page request budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4750, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.request_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "read-calendar-event-page",
+      "name": "Read Calendar event page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4900, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent($json.calendar_id)+'/events' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify({timeMin:$json.window_start,timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL_ID",
+          "name": "CONFIGURE_CALENDAR_READONLY_CREDENTIAL"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "check-calendar-event-page",
+      "name": "Check Calendar event page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5050, 0],
+      "parameters": {
+        "jsCode": "const response=$input.first().json;const ctx=$(\"Prepare Calendar event page\").item.json;const status=Number(response.statusCode)||599;const rateLimited=status===403&&Array.isArray(response.body?.error?.errors)&&response.body.error.errors.some(e=>['rateLimitExceeded','userRateLimitExceeded'].includes(e.reason));const headers=response.headers||{};const raw=headers['retry-after']??headers['Retry-After'];const seconds=typeof raw==='string'&&/^\\d+$/.test(raw)?Number(raw):typeof raw==='string'?Math.max(0,Math.ceil((Date.parse(raw)-Date.now())/1000)):NaN;const retry_delay_seconds=Number.isFinite(seconds)?seconds:Math.min(8,2**(ctx.attempts[\"Calendar event page\"]-1));let out={...ctx,ok:false,status_code:status,reconnect_required:status===401||(status===403&&!rateLimited),retry_delay_seconds,retry_allowed:(status===429||rateLimited||status>=500)&&ctx.attempts[\"Calendar event page\"]<ctx.budget.max_attempts&&Date.now()+retry_delay_seconds*1000+5000<=ctx.deadline_at};if(status>=200&&status<300){const body=response.body;try{if(!body||body.kind!=='calendar#events'||!(body.items===undefined||Array.isArray(body.items))||!(body.nextPageToken===undefined||typeof body.nextPageToken==='string'))throw new Error('event page shape');const items=body.items||[];if(items.length>ctx.page_size||items.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(items.map(r=>r.id)).size!==items.length)throw new Error('event references');out={...out,ok:true,provider_records:items,next_cursor:body.nextPageToken||null,retry_allowed:false,reconnect_required:false};}catch{out={...out,status_code:502,failure_kind:'provider-contract',retry_allowed:false,reconnect_required:false};}}return [{json:out}];"
+      }
+    },
+    {
+      "id": "calendar-event-page-succeeded",
+      "name": "Calendar event page succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [5200, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "calendar-event-page-retry-within-budget",
+      "name": "Calendar event page retry within budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [5200, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.retry_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wait-calendar-event-page-retry-after",
+      "name": "Wait Calendar event page Retry-After",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [5050, 360],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.retry_delay_seconds }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "prepare-bounded-provider-records",
+      "name": "Prepare bounded provider records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5800, 0],
+      "parameters": {
+        "jsCode": "const ctx=$input.first().json;const records=ctx.provider_records;if(!Array.isArray(records)||records.length>ctx.page_size)throw new Error('page budget exceeded');if(records.length===0)return [{json:{context:ctx,empty:true}}];return records.map(record=>{if(!record||typeof record.id!=='string'||!record.id)throw new Error('missing provider id');const bytes=Buffer.byteLength(JSON.stringify(record),'utf8');const bounded=bytes<=ctx.budget.max_body_bytes?record:{id:record.id,oversized:true};return {json:{context:ctx,record:bounded,empty:false}};});"
+      }
+    },
+    {
+      "id": "provider-page-is-empty",
+      "name": "Provider page is empty",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [6000, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.empty }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "normalize-each-approved-provider-record",
+      "name": "Normalize each approved provider record",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [6250, 0],
+      "parameters": {
+        "source": "parameter",
+        "workflowJson": "{\"id\":\"TendGoogle13\",\"name\":\"Tend 13: Approved Google normalize and store\",\"active\":false,\"nodes\":[{\"id\":\"when-called-by-google-adapter\",\"name\":\"When called by Google adapter\",\"type\":\"n8n-nodes-base.executeWorkflowTrigger\",\"typeVersion\":1.1,\"position\":[0,0],\"parameters\":{\"inputSource\":\"passthrough\"}},{\"id\":\"validate-approved-raw-input\",\"name\":\"Validate approved raw input\",\"type\":\"n8n-nodes-base.code\",\"typeVersion\":2,\"position\":[250,0],\"parameters\":{\"jsCode\":\"const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');return [{json:x}];\"}},{\"id\":\"normalize-and-commit-approved-record\",\"name\":\"Normalize and commit approved record\",\"type\":\"n8n-nodes-base.httpRequest\",\"typeVersion\":4.2,\"position\":[500,0],\"parameters\":{\"url\":\"http://host.docker.internal:18768/api/live/sync\",\"method\":\"POST\",\"sendBody\":true,\"contentType\":\"raw\",\"rawContentType\":\"application/json\",\"body\":\"={{ JSON.stringify({source:$json.context.source,account_email:$json.context.account_email,profile_account_email:$json.context.profile_account_email,...($json.context.calendar_id?{calendar_id:$json.context.calendar_id}:{}),records:[$json.record],previous_cursor:$json.context.cursor,cursor:$json.context.cursor,complete:false,reconcile:false,window_start:$json.context.window_start,window_end:$json.context.window_end,seen_record_ids:[$json.record.id]}) }}\",\"options\":{\"timeout\":5000},\"authentication\":\"genericCredentialType\",\"genericAuthType\":\"httpHeaderAuth\"},\"retryOnFail\":false,\"maxTries\":3,\"waitBetweenTries\":1000,\"credentials\":{\"httpHeaderAuth\":{\"id\":\"CONFIGURE_INTERNAL_API_CREDENTIAL_ID\",\"name\":\"CONFIGURE_INTERNAL_API_CREDENTIAL\"}},\"notes\":\"Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.\",\"notesInFlow\":true},{\"id\":\"return-committed-page-context\",\"name\":\"Return committed page context\",\"type\":\"n8n-nodes-base.code\",\"typeVersion\":2,\"position\":[760,0],\"parameters\":{\"jsCode\":\"const saved=$input.first().json;const x=$('Validate approved raw input').item.json;if(saved.error)throw new Error('record storage failed');return [{json:{context:x.context,source_record_id:x.record.id,committed:true}}];\"}}],\"connections\":{\"When called by Google adapter\":{\"main\":[[{\"node\":\"Validate approved raw input\",\"type\":\"main\",\"index\":0}]]},\"Validate approved raw input\":{\"main\":[[{\"node\":\"Normalize and commit approved record\",\"type\":\"main\",\"index\":0}]]},\"Normalize and commit approved record\":{\"main\":[[{\"node\":\"Return committed page context\",\"type\":\"main\",\"index\":0}]]}},\"settings\":{\"executionOrder\":\"v1\",\"saveDataSuccessExecution\":\"none\",\"saveDataErrorExecution\":\"none\",\"timezone\":\"Europe/Paris\",\"saveManualExecutions\":false},\"tags\":[],\"pinData\":{},\"versionId\":\"00000000-0000-4000-8000-000000000013\",\"meta\":{\"templateCredsSetupCompleted\":false}}",
+        "mode": "each",
+        "options": { "waitForSubWorkflow": true }
+      }
+    },
+    {
+      "id": "acknowledge-only-the-committed-complete-page",
+      "name": "Acknowledge only the committed complete page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6520, 0],
+      "parameters": {
+        "jsCode": "const original=$('Prepare bounded provider records').first().json.context;const items=$input.all().map(x=>x.json);const records=original.provider_records;const expected=records.map(r=>r.id);if(Date.now()+5000>original.deadline_at)throw new Error('page acknowledgement budget exhausted; checkpoint unchanged');if(expected.length&&(!items.every(x=>x.committed===true)||items.length!==expected.length||new Set(items.map(x=>x.source_record_id)).size!==expected.length||items.some(x=>!expected.includes(x.source_record_id))))throw new Error('incomplete provider page remains resumable');return [{json:{source:original.source,account_email:original.account_email,profile_account_email:original.profile_account_email,...(original.calendar_id?{calendar_id:original.calendar_id}:{}),records:[],previous_cursor:original.cursor,cursor:original.next_cursor,complete:original.next_cursor===null,reconcile:original.next_cursor===null,window_start:original.window_start,window_end:original.window_end,seen_record_ids:expected}}];"
+      }
+    },
+    {
+      "id": "commit-provider-page-checkpoint",
+      "name": "Commit provider page checkpoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [6780, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/sync",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Run approved initial sync": {
+      "main": [[{ "node": "Set sync clock", "type": "main", "index": 0 }]]
+    },
+    "Poll approved window": {
+      "main": [[{ "node": "Set sync clock", "type": "main", "index": 0 }]]
+    },
+    "Set sync clock": {
+      "main": [
+        [{ "node": "Read approved sync state", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read approved sync state": {
+      "main": [
+        [
+          {
+            "node": "Validate approved sync window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate approved sync window": {
+      "main": [
+        [{ "node": "Provider retry window ready", "type": "main", "index": 0 }]
+      ]
+    },
+    "Provider retry window ready": {
+      "main": [
+        [{ "node": "Prepare Gmail profile", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Leave deferred checkpoint unchanged",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Gmail profile": {
+      "main": [
+        [{ "node": "Gmail profile request budget", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gmail profile request budget": {
+      "main": [
+        [{ "node": "Read Gmail profile", "type": "main", "index": 0 }],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Gmail profile": {
+      "main": [[{ "node": "Check Gmail profile", "type": "main", "index": 0 }]]
+    },
+    "Check Gmail profile": {
+      "main": [
+        [{ "node": "Gmail profile succeeded", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gmail profile succeeded": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar primary account",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail profile retry within budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail profile retry within budget": {
+      "main": [
+        [
+          {
+            "node": "Wait Gmail profile Retry-After",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait Gmail profile Retry-After": {
+      "main": [
+        [{ "node": "Prepare Gmail profile", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Calendar primary account": {
+      "main": [
+        [
+          {
+            "node": "Calendar primary account request budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar primary account request budget": {
+      "main": [
+        [
+          {
+            "node": "Read Calendar primary account",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Calendar primary account": {
+      "main": [
+        [
+          {
+            "node": "Check Calendar primary account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Calendar primary account": {
+      "main": [
+        [
+          {
+            "node": "Calendar primary account succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar primary account succeeded": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar selected metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calendar primary account retry within budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar primary account retry within budget": {
+      "main": [
+        [
+          {
+            "node": "Wait Calendar primary account Retry-After",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait Calendar primary account Retry-After": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar primary account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Calendar selected metadata": {
+      "main": [
+        [
+          {
+            "node": "Calendar selected metadata request budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar selected metadata request budget": {
+      "main": [
+        [
+          {
+            "node": "Read Calendar selected metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Calendar selected metadata": {
+      "main": [
+        [
+          {
+            "node": "Check Calendar selected metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Calendar selected metadata": {
+      "main": [
+        [
+          {
+            "node": "Calendar selected metadata succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar selected metadata succeeded": {
+      "main": [
+        [{ "node": "Prepare Calendar event page", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Calendar selected metadata retry within budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar selected metadata retry within budget": {
+      "main": [
+        [
+          {
+            "node": "Wait Calendar selected metadata Retry-After",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait Calendar selected metadata Retry-After": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calendar selected metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Calendar event page": {
+      "main": [
+        [
+          {
+            "node": "Calendar event page request budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar event page request budget": {
+      "main": [
+        [{ "node": "Read Calendar event page", "type": "main", "index": 0 }],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Calendar event page": {
+      "main": [
+        [{ "node": "Check Calendar event page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Calendar event page": {
+      "main": [
+        [
+          {
+            "node": "Calendar event page succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar event page succeeded": {
+      "main": [
+        [
+          {
+            "node": "Prepare bounded provider records",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calendar event page retry within budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar event page retry within budget": {
+      "main": [
+        [
+          {
+            "node": "Wait Calendar event page Retry-After",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [{ "node": "Record resumable failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait Calendar event page Retry-After": {
+      "main": [
+        [{ "node": "Prepare Calendar event page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare bounded provider records": {
+      "main": [
+        [{ "node": "Provider page is empty", "type": "main", "index": 0 }]
+      ]
+    },
+    "Provider page is empty": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge only the committed complete page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize each approved provider record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize each approved provider record": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge only the committed complete page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acknowledge only the committed complete page": {
+      "main": [
+        [
+          {
+            "node": "Commit provider page checkpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris",
+    "saveManualExecutions": false
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000012",
+  "meta": { "templateCredsSetupCompleted": false }
+}

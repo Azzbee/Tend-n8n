@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-13T21:47:06.050Z",
+  "checked_at": "2026-10-13T22:59:49.062Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -10,14 +10,19 @@
     "07-extract-commitments.json": "d9d7c01215ad256a7acf61b6defc1dc343820d0e617c225495629c6400c9d2b9",
     "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
     "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf",
-    "10-telegram-private.json": "d6023908931ebc49c62ef659cf4f7d30e1f28df2159742c7f74e0d25345d2a35"
+    "10-telegram-private.json": "6b3c0f37b1ebcf43f15276fcab3f9921a9813ec397f630012cb2bf45166a4619",
+    "11-google-gmail-readonly.json": "8c9dbcd32e30ae9d28ea3e28b2a51d6322a11435da876a43a7dd0907697660ec",
+    "12-google-calendar-readonly.json": "e203afea6bc10c28f79affcca2a0986b85eeea3ea9e47ce63796b897f09a6c5c",
+    "13-google-normalize-store.json": "04c4703ed941417e62144c624ead612ac13ad9b9eee63fdcc6545e9c71156194",
+    "14-google-telegram-private.json": "feb358e995d8bc4c6e4c743678fef236a42c835c031b3407ceaa9621ef383940",
+    "15-google-extract-commitments.json": "8921770c8cff5208b63cfa50e68926af6803cd542b858896a94068a6ac88b0be"
   },
   "source_sha256": {
-    "engine.ts": "2b8340a47c36ca66ee066c118de110d916aef5e13e933b8a3fcc6e1de4ba7004",
-    "server.ts": "8fba536626066983ee9c74c46422fa69f75164467d7758b520732c10a54012a3",
-    "build-workflows.ts": "4a366cba299e75e51cafadc53dc44685ee39634d0962470db72ef8c0ab12153e",
+    "engine.ts": "886ae92f03251e7e5b9ec6df48ab7ced783be91f142f87231179d4fdfa00304e",
+    "server.ts": "b4b48e857a82ce4b18a8d8874304d4c00d61d77b711425d78e10bacf14d3a30e",
+    "build-workflows.ts": "b236ee313f9a984734326cdaa19e2c10c5807a2b779838bc911a122b4b4da905",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "58031e63f1a52d79bb41ea063dfd0d5cec68458d48f38a39aaefaa40a961e2d9"
+    "integration.ts": "b71e95c2395b7d7bea39782034c29111b8d976721c634f8c85178e073b59025f"
   },
   "runtime": {
     "node": "v24.5.0",
@@ -41,7 +46,7 @@
     {
       "name": "Clean n8n import",
       "pass": true,
-      "detail": "10 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive"
+      "detail": "15 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive"
     },
     {
       "name": "n8n TendReview01",

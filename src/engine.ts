@@ -1,5 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
+import { canonicalEmail, type LiveRecord } from "./google-records.ts";
+import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
+import { chmodSync } from "node:fs";
 export const sources = [
   "gmail",
   "calendar",
@@ -28,6 +31,10 @@ export interface SourceState {
   coverage_start: string;
   coverage_end: string;
   cursor: string | null;
+  retry_after_until?: string | null;
+  attempt_count?: number;
+  last_error?: number | null;
+  last_batch_hash?: string;
 }
 export interface RawRecord {
   owner_id: string;
@@ -52,6 +59,39 @@ export interface NormalizedRecord extends RawRecord {
   contact_id: string;
   content_hash: string;
   record_key: string;
+  contact_ids?: string[];
+  authored_text?: string;
+  authored_spans?: { start: number; end: number; text: string }[];
+  attribution?: "direct" | "group" | "unknown";
+  eligible_for_extraction?: boolean;
+  end_at?: string;
+  all_day?: boolean;
+}
+export interface StoreOptions {
+  mode?: "fixture" | "live";
+  principal?: { owner_id: string; user_id: string; chat_id: string };
+  clock?: () => Date;
+}
+export interface LiveBatch {
+  owner_id: string;
+  source: Source;
+  account_id: string;
+  records: LiveRecord[];
+  cursor: string | null;
+  complete: boolean;
+  coverage_start: string;
+  coverage_end: string;
+  reconcile: boolean;
+  seen_record_ids: string[];
+  contacts?: Contact[];
+  identities?: Identity[];
+  removed_record_ids?: string[];
+  expected_cursor?: string | null;
+  quarantines?: {
+    source_record_id: string;
+    reason: string;
+    observed_at: string;
+  }[];
 }
 export interface Candidate {
   quote: string;
@@ -252,8 +292,25 @@ export function retryDelay(attempt: number, retryAfter: string | null): number {
 }
 export class TendStore {
   private db: DatabaseSync;
-  constructor(path: string) {
+  private readonly mode: "fixture" | "live";
+  private readonly principal: {
+    owner_id: string;
+    user_id: string;
+    chat_id: string;
+  };
+  private readonly clock: () => Date;
+  constructor(path: string, options: StoreOptions = {}) {
+    this.mode = options.mode ?? "fixture";
+    if (this.mode === "live" && !options.principal)
+      throw new Error("live principal required");
+    this.principal = options.principal ?? {
+      owner_id: "demo-owner",
+      user_id: "demo-user",
+      chat_id: "demo-private",
+    };
+    this.clock = options.clock ?? (() => new Date());
     this.db = new DatabaseSync(path);
+
     this.db.exec(`PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS contacts(owner_id TEXT NOT NULL,contact_id TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(owner_id,contact_id));
  CREATE TABLE IF NOT EXISTS identities(owner_id TEXT NOT NULL,identity TEXT NOT NULL,contact_id TEXT NOT NULL,PRIMARY KEY(owner_id,identity));
@@ -261,7 +318,39 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS interactions(record_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,source_record_id TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,source,account_id,source_record_id));
  CREATE TABLE IF NOT EXISTS commitments(commitment_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,record_key TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,record_key));
  CREATE TABLE IF NOT EXISTS quarantines(id INTEGER PRIMARY KEY,source TEXT,reason TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS telegram_updates(channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(channel_id,update_id));`);
+ CREATE TABLE IF NOT EXISTS telegram_updates(channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(channel_id,update_id));
+ CREATE TABLE IF NOT EXISTS live_quarantines(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,reason TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
+ CREATE TABLE IF NOT EXISTS live_sources(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id));
+ CREATE TABLE IF NOT EXISTS live_sync_seen(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
+ CREATE TABLE IF NOT EXISTS live_telegram_updates(owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(owner_id,channel_id,update_id));`);
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),mode TEXT NOT NULL,principal_id TEXT NOT NULL)",
+    );
+    const binding = this.db
+      .prepare("SELECT mode,principal_id FROM store_metadata WHERE singleton=1")
+      .get();
+    const expectedPrincipal =
+      this.mode === "live" ? this.principal.owner_id : "";
+    const legacyLive =
+      Number(this.db.prepare("SELECT COUNT(*) n FROM live_sources").get()?.n) >
+      0;
+    const legacyFixture =
+      Number(this.db.prepare("SELECT COUNT(*) n FROM sources").get()?.n) > 0;
+    if (
+      (binding &&
+        (binding.mode !== this.mode ||
+          binding.principal_id !== expectedPrincipal)) ||
+      (!binding &&
+        ((this.mode === "fixture" && legacyLive) ||
+          (this.mode === "live" && legacyFixture)))
+    ) {
+      this.db.close();
+      throw new Error("database mode or principal mismatch");
+    }
+    this.db
+      .prepare("INSERT OR IGNORE INTO store_metadata VALUES(1,?,?)")
+      .run(this.mode, expectedPrincipal);
+    if (this.mode === "live" && path !== ":memory:") chmodSync(path, 0o600);
   }
   close(): void {
     this.db.close();
@@ -271,6 +360,13 @@ export class TendStore {
     identities: Identity[],
     states: SourceState[],
   ): void {
+    if (
+      this.mode === "live" &&
+      [...contacts, ...identities, ...states].some(
+        (x) => x.owner_id !== this.principal.owner_id,
+      )
+    )
+      throw new Error("unauthorized seed");
     for (const c of contacts)
       this.db
         .prepare("INSERT OR IGNORE INTO contacts VALUES (?,?,?)")
@@ -281,27 +377,158 @@ export class TendStore {
         .run(i.owner_id, i.identity, i.contact_id);
     for (const s of states)
       this.db
-        .prepare("INSERT OR IGNORE INTO sources VALUES (?,?,?,?)")
+        .prepare(
+          `INSERT OR IGNORE INTO ${this.mode === "live" ? "live_sources" : "sources"} VALUES (?,?,?,?)`,
+        )
         .run(s.owner_id, s.source, s.account_id, JSON.stringify(s));
   }
   private identities(owner: string): Identity[] {
+    this.assertOwner(owner);
     return this.db
       .prepare(
         "SELECT owner_id,identity,contact_id FROM identities WHERE owner_id=?",
       )
       .all(owner) as unknown as Identity[];
   }
-  counts(): { interactions: number; commitments: number } {
+  private assertOwner(owner: string): void {
+    if (this.mode === "live" && owner !== this.principal.owner_id)
+      throw new Error("unauthorized owner");
+  }
+  private normalizeIncoming(raw: RawRecord): NormalizedRecord {
+    if (this.mode === "fixture")
+      return normalizeRecord(raw, this.identities(raw.owner_id));
+    this.assertOwner(raw.owner_id);
+    if (typeof raw.body_text !== "string") throw new Error("invalid body_text");
+    parseRaw({ ...raw, body_text: raw.body_text || "(no authored text)" });
+    if (
+      raw.ingestion_mode !== "live" ||
+      !["gmail", "calendar"].includes(raw.source)
+    )
+      throw new Error("live source required");
+    const record = raw as LiveRecord;
+    if (
+      !Array.isArray(record.contact_ids) ||
+      !Array.isArray(record.authored_spans) ||
+      typeof record.authored_text !== "string" ||
+      typeof record.eligible_for_extraction !== "boolean" ||
+      !["direct", "group", "unknown"].includes(record.attribution)
+    )
+      throw new Error("invalid live record");
+    for (const time of [
+      raw.occurred_at,
+      raw.observed_at,
+      raw.coverage_start,
+      raw.coverage_end,
+    ])
+      if (!exactTimestamp(time)) throw new Error("invalid timestamp");
+    if (Date.parse(raw.coverage_start) > Date.parse(raw.coverage_end))
+      throw new Error("reversed coverage");
+    const identities = this.identities(raw.owner_id);
+    const actor = identities.find((x) => x.identity === raw.actor_identity);
+    const participants = raw.participant_identities.map((email) =>
+      identities.find((x) => x.identity === email),
+    );
+    if (!actor || participants.some((x) => !x))
+      throw new Error("unresolved identity");
+    if (
+      raw.source !== "calendar" &&
+      ((raw.direction === "sent") !== (actor.contact_id === "OWNER") ||
+        raw.kind !== "message")
+    )
+      throw new Error("inconsistent actor direction");
+    if (
+      raw.source === "calendar" &&
+      (raw.direction !== "event" || raw.kind !== "meeting")
+    )
+      throw new Error("invalid calendar direction");
+    const contacts = [
+      ...new Set(
+        [actor, ...participants.filter((x): x is Identity => !!x)]
+          .map((x) => x.contact_id)
+          .filter((x) => x !== "OWNER"),
+      ),
+    ].sort();
+    if (
+      JSON.stringify(contacts) !==
+      JSON.stringify([...new Set(record.contact_ids)].sort())
+    )
+      throw new Error("contact binding mismatch");
+    if (
+      record.authored_spans.some(
+        (span) =>
+          !Number.isInteger(span.start) ||
+          !Number.isInteger(span.end) ||
+          span.start < 0 ||
+          span.end < span.start ||
+          record.authored_text.slice(span.start, span.end) !== span.text ||
+          !raw.body_text.includes(span.text),
+      )
+    )
+      throw new Error("invalid authored span");
+    const record_key = createHash("sha256")
+      .update(
+        JSON.stringify([
+          raw.owner_id,
+          raw.source,
+          raw.account_id,
+          raw.source_record_id,
+        ]),
+      )
+      .digest("hex");
+    const content_hash = createHash("sha256")
+      .update(
+        JSON.stringify([
+          raw.body_text,
+          raw.occurred_at,
+          raw.cancelled,
+          raw.direction,
+          raw.actor_identity,
+          raw.participant_identities,
+          record.contact_ids,
+          record.authored_spans,
+          record.attribution,
+          record.end_at,
+          record.all_day,
+        ]),
+      )
+      .digest("hex");
+    return {
+      ...record,
+      contact_id: contacts.length === 1 ? contacts[0]! : "",
+      record_key,
+      content_hash,
+    };
+  }
+  counts(owner = this.principal.owner_id): {
+    interactions: number;
+    commitments: number;
+  } {
+    this.assertOwner(owner);
     return {
       interactions: Number(
-        this.db.prepare("SELECT count(*) AS n FROM interactions").get()?.n,
+        this.db
+          .prepare("SELECT count(*) AS n FROM interactions WHERE owner_id=?")
+          .get(owner)?.n,
       ),
       commitments: Number(
-        this.db.prepare("SELECT count(*) AS n FROM commitments").get()?.n,
+        this.db
+          .prepare("SELECT count(*) AS n FROM commitments WHERE owner_id=?")
+          .get(owner)?.n,
       ),
     };
   }
   telegramDeliveryCounts(): { reply_pending: number; sent: number } {
+    if (this.mode === "live") {
+      const count = (status: string) =>
+        Number(
+          this.db
+            .prepare(
+              "SELECT count(*) AS n FROM live_telegram_updates WHERE owner_id=? AND status=?",
+            )
+            .get(this.principal.owner_id, status)?.n,
+        );
+      return { reply_pending: count("reply_pending"), sent: count("sent") };
+    }
     return {
       reply_pending: Number(
         this.db
@@ -319,7 +546,7 @@ export class TendStore {
       ),
     };
   }
-  ingest(raw: RawRecord): NormalizedRecord {
+  ingest(raw: RawRecord | LiveRecord): NormalizedRecord {
     this.db.exec("SAVEPOINT single_ingest");
     try {
       const result = this.writeRecord(raw);
@@ -332,9 +559,9 @@ export class TendStore {
     }
   }
   private writeRecord(raw: RawRecord): NormalizedRecord {
-    const r = normalizeRecord(raw, this.identities(raw.owner_id));
+    const r = this.normalizeIncoming(raw);
     const state = this.sourceStatus(raw.owner_id).find(
-      (s) => s.source === raw.source,
+      (s) => s.source === raw.source && s.account_id === raw.account_id,
     );
     if (
       !state ||
@@ -356,7 +583,11 @@ export class TendStore {
             ? candidate.status
             : "invalidated",
           evidence_valid: false,
+          ...(this.mode === "live"
+            ? { quote: "", action: "", suggested_due: null, due_date: null }
+            : {}),
         });
+      this.scrubReplyCache(raw.owner_id);
     }
     this.db
       .prepare(
@@ -391,13 +622,417 @@ export class TendStore {
       throw e;
     }
   }
-  sourceStatus(owner: string): SourceState[] {
+  commitLiveBatch(batch: LiveBatch): NormalizedRecord[] {
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.assertOwner(batch.owner_id);
+    const state = this.sourceStatus(batch.owner_id).find(
+      (x) => x.source === batch.source && x.account_id === batch.account_id,
+    );
+    if (!state || state.mode !== "live" || state.status === "revoked")
+      throw new Error("unregistered live account");
+    const batchHash = createHash("sha256")
+      .update(JSON.stringify(batch))
+      .digest("hex");
+    if (state.last_batch_hash === batchHash) return [];
+    if (
+      batch.expected_cursor !== undefined &&
+      state.cursor !== batch.expected_cursor
+    )
+      throw new Error("stale sync cursor");
+    if (
+      state.status === "current" ||
+      state.coverage_start !== batch.coverage_start ||
+      state.coverage_end !== batch.coverage_end
+    )
+      throw new Error("stale sync window");
+    if (
+      !exactTimestamp(batch.coverage_start) ||
+      !exactTimestamp(batch.coverage_end) ||
+      Date.parse(batch.coverage_start) > Date.parse(batch.coverage_end)
+    )
+      throw new Error("invalid coverage");
+    if (
+      batch.records.some(
+        (x) =>
+          x.owner_id !== batch.owner_id ||
+          x.source !== batch.source ||
+          x.account_id !== batch.account_id,
+      )
+    )
+      throw new Error("batch account mismatch");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.seed(batch.contacts ?? [], batch.identities ?? [], []);
+      const out = batch.records.map((record) => this.writeRecord(record));
+      for (const record of out)
+        this.db
+          .prepare(
+            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
+          )
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            record.source_record_id,
+          );
+      for (const q of batch.quarantines ?? [])
+        this.db
+          .prepare(
+            "INSERT INTO live_quarantines VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at",
+          )
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+            q.reason,
+            q.observed_at,
+          );
+
+      for (const id of batch.seen_record_ids)
+        this.db
+          .prepare("INSERT OR IGNORE INTO live_sync_seen VALUES(?,?,?,?)")
+          .run(batch.owner_id, batch.source, batch.account_id, id);
+      for (const id of batch.removed_record_ids ?? [])
+        this.removeLiveRecord(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          id,
+        );
+      if (batch.complete && batch.reconcile) {
+        const seen = new Set(
+          this.db
+            .prepare(
+              "SELECT record_id FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
+            )
+            .all(batch.owner_id, batch.source, batch.account_id)
+            .map((x) => String(x.record_id)),
+        );
+        for (const record of this.interactions(batch.owner_id).filter(
+          (x) => x.source === batch.source && x.account_id === batch.account_id,
+        ))
+          if (!seen.has(record.source_record_id))
+            this.removeLiveRecord(
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              record.source_record_id,
+            );
+      }
+      if (batch.complete)
+        this.db
+          .prepare(
+            "DELETE FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
+          )
+          .run(batch.owner_id, batch.source, batch.account_id);
+      this.db
+        .prepare(
+          "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .run(
+          JSON.stringify({
+            ...state,
+            cursor: batch.cursor,
+            status: batch.complete ? "current" : "partial",
+            last_success: batch.complete
+              ? this.clock().toISOString()
+              : state.last_success,
+            coverage_start: batch.coverage_start,
+            coverage_end: batch.coverage_end,
+            last_batch_hash: batchHash,
+            retry_after_until: null,
+            attempt_count: 0,
+            last_error: null,
+          }),
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+        );
+      this.pruneLiveContacts(batch.owner_id);
+      this.db.exec("COMMIT");
+      return out;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  prepareLiveSnapshot(
+    owner: string,
+    source: Source,
+    accountId: string,
+    start: string,
+    end: string,
+  ): SourceState {
+    this.assertOwner(owner);
+    const state = this.sourceStatus(owner).find(
+      (x) => x.source === source && x.account_id === accountId,
+    );
+    if (!state) throw new Error("unknown source");
+    if (state.status !== "current") return state;
+    const next = {
+      ...state,
+      cursor: null,
+      status: "partial",
+      coverage_start: start,
+      coverage_end: end,
+      last_batch_hash: "",
+    };
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .run(owner, source, accountId);
+      this.db
+        .prepare(
+          "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .run(JSON.stringify(next), owner, source, accountId);
+      this.db.exec("COMMIT");
+      return next;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  reconnectLiveSource(
+    owner: string,
+    source: Source,
+    accountId: string,
+    start: string,
+    end: string,
+  ): void {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    const state = this.sourceStatus(owner).find(
+      (x) => x.source === source && x.account_id === accountId,
+    );
+    if (!state) throw new Error("unknown source");
+    if (
+      !exactTimestamp(start) ||
+      !exactTimestamp(end) ||
+      Date.parse(start) >= Date.parse(end)
+    )
+      throw new Error("invalid reconnect window");
+    this.db.exec("SAVEPOINT reconnect_source");
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .run(owner, source, accountId);
+      this.db
+        .prepare(
+          "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .run(
+          JSON.stringify({
+            ...state,
+            status: "partial",
+            cursor: null,
+            last_success: null,
+            coverage_start: start,
+            coverage_end: end,
+            last_batch_hash: "",
+            retry_after_until: null,
+            attempt_count: 0,
+            last_error: null,
+          }),
+          owner,
+          source,
+          accountId,
+        );
+      this.scrubReplyCache(owner);
+      this.db.exec("RELEASE reconnect_source");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO reconnect_source; RELEASE reconnect_source");
+      throw error;
+    }
+  }
+  markLiveSyncError(
+    owner: string,
+    source: Source,
+    accountId: string,
+    reconnect: boolean,
+    retryAfterUntil: string | null = null,
+    statusCode: number | null = null,
+  ): void {
+    this.assertOwner(owner);
+    if (reconnect) {
+      this.revokeSource(owner, source);
+      return;
+    }
+    const state = this.sourceStatus(owner).find(
+      (x) => x.source === source && x.account_id === accountId,
+    );
+    if (!state) throw new Error("unknown source");
+    this.db
+      .prepare(
+        "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
+      )
+      .run(
+        JSON.stringify({
+          ...state,
+          status: "stale",
+          retry_after_until: retryAfterUntil,
+          attempt_count: (state.attempt_count ?? 0) + 1,
+          last_error: statusCode,
+        }),
+        owner,
+        source,
+        accountId,
+      );
+  }
+  private removeLiveRecord(
+    owner: string,
+    source: Source,
+    accountId: string,
+    providerId: string,
+  ): void {
+    const record = this.interactions(owner).find(
+      (x) =>
+        x.source === source &&
+        x.account_id === accountId &&
+        x.source_record_id === providerId,
+    );
+    if (!record) return;
+    for (const c of this.commitments(owner).filter(
+      (x) => x.record_key === record.record_key,
+    ))
+      this.put({
+        ...c,
+        status: ["done", "cancelled"].includes(c.status)
+          ? c.status
+          : "invalidated",
+        evidence_valid: false,
+        quote: "",
+        action: "",
+        suggested_due: null,
+        due_date: null,
+      });
+    this.db
+      .prepare("DELETE FROM interactions WHERE owner_id=? AND record_key=?")
+      .run(owner, record.record_key);
+    this.scrubReplyCache(owner);
+  }
+  expireLiveEvidence(
+    owner: string,
+    gmailStart: string,
+    calendarStart: string,
+    calendarEnd: string,
+  ): void {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const record of this.interactions(owner))
+        if (
+          (record.source === "gmail" &&
+            Date.parse(record.occurred_at) < Date.parse(gmailStart)) ||
+          (record.source === "calendar" &&
+            (Date.parse(record.end_at ?? record.occurred_at) <=
+              Date.parse(calendarStart) ||
+              Date.parse(record.occurred_at) >= Date.parse(calendarEnd)))
+        )
+          this.removeLiveRecord(
+            owner,
+            record.source,
+            record.account_id,
+            record.source_record_id,
+          );
+      this.db
+        .prepare(
+          "DELETE FROM live_quarantines WHERE owner_id=? AND observed_at<?",
+        )
+        .run(owner, gmailStart);
+      this.pruneLiveContacts(owner);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  private pruneLiveContacts(owner: string): void {
+    if (this.mode !== "live") return;
+    const used = new Set(
+      this.interactions(owner).flatMap((r) => r.contact_ids ?? []),
+    );
+    let changed = false;
+    for (const contact of this.contacts(owner)) {
+      if (contact.contact_id === "OWNER" || used.has(contact.contact_id))
+        continue;
+      changed = true;
+      this.db
+        .prepare("DELETE FROM identities WHERE owner_id=? AND contact_id=?")
+        .run(owner, contact.contact_id);
+      this.db
+        .prepare("DELETE FROM contacts WHERE owner_id=? AND contact_id=?")
+        .run(owner, contact.contact_id);
+    }
+    if (changed) this.scrubReplyCache(owner);
+  }
+  private scrubReplyCache(owner: string): void {
+    if (this.mode === "live")
+      this.db
+        .prepare(
+          "UPDATE live_telegram_updates SET reply_data='{}' WHERE owner_id=?",
+        )
+        .run(owner);
+  }
+  quarantineCount(owner: string): number {
+    this.assertOwner(owner);
+    return Number(
+      this.db
+        .prepare("SELECT COUNT(*) n FROM live_quarantines WHERE owner_id=?")
+        .get(owner)?.n,
+    );
+  }
+  cachedReplyText(owner: string): string {
+    this.assertOwner(owner);
     return this.db
-      .prepare("SELECT data FROM sources WHERE owner_id=? ORDER BY source")
+      .prepare("SELECT reply_data FROM live_telegram_updates WHERE owner_id=?")
+      .all(owner)
+      .map((x) => String(x.reply_data))
+      .join("\n");
+  }
+  contacts(owner: string, query = ""): (Contact & { emails: string[] })[] {
+    this.assertOwner(owner);
+    const identities = this.identities(owner);
+    const needle = query.toLowerCase();
+    return (
+      this.db
+        .prepare(
+          "SELECT owner_id,contact_id,name FROM contacts WHERE owner_id=? ORDER BY name,contact_id",
+        )
+        .all(owner) as unknown as Contact[]
+    )
+      .map((contact) => ({
+        ...contact,
+        emails: identities
+          .filter((x) => x.contact_id === contact.contact_id)
+          .map((x) => x.identity),
+      }))
+      .filter(
+        (x) =>
+          !query ||
+          x.name.toLowerCase().includes(needle) ||
+          x.contact_id === query ||
+          x.emails.some((email) => email.toLowerCase().includes(needle)),
+      );
+  }
+  sourceStatus(owner: string): SourceState[] {
+    this.assertOwner(owner);
+    return this.db
+      .prepare(
+        `SELECT data FROM ${this.mode === "live" ? "live_sources" : "sources"} WHERE owner_id=? ORDER BY source,account_id`,
+      )
       .all(owner)
       .map((r) => JSON.parse(String(r.data)) as SourceState);
   }
   interactions(owner: string): NormalizedRecord[] {
+    this.assertOwner(owner);
     return this.db
       .prepare(
         "SELECT data FROM interactions WHERE owner_id=? ORDER BY source,source_record_id",
@@ -406,6 +1041,15 @@ export class TendStore {
       .map((r) => JSON.parse(String(r.data)) as NormalizedRecord);
   }
   resolveContact(owner: string, query: string): Contact {
+    this.assertOwner(owner);
+    if (this.mode === "live" && query.includes("@")) {
+      const identity = this.identities(owner).find(
+        (x) => x.identity === canonicalEmail(query),
+      );
+      if (!identity || identity.contact_id === "OWNER")
+        throw new Error("unknown contact");
+      query = identity.contact_id;
+    }
     const matches = this.db
       .prepare(
         "SELECT owner_id,contact_id,name FROM contacts WHERE owner_id=? AND (contact_id=? OR name=?)",
@@ -418,8 +1062,21 @@ export class TendStore {
     return matches[0]!;
   }
   addCandidate(raw: RawRecord, input: unknown): Commitment {
-    const validated = validateCandidate(raw, input);
-    const normalized = normalizeRecord(raw, this.identities(raw.owner_id));
+    const normalized = this.normalizeIncoming(raw);
+    let validated: Candidate;
+    if (this.mode === "live") {
+      const record = raw as LiveRecord;
+      if (
+        !record.eligible_for_extraction ||
+        record.attribution !== "direct" ||
+        record.contact_ids.length !== 1 ||
+        !isRecord(input) ||
+        typeof input.quote !== "string" ||
+        !record.authored_spans.some((span) => span.text === input.quote)
+      )
+        throw new Error("direct authored evidence required");
+      validated = validateCandidate({ ...raw, body_text: input.quote }, input);
+    } else validated = validateCandidate(raw, input);
     const stored = this.interactions(raw.owner_id).find(
       (r) => r.record_key === normalized.record_key,
     );
@@ -457,6 +1114,7 @@ export class TendStore {
     return c;
   }
   commitments(owner: string): Commitment[] {
+    this.assertOwner(owner);
     return this.db
       .prepare("SELECT data FROM commitments WHERE owner_id=?")
       .all(owner)
@@ -470,26 +1128,54 @@ export class TendStore {
       .run(JSON.stringify(c), c.commitment_id, c.owner_id);
   }
   revokeSource(owner: string, source: Source): void {
-    const state = this.sourceStatus(owner).find((s) => s.source === source);
-    if (state)
+    this.assertOwner(owner);
+    this.db.exec("SAVEPOINT revoke_source");
+    try {
+      for (const state of this.sourceStatus(owner).filter(
+        (s) => s.source === source,
+      ))
+        this.db
+          .prepare(
+            `UPDATE ${this.mode === "live" ? "live_sources" : "sources"} SET data=? WHERE owner_id=? AND source=? AND account_id=?`,
+          )
+          .run(
+            JSON.stringify({ ...state, status: "revoked" }),
+            owner,
+            source,
+            state.account_id,
+          );
+      for (const c of this.commitments(owner).filter(
+        (c) => c.source === source,
+      ))
+        this.put({
+          ...c,
+          status: ["done", "cancelled"].includes(c.status)
+            ? c.status
+            : "invalidated",
+          evidence_valid: false,
+          quote: "",
+          action: "",
+          suggested_due: null,
+          due_date: null,
+        });
       this.db
-        .prepare("UPDATE sources SET data=? WHERE owner_id=? AND source=?")
-        .run(JSON.stringify({ ...state, status: "revoked" }), owner, source);
-    for (const c of this.commitments(owner).filter((c) => c.source === source))
-      this.put({
-        ...c,
-        status: ["done", "cancelled"].includes(c.status)
-          ? c.status
-          : "invalidated",
-        evidence_valid: false,
-        quote: "",
-        action: "",
-        suggested_due: null,
-        due_date: null,
-      });
-    this.db
-      .prepare("DELETE FROM interactions WHERE owner_id=? AND source=?")
-      .run(owner, source);
+        .prepare("DELETE FROM interactions WHERE owner_id=? AND source=?")
+        .run(owner, source);
+      this.scrubReplyCache(owner);
+      this.pruneLiveContacts(owner);
+      if (this.mode === "live")
+        this.db
+          .prepare("DELETE FROM live_quarantines WHERE owner_id=? AND source=?")
+          .run(owner, source);
+      if (this.mode === "live")
+        this.db
+          .prepare("DELETE FROM live_sync_seen WHERE owner_id=? AND source=?")
+          .run(owner, source);
+      this.db.exec("RELEASE revoke_source");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO revoke_source; RELEASE revoke_source");
+      throw error;
+    }
   }
   command(auth: AuthCommand): Reply {
     this.authorizeCommand(auth);
@@ -497,9 +1183,9 @@ export class TendStore {
   }
   private authorizeCommand(auth: AuthCommand): void {
     if (
-      auth.owner_id !== "demo-owner" ||
-      auth.user_id !== "demo-user" ||
-      auth.chat_id !== "demo-private" ||
+      auth.owner_id !== this.principal.owner_id ||
+      auth.user_id !== this.principal.user_id ||
+      auth.chat_id !== this.principal.chat_id ||
       auth.chat_type !== "private"
     )
       throw new Error("unauthorized");
@@ -516,9 +1202,13 @@ export class TendStore {
     try {
       const prior = this.db
         .prepare(
-          "SELECT payload_hash FROM telegram_updates WHERE channel_id=? AND update_id=?",
+          `SELECT payload_hash FROM ${this.mode === "live" ? "live_telegram_updates" : "telegram_updates"} WHERE channel_id=? AND update_id=?${this.mode === "live" ? " AND owner_id=?" : ""}`,
         )
-        .get(channelId, updateId);
+        .get(
+          ...(this.mode === "live"
+            ? [channelId, updateId, auth.owner_id]
+            : [channelId, updateId]),
+        );
       if (prior) {
         this.db.exec("COMMIT");
         return { accepted: false };
@@ -532,11 +1222,31 @@ export class TendStore {
           error: "Command failed. Use /help for examples.",
         };
       }
-      this.db
-        .prepare(
-          "INSERT INTO telegram_updates(channel_id,update_id,payload_hash,reply_data,status) VALUES(?,?,?,?,?)",
-        )
-        .run(channelId, updateId, hash, JSON.stringify(reply), "reply_pending");
+      if (this.mode === "live")
+        this.db
+          .prepare(
+            "INSERT INTO live_telegram_updates(owner_id,channel_id,update_id,payload_hash,reply_data,status) VALUES(?,?,?,?,?,?)",
+          )
+          .run(
+            auth.owner_id,
+            channelId,
+            updateId,
+            hash,
+            JSON.stringify(reply),
+            "reply_pending",
+          );
+      else
+        this.db
+          .prepare(
+            "INSERT INTO telegram_updates(channel_id,update_id,payload_hash,reply_data,status) VALUES(?,?,?,?,?)",
+          )
+          .run(
+            channelId,
+            updateId,
+            hash,
+            JSON.stringify(reply),
+            "reply_pending",
+          );
       this.db.exec("COMMIT");
       return { accepted: true, reply };
     } catch (error) {
@@ -556,9 +1266,13 @@ export class TendStore {
       throw new Error("invalid Telegram message ID");
     const result = this.db
       .prepare(
-        "UPDATE telegram_updates SET status='sent',telegram_message_id=? WHERE channel_id=? AND update_id=?",
+        `UPDATE ${this.mode === "live" ? "live_telegram_updates" : "telegram_updates"} SET status='sent',telegram_message_id=?${this.mode === "live" ? ",reply_data='{}'" : ""} WHERE channel_id=? AND update_id=?${this.mode === "live" ? " AND owner_id=?" : ""}`,
       )
-      .run(messageId, channelId, updateId);
+      .run(
+        ...(this.mode === "live"
+          ? [messageId, channelId, updateId, auth.owner_id]
+          : [messageId, channelId, updateId]),
+      );
     if (result.changes !== 1) throw new Error("unknown Telegram update");
   }
   private validateTelegramKey(channelId: string, updateId: number): void {
@@ -578,33 +1292,77 @@ export class TendStore {
         : ["/draft", "/done", "/cancel"].includes(cmd ?? "")
           ? 2
           : 1;
-    if (cmd !== "/prep" && tokens.length !== expectedArgs)
+    if (
+      !["/prep", "/contacts"].includes(cmd ?? "") &&
+      tokens.length !== expectedArgs
+    )
       throw new Error("invalid command arguments");
-    if (cmd !== "/prep" && extra.length)
+    if (!["/prep", "/contacts"].includes(cmd ?? "") && extra.length)
       throw new Error("invalid command arguments");
     const owner = auth.owner_id;
+    const mode =
+      this.mode === "live" ? "PRIVATE LIVE GOOGLE" : "FICTIONAL LOCAL DEMO";
+    if (cmd === "/contacts") {
+      const found = this.contacts(owner, tokens.slice(1).join(" "));
+      return {
+        outbound_sent: false,
+        mode,
+        contacts: found.slice(0, 50),
+        contacts_total: found.length,
+        lookup_note:
+          found.length > 50
+            ? "Showing first 50 matches; narrow the query or use /prep with exact email."
+            : "Names never merge identities.",
+      };
+    }
     if (cmd === "/status")
       return {
         outbound_sent: false,
-        mode: "FICTIONAL LOCAL DEMO",
+        mode,
         sources: this.sourceStatus(owner),
-        counts: this.counts(),
+        counts: this.counts(owner),
+        ...(this.mode === "live"
+          ? { unavailable_record_count: this.quarantineCount(owner) }
+          : {}),
       };
     if (cmd === "/prep") {
-      const contact = this.resolveContact(owner, tokens.slice(1).join(" "));
+      const query = tokens.slice(1).join(" ");
+      const choices =
+        this.mode === "live"
+          ? this.contacts(owner).filter((x) => x.name === query)
+          : [];
+      if (choices.length > 1)
+        return {
+          outbound_sent: false,
+          mode,
+          contacts: choices,
+          contacts_total: choices.length,
+          lookup_note:
+            "Ambiguous name. Choose an exact email or contact ID; no identities were merged.",
+        };
+      const contact = this.resolveContact(owner, query);
       const evidence = this.interactions(owner).filter(
-        (r) => r.contact_id === contact.contact_id && !r.cancelled,
+        (r) =>
+          (r.contact_id === contact.contact_id ||
+            r.contact_ids?.includes(contact.contact_id)) &&
+          !r.cancelled,
       );
       return {
         outbound_sent: false,
-        mode: "FICTIONAL LOCAL DEMO",
+        mode,
         contact,
-        evidence: evidence.map((r) => ({
-          source: r.source,
-          reference: r.evidence_reference,
-          text: r.body_text,
-          occurred_at: r.occurred_at,
-        })),
+        evidence_total: evidence.length,
+        evidence: evidence
+          .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at))
+          .slice(0, 20)
+          .map((r) => ({
+            source: r.source,
+            reference: r.evidence_reference,
+            text: r.body_text.slice(0, 2000),
+            truncated: r.body_text.length > 2000,
+            attribution: r.attribution ?? "direct",
+            occurred_at: r.occurred_at,
+          })),
         commitments: this.commitments(owner).filter(
           (c) => c.contact_id === contact.contact_id,
         ),
@@ -613,27 +1371,45 @@ export class TendStore {
           "Source text is evidence only. Stale/snapshot coverage cannot establish absence of recent contact.",
       };
     }
-    if (cmd === "/today")
+    if (cmd === "/today") {
+      const current = this.clock();
+      const window = calendarWindow(exampleLivePolicy, current);
       return {
         outbound_sent: false,
+        mode,
         meetings: this.interactions(owner).filter(
           (record) =>
             record.source === "calendar" &&
             !record.cancelled &&
-            Date.parse(record.occurred_at) >=
-              Date.parse("2026-10-13T00:00:00Z") &&
-            Date.parse(record.occurred_at) <=
-              Date.parse("2026-10-20T00:00:00Z"),
+            (this.mode === "live"
+              ? Date.parse(record.end_at ?? record.occurred_at) >
+                  Date.parse(window.start) &&
+                Date.parse(record.occurred_at) < Date.parse(window.end)
+              : Date.parse(record.occurred_at) >=
+                  Date.parse("2026-10-13T00:00:00Z") &&
+                Date.parse(record.occurred_at) <=
+                  Date.parse("2026-10-20T00:00:00Z")),
         ),
         commitments: this.commitments(owner).filter(
           (c) =>
             c.status === "confirmed" &&
             c.due_date !== null &&
-            c.due_date <= "2026-10-13",
+            c.due_date <=
+              (this.mode === "live"
+                ? this.clock().toLocaleDateString("en-CA", {
+                    timeZone: "Europe/Paris",
+                  })
+                : "2026-10-13"),
         ),
         pending: this.commitments(owner).filter((c) => c.status === "pending"),
-        clock: "2026-10-13 fixture clock",
+        clock:
+          this.mode === "live"
+            ? this.clock().toISOString() +
+              " (UTC; meetings shown in Europe/Paris)"
+            : "2026-10-13 fixture clock",
+        coverage: this.sourceStatus(owner),
       };
+    }
     const c = this.commitments(owner).find((c) => c.commitment_id === id);
     if (!c) throw new Error("unknown commitment");
     if (cmd === "/draft") {

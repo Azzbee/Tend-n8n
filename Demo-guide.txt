@@ -17,16 +17,17 @@ Execute TendReview07. Show native Basic LLM Chain and Ollama Chat Model, their r
 Execute TendReview08 for /prep F17. Show Gmail, meeting and WhatsApp/LinkedIn references plus stale/snapshot coverage. Try “Riley Park” through the local command API: ambiguity requires an ID. Confirm the pending candidate explicitly with a date, view a draft preview and mark done. Replay /done; state does not change again. The demo sends nothing to a contact.
 
 4:15-5:00: failures and recovery
-Show the owner/private-chat guard; the group-chat test is rejected before retrieval. Show malformed date and injected-field tests. Execute TendReview09: first two local responses are synthetic429, third succeeds with bounded one-second retries. Describe live retries/authorization as untested connector work.
+Show the owner/private-chat guard; the group-chat test is rejected before retrieval. Show malformed date and injected-field tests. Execute TendReview09: first two local responses are synthetic429, third succeeds with bounded one-second retries. Describe this as a fictional retry fixture. Separate Google provider retries are tested with mock responses; actual source synchronization is pending configuration.
 
 5:00-6:00: questions and limits
 Be ready to explain source uniqueness, actor direction, why timestamps must be valid, why same names do not merge contacts, why pending differs from confirmed, and why a snapshot cannot establish ongoing sync. Identify each Code and If node. Explain where SQLite persists and how Postgres would replace it.
-If asked whether the project is validated, say teacher validation and public link are pending. The 15 October cutoff requires completed review-ready work; the 22 October demo is separate. Do not say accounts are connected or that this package accesses all chats.
+If asked whether the project is validated, say teacher validation and register completion remain pending. The public review is deployed at https://tend-nocode-review.adamzeraiki.chatgpt.site . The 15 October cutoff requires completed review-ready work; the 22 October demo is separate. Say the real private Telegram channel is verified and Gmail profile-only verification matched the approved account. No real mail/event synchronization is verified yet. Do not claim this package accesses all chats.
 
 Fallback
 If Docker/Ollama is unavailable, show the previously recorded evidence/runtime-checks.json, fixture data and tests. Call it recorded evidence, not a live execution. This fallback does not replace a required working class demo.
 
-Secure Telegram setup handoff
+Existing private Telegram setup reference
+The enrolled owner channel already works. Preserve its private workflow, trigger, webhook IDs and credential when changing routes. The following steps describe initial setup for a separate local clone.
 1. Complete the n8n owner password setup directly at http://localhost:5678. Keep the editor local. Adam enters the new bot token directly into a Telegram credential named TendReviewTelegram; never paste it into chat, shell, source or public review.
 2. Run bun run telegram:prepare once. It writes .scratch/live-telegram/workflow.json with private random workflow/trigger/webhook IDs, no token or owner IDs. Import this private file, not the public template. Select the credential on native Trigger and Send. Keep the workflow inactive while enrolling.
 3. Start bun run telegram:proxy -- --enrollment. Only the exact signed production/test webhook routes are permitted. A temporary Cloudflare Quick Tunnel targets localhost:18769. Its HTTPS base URL must become n8n WEBHOOK_URL while preserving the existing data volume; restart only the owned service when no one is entering credentials. Never tunnel localhost:5678 or the fixture API.
@@ -36,3 +37,18 @@ Secure Telegram setup handoff
 
 Delivery recovery
 A duplicate Telegram update is durably ignored. A newly sent owner command has a new update ID. If a reply is absent or delivery acknowledgement is uncertain after a crash, inspect the private chat and send a fresh /status or the original state-idempotent command. Do not replay the old update ID or claim exactly-once external message delivery.
+
+Google operator handoff (private, after the gate)
+Keep workflows 11–15 inactive until the private policy and credentials are configured. The Calendar credential is connected. Native metadata-only verification matched the approved account and both calendars in a complete six-calendar list. Actual message/event reads remain unverified. A fresh private Header Auth key setup is open; both its native credential save and verification hash save remain pending. The original Gmail read-only profile check succeeded, but replacement credential handoff is pending. Adam enters credentials through native UI; never read or paste the secret values into shell, source or chat.
+Bind workflow 11 to Gmail readonly and new internal Header Auth. Workflow 12 also needs Calendar events/calendarlist readonly. Workflow 13 needs the same Header Auth; embedded sub-workflow copies need that reference too. Workflow 15 needs Header Auth and the existing keyless local Ollama model. Configure exact approved calendar IDs in private policy. Execute initial sync manually, inspect partial/current coverage and cursor progress, then enable n8n Schedule polling only after real verification. Preserve the enrolled private Telegram workflow/trigger/webhook IDs when switching its guarded route to the live API; do not register a second active bot trigger.
+Mock provider proofs in evidence/google-runtime-checks.json are fictional native n8n executions. They do not replace a real approved account check or an observed mailbox/calendar read. Retain that distinction in the class demo.
+Manual reconnect: Adam reconnects the same approved OAuth account in native UI, then repeats native profile verification. Through an n8n HTTP Request with the saved internal Header Auth credential, POST /api/live/reconnect with manual_reconnect:true, source, account_email, profile_account_email and verified_at (current ISO timestamp). For Calendar also pass the exact calendar_id and verified_calendar_id from successful selected-calendar metadata; primary metadata resolves to the approved account email. The API resets the source to partial/null cursor for a new bounded read. A reconnect is not a completed sync. Do not place the connection key in the request body or command line.
+
+Five-to-seven-minute class presentation (planned, live sources only if verified)
+0:00–1:30: purpose, single-owner Gmail/Calendar level, labelled diagram and ordered cuts. Say which evidence is real, fixture or provider-mock; show the stable public link and state teacher validation is pending.
+1:30–2:30: contact search/briefing and upcoming meetings. If actual Google sync is verified, use approved private owner output without projecting private message bodies or credentials. Otherwise demonstrate the explicitly fictional contact and recorded mock proof.
+2:30–3:40: native authored-span AI candidate, exact quote guard and pending status. Explicitly confirm, preview the correctly directed draft, then mark done. Show repeated done leaves state unchanged. No contact message is sent.
+3:40–4:50: private Telegram /status or /prep, bounded retry/partial coverage and one guard rejection. Real Telegram transport is verified; Google source synchronization must be named accurately on the day.
+4:50–5:10: point to all nine building blocks, review downloads and the remaining teacher approval step. Reserve the remaining time, up to seven minutes, for one or two questions. No live debugging.
+
+Extraction limit: only direct newly authored English I will / I promise to spans are eligible. Other recent mail remains source-linked contact context. Do not claim complete promise detection, multilingual extraction or forwarded/group intent attribution.

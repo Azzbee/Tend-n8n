@@ -15,6 +15,9 @@ import {
   telegramGuardCode,
   telegramReplyCode,
   configuredGuard,
+  configuredLiveGuard,
+  telegramLiveGuardCode,
+  telegramLiveReplyCode,
 } from "../src/telegram.ts";
 const update = {
   update_id: 1,
@@ -233,5 +236,100 @@ describe("persistent Telegram command replay boundary", () => {
       store.close();
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("private Google Telegram boundary", () => {
+  it("fails closed unconfigured and allows owner contact lookup with live principal", () => {
+    expect(run(update, telegramLiveGuardCode)).toEqual([]);
+    const code = configuredLiveGuard(
+      "424242",
+      "424242",
+      "fictional-owner",
+      "fictional-live-channel",
+    );
+    const result = run(
+      {
+        ...update,
+        message: { ...update.message, text: "/contacts Same Name" },
+      },
+      code,
+    ) as {
+      json: { help: boolean; command: { owner_id: string; text: string } };
+    }[];
+    expect(result[0]?.json.help).toBe(false);
+    expect(result[0]?.json.command.owner_id).toBe("fictional-owner");
+    expect(result[0]?.json.command.text).toBe("/contacts Same Name");
+    expect(
+      run(
+        {
+          ...update,
+          message: { ...update.message, chat: { id: 424242, type: "group" } },
+        },
+        code,
+      ),
+    ).toEqual([]);
+  });
+  it("labels private coverage, ambiguous contacts and proposed dates without recipient spoofing", () => {
+    const output = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              chat_id: "spoof",
+              contacts: [
+                {
+                  name: "<Same>",
+                  contact_id: "E1",
+                  emails: ["a@example.invalid"],
+                },
+              ],
+              contacts_total: 2,
+              unavailable_record_count: 3,
+              meetings: [
+                {
+                  occurred_at: "2026-10-13T22:00:00Z",
+                  end_at: "2026-10-14T22:00:00Z",
+                  all_day: true,
+                  body_text: "Fictional all-day event",
+                },
+              ],
+              lookup_note: "Ambiguous name",
+              sources: [
+                {
+                  source: "gmail",
+                  status: "partial",
+                  mode: "live",
+                  coverage_start: "2026-09-14",
+                  coverage_end: "2026-10-14",
+                },
+              ],
+              pending: [
+                {
+                  commitment_id: "C1",
+                  suggested_due: "2026-10-15",
+                  due_date: null,
+                  status: "pending",
+                },
+              ],
+            },
+          }),
+        },
+        $: () => ({
+          first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+        }),
+      },
+    ) as { json: { chat_id: string; text: string } }[];
+    expect(output[0]?.json.chat_id).toBe("424242");
+    const text = output[0]!.json.text;
+    expect(text).toContain("Private Gmail and Calendar summary");
+    expect(text).toContain("a@example.invalid");
+    expect(text).toContain("Unavailable source records needing review: 3");
+    expect(text).toContain("All-day 2026-10-14 (end-exclusive 2026-10-15)");
+    expect(text).toContain("Window: 2026-09-14 to 2026-10-14");
+    expect(text).toContain("proposed date");
+    expect(text).not.toContain("fictional data");
+    expect(text).toContain("&lt;Same&gt;");
   });
 });

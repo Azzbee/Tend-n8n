@@ -20,8 +20,8 @@
       "webhookId": "GENERATE_PRIVATE_DEPLOYMENT_COPY",
       "credentials": {
         "telegramApi": {
-          "id": "TendReviewTelegram",
-          "name": "TendReviewTelegram"
+          "id": "CONFIGURE_TELEGRAM_CREDENTIAL_ID",
+          "name": "CONFIGURE_TELEGRAM_CREDENTIAL"
         }
       }
     },
@@ -95,8 +95,8 @@
       },
       "credentials": {
         "telegramApi": {
-          "id": "TendReviewTelegram",
-          "name": "TendReviewTelegram"
+          "id": "CONFIGURE_TELEGRAM_CREDENTIAL_ID",
+          "name": "CONFIGURE_TELEGRAM_CREDENTIAL"
         }
       }
     },

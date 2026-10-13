@@ -1,0 +1,254 @@
+{
+  "id": "TendGoogle15",
+  "name": "Tend 15: Local AI on eligible newly authored Google evidence",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-approved-local-extraction",
+      "name": "Run approved local extraction",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "poll-eligible-authored-spans",
+      "name": "Poll eligible authored spans",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 180],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] }
+      }
+    },
+    {
+      "id": "read-eligible-authored-span",
+      "name": "Read eligible authored span",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/model-input",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "check-eligible-authored-source",
+      "name": "Check eligible authored source",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;return [{json:{...x,eligible:typeof x.record_key==='string'&&x.record_key.length>0&&x.record&&typeof x.record.authored_span==='string'&&x.record.authored_span.length>0&&x.request&&Array.isArray(x.request.messages)&&x.request.messages.length>=2}}];"
+      }
+    },
+    {
+      "id": "eligible-authored-promise",
+      "name": "Eligible authored promise",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [710, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.eligible }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "local-ai-extraction-basic-llm-chain-",
+      "name": "Local AI extraction (Basic LLM Chain)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [930, 0],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.request.messages[1].content }}",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "={{ $json.request.messages[0].content }}"
+            }
+          ]
+        },
+        "batching": { "batchSize": 1 }
+      }
+    },
+    {
+      "id": "validate-exact-authored-quote",
+      "name": "Validate exact authored quote",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1190, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!/^I (?:will|promise to)\\b/i.test(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,candidate}}];"
+      }
+    },
+    {
+      "id": "persist-owner-scoped-pending-promise",
+      "name": "Persist owner-scoped pending promise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/candidates",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "local-ollama-chat-model",
+      "name": "Local Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [930, 260],
+      "parameters": {
+        "model": "qwen3:0.6b",
+        "options": {
+          "temperature": 0,
+          "format": "json",
+          "think": false,
+          "numCtx": 2048,
+          "numPredict": 512
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "TendReviewLocalOllama",
+          "name": "Tend review local Ollama (no key)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Run approved local extraction": {
+      "main": [
+        [{ "node": "Read eligible authored span", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll eligible authored spans": {
+      "main": [
+        [{ "node": "Read eligible authored span", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read eligible authored span": {
+      "main": [
+        [
+          {
+            "node": "Check eligible authored source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check eligible authored source": {
+      "main": [
+        [{ "node": "Eligible authored promise", "type": "main", "index": 0 }]
+      ]
+    },
+    "Eligible authored promise": {
+      "main": [
+        [
+          {
+            "node": "Local AI extraction (Basic LLM Chain)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local AI extraction (Basic LLM Chain)": {
+      "main": [
+        [
+          {
+            "node": "Validate exact authored quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate exact authored quote": {
+      "main": [
+        [
+          {
+            "node": "Persist owner-scoped pending promise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Local AI extraction (Basic LLM Chain)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris",
+    "saveManualExecutions": false
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000015",
+  "meta": { "templateCredsSetupCompleted": false }
+}

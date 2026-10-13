@@ -160,10 +160,12 @@
     </p>
     <div class="warning">
       <strong>15 October is the completed-project validation cutoff.</strong>
-      Teacher scope approval and the five personal source connections remain
-      pending. The private Telegram owner loop and public review page are live.
-      The later demo session starts 22 October at 13:00. Source evidence remains
-      fictional.
+      Teacher scope approval and actual source synchronization remain pending.
+      Gmail read-only profile verification matched the approved account; no real
+      messages were read or ingested. Calendar and private API credentials are
+      still awaiting human entry. The private Telegram owner loop and public
+      review page are live. The later demo session starts 22 October at 13:00.
+      Source evidence remains fictional.
     </div>
     <p>
       Published review:
@@ -173,7 +175,7 @@
       does not expose the private editor, credentials or live workflow IDs.
     </p>
     <div class="row">
-      <div class="stat"><strong>10</strong>Inactive n8n workflow exports</div>
+      <div class="stat"><strong>15</strong>Inactive n8n workflow exports</div>
       <div class="stat"><strong>7</strong>Fictional evidence records</div>
       <div class="stat"><strong>0</strong>Personal source connections</div>
     </div>
@@ -295,8 +297,8 @@
           text-anchor="middle"
           fill="#637b74"
         >
-          Manual fixture triggers only. Real external-message triggers and five
-          account connectors are not configured.
+          Fixture diagram. The private Telegram trigger is verified; Google
+          inbox/event synchronization remains pending configuration.
         </text>
       </svg>
       <p class="small">
@@ -333,6 +335,18 @@
           <td>
             Clean n8n import/execution results. Generated only after an actual
             passing run.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="evidence/google-runtime-checks.json"
+              >Native Google mock checks</a
+            >
+          </td>
+          <td>
+            Six actual n8n executions against fictional provider responses and
+            tokens, including resumable pages and local AI. Actual Google
+            ingestion remains unverified.
           </td>
         </tr>
         <tr>
@@ -392,8 +406,9 @@ bun run schema:check</pre>
         The adapters and model target <code>host.docker.internal</code> for
         Docker Desktop. For an installed n8n process running directly on the
         laptop, replace that hostname with <code>127.0.0.1</code> in your local
-        copies. No cloud n8n import or live Gmail, Calendar, WhatsApp or
-        LinkedIn source workflow has been tested.
+        copies. The private Telegram transport is verified. Gmail profile-only
+        verification matched the approved account. Actual Google source reads
+        and WhatsApp/LinkedIn integrations remain unverified.
       </p>
       <ol>
         <li>
@@ -409,6 +424,26 @@ bun run schema:check</pre>
           State every missing live integration and teacher validation step.
         </li>
       </ol>
+    </section>
+    <section class="card">
+      <h2>Approved Google extension</h2>
+      <p>
+        Five inactive templates (11–15) add native read-only Gmail and selected
+        Calendar polling, authenticated normalization/storage, private owner
+        control, and local authored-span AI. Every provider page preserves its
+        checkpoint until all detail reads and child commits finish. Partial
+        coverage, deferred Retry-After and revoked grants are shown explicitly.
+        No Google records have been ingested yet.
+      </p>
+      <p>
+        Inspect <a href="workflows/11-google-gmail-readonly.json">Gmail</a>,
+        <a href="workflows/12-google-calendar-readonly.json">Calendar</a>,
+        <a href="workflows/13-google-normalize-store.json">storage child</a>,
+        <a href="workflows/14-google-telegram-private.json">owner route</a> and
+        <a href="workflows/15-google-extract-commitments.json">local AI</a>.
+        Credential references are placeholders; the private policy and
+        human-entered credentials are required.
+      </p>
     </section>
     <section class="card">
       <h2>Files to inspect line by line</h2>
