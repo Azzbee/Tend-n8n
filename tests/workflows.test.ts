@@ -15,13 +15,46 @@ interface Workflow {
 const load = (n: string): Workflow =>
   JSON.parse(readFileSync(`workflows/${n}`, "utf8")) as Workflow;
 describe("import and node boundaries", () => {
-  it("ships nine inactive exports with no credentials or external recipients", () => {
+  it("connects native LLM Chain to a local keyless Ollama model", () => {
+    const w = load("07-extract-commitments.json");
+    expect(
+      w.nodes.some((n) => n.type === "@n8n/n8n-nodes-langchain.chainLlm"),
+    ).toBe(true);
+    expect(
+      w.nodes.some((n) => n.type === "@n8n/n8n-nodes-langchain.lmChatOllama"),
+    ).toBe(true);
+    const local: unknown = JSON.parse(
+      readFileSync("fixtures/local-ollama.json", "utf8"),
+    );
+    expect(local).toEqual([
+      {
+        id: "TendReviewLocalOllama",
+        name: "Tend review local Ollama (no key)",
+        type: "ollamaApi",
+        data: { baseUrl: "http://host.docker.internal:11434" },
+      },
+    ]);
+  });
+  it("requires the third isolated retry attempt rather than any success", () => {
+    const n = load("09-retry-fixture.json").nodes.find(
+      (n) => n.name === "Record recovery only",
+    )!;
+    const run = (input: unknown) =>
+      vm.runInNewContext(`(function(){${String(n.parameters.jsCode)}})()`, {
+        $input: { first: () => ({ json: input }), all: () => [] },
+      });
+    expect(() => run({ recovered: true, attempt: 1 })).toThrow();
+    expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
+  });
+  it("ships nine inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
     expect(files).toHaveLength(9);
     for (const f of files) {
       const raw = readFileSync(`workflows/${f}`, "utf8");
       expect(load(f).active).toBe(false);
-      expect(raw).not.toContain('"credentials"');
+      if (f === "07-extract-commitments.json")
+        expect(raw).toContain('"ollamaApi"');
+      else expect(raw).not.toContain('"credentials"');
       expect(raw).not.toMatch(/n8n-nodes-base\.(gmail|telegram|whatsApp)/);
     }
   });
@@ -76,7 +109,7 @@ describe("import and node boundaries", () => {
       vm.runInNewContext(`(function(){${String(n.parameters.jsCode)}})()`, {
         $input: {
           first: () => ({
-            json: { message: { content: JSON.stringify(candidate) } },
+            json: { text: JSON.stringify(candidate) },
           }),
         },
         $: () => ({ first: () => ({ json: { record: fixtureRecords[0] } }) }),

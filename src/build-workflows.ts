@@ -26,6 +26,7 @@ type Node = {
   disabled?: boolean;
   notes?: string;
   notesInFlow?: boolean;
+  credentials?: Record<string, { id: string; name: string }>;
 };
 type Workflow = {
   id: string;
@@ -34,7 +35,7 @@ type Workflow = {
   nodes: Node[];
   connections: Record<
     string,
-    { main: { node: string; type: "main"; index: number }[][] }
+    Record<string, { node: string; type: string; index: number }[][]>
   >;
   settings: {
     executionOrder: "v1";
@@ -179,16 +180,30 @@ workflows.push(
     ),
   ]),
 );
-const validateModel = `const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];`;
-const ai = http(
-  "Local AI extraction (Ollama)",
-  "",
-  510,
-  "={{ JSON.stringify($json.request) }}",
-);
-ai.parameters.url = "http://host.docker.internal:11434/api/chat";
-ai.parameters.options = { timeout: 120000 };
-ai.retryOnFail = false;
+const validateModel = `const result=$input.first().json; const candidate=typeof result.text==='string'?JSON.parse(result.text):result; const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];`;
+const ai: Node = {
+  ...node(
+    "Local AI extraction (Basic LLM Chain)",
+    "chainLlm",
+    {
+      promptType: "define",
+      text: "={{ $json.request.messages[1].content }}",
+      messages: {
+        messageValues: [
+          {
+            type: "SystemMessagePromptTemplate",
+            message: "={{ $json.request.messages[0].content }}",
+          },
+        ],
+      },
+      batching: { batchSize: 1 },
+    },
+    760,
+    0,
+    1.9,
+  ),
+  type: "@n8n/n8n-nodes-langchain.chainLlm",
+};
 workflows.push(
   workflow(
     "TendReview07",
@@ -219,6 +234,35 @@ workflows.push(
     ],
   ),
 );
+const model: Node = {
+  ...node(
+    "Local Ollama Chat Model",
+    "lmChatOllama",
+    {
+      model: "qwen3:0.6b",
+      options: {
+        temperature: 0,
+        format: "json",
+        think: false,
+        numCtx: 2048,
+        numPredict: 512,
+      },
+    },
+    760,
+    260,
+  ),
+  type: "@n8n/n8n-nodes-langchain.lmChatOllama",
+  credentials: {
+    ollamaApi: {
+      id: "TendReviewLocalOllama",
+      name: "Tend review local Ollama (no key)",
+    },
+  },
+};
+workflows[6]!.nodes.push(model);
+workflows[6]!.connections[model.name] = {
+  ai_languageModel: [[{ node: ai.name, type: "ai_languageModel", index: 0 }]],
+};
 const input = code(
   "Fictional private command",
   `return [{json:${JSON.stringify(demoAuth)}}];`,
@@ -295,11 +339,22 @@ workflows.push(
 workflows.push(
   workflow("TendReview09", "Tend 09: Bounded Retry Fixture (synthetic 429)", [
     manual(),
-    http("Retry synthetic 429 then recover", "/api/transient", 260),
+    code(
+      "Begin isolated retry scenario",
+      "return [{json:{run_id:Date.now()+'-'+Math.random().toString(16).slice(2)}}];",
+      220,
+    ),
+    {
+      ...http("Retry synthetic 429 then recover", "/api/transient", 450),
+      parameters: {
+        url: "={{ 'http://host.docker.internal:18767/api/transient?run_id=' + encodeURIComponent($json.run_id) }}",
+        options: { timeout: 10000 },
+      },
+    },
     code(
       "Record recovery only",
-      "if($input.first().json.recovered!==true)throw new Error('recovery failed');return $input.all();",
-      540,
+      "const result=$input.first().json;if(result.recovered!==true||result.attempt!==3)throw new Error('three-attempt recovery failed');return $input.all();",
+      710,
     ),
   ]),
 );
@@ -319,6 +374,14 @@ for (let i = 0; i < workflows.length; i++)
     workflows[i],
   );
 await mkdir("fixtures", { recursive: true });
+await writeJson("fixtures/local-ollama.json", [
+  {
+    id: "TendReviewLocalOllama",
+    name: "Tend review local Ollama (no key)",
+    type: "ollamaApi",
+    data: { baseUrl: "http://host.docker.internal:11434" },
+  },
+]);
 await writeJson("fixtures/demo.json", {
   fictional: true,
   clock: "2026-10-13",

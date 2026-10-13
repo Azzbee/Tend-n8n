@@ -1,0 +1,8 @@
+[
+  {
+    "id": "TendReviewLocalOllama",
+    "name": "Tend review local Ollama (no key)",
+    "type": "ollamaApi",
+    "data": { "baseUrl": "http://host.docker.internal:11434" }
+  }
+]

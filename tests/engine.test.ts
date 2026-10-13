@@ -259,6 +259,22 @@ it("lists upcoming uncancelled meetings in today", () => {
   store.ingest({ ...fixtureRecords[3]!, cancelled: true });
   expect(store.command({ ...demoAuth, text: "/today" }).meetings).toEqual([]);
 });
+it("compares meeting instants rather than offset timestamp strings", () => {
+  store.ingest({
+    ...fixtureRecords[3]!,
+    occurred_at: "2026-10-20T01:00:00+02:00",
+  });
+  expect(store.command({ ...demoAuth, text: "/today" }).meetings).toHaveLength(
+    1,
+  );
+  store.ingest({
+    ...fixtureRecords[3]!,
+    occurred_at: "2026-10-12T23:30:00-02:00",
+  });
+  expect(store.command({ ...demoAuth, text: "/today" }).meetings).toHaveLength(
+    1,
+  );
+});
 describe("review boundaries", () => {
   it("rejects unresolved and multiple group participants", () => {
     expect(() =>

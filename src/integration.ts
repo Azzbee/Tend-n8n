@@ -8,6 +8,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { resolve } from "node:path";
 import { isRecord } from "./engine.ts";
 import { demoAuth, fixtureRecords } from "./fixtures.ts";
@@ -33,19 +34,42 @@ async function request(
   path: string,
   body?: unknown,
 ): Promise<Record<string, unknown>> {
-  const r = await fetch(
-    `http://127.0.0.1:18767${path}`,
-    body === undefined
-      ? {}
-      : {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-  );
-  const x: unknown = await r.json();
-  assert(r.ok && isRecord(x), `${path}: request failed`);
-  return x;
+  // Synchronous Docker CLI checks block this process's socket-close events.
+  // Use a fresh socket for each fixture call rather than an idle fetch pool.
+  return new Promise((resolveResult, reject) => {
+    const req = httpRequest(
+      `http://127.0.0.1:18767${path}`,
+      {
+        agent: false,
+        method: body === undefined ? "GET" : "POST",
+        headers: { "Content-Type": "application/json" },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () => {
+          try {
+            const value: unknown = JSON.parse(
+              Buffer.concat(chunks).toString("utf8"),
+            );
+            assert(
+              res.statusCode === 200 && isRecord(value),
+              `${path}: request failed`,
+            );
+            resolveResult(value);
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(10000, () =>
+      req.destroy(new Error(`${path}: request timed out`)),
+    );
+    req.end(body === undefined ? undefined : JSON.stringify(body));
+  });
 }
 function execution(wid: string): void {
   const output = command(["exec", name, "n8n", "execute", "--id", wid], wid);
@@ -91,6 +115,40 @@ try {
       }
     }
     assert(ready, "fixture API did not start");
+    const missing = await fetch(
+      "http://127.0.0.1:18767/workflows/01-missing.json",
+    );
+    assert(
+      missing.status === 400,
+      "missing static file did not return a controlled error",
+    );
+    await request("/api/status");
+    checks.push({
+      name: "Missing-file survival",
+      pass: true,
+      detail:
+        "Missing allowlisted artifact returns an error; server remains available",
+    });
+    for (const runId of ["stray-review", "another-review"]) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const result = await fetch(
+          `http://127.0.0.1:18767/api/transient?run_id=${runId}`,
+        );
+        const body: unknown = await result.json();
+        assert(
+          result.status === (attempt === 3 ? 200 : 429) &&
+            isRecord(body) &&
+            body.attempt === attempt,
+          "retry scenarios leaked shared state",
+        );
+      }
+    }
+    checks.push({
+      name: "Isolated synthetic retries",
+      pass: true,
+      detail:
+        "Two independent request scenarios each return 429,429,200 before workflow retry execution",
+    });
     command(
       [
         "run",
@@ -120,6 +178,16 @@ try {
       "container-start",
     );
     n8nVersion = command(["exec", name, "n8n", "--version"], "version").trim();
+    command(
+      [
+        "exec",
+        name,
+        "n8n",
+        "import:credentials",
+        "--input=/workspace/fixtures/local-ollama.json",
+      ],
+      "local-model-config",
+    );
     const imported = command(
       [
         "exec",
@@ -138,7 +206,8 @@ try {
     checks.push({
       name: "Clean n8n import",
       pass: true,
-      detail: "9inactive workflows; no publication or credentials",
+      detail:
+        "9 inactive workflows; local Ollama base-URL configuration only, no account secret/publication",
     });
     for (const wid of [
       "TendReview01",

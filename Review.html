@@ -371,12 +371,14 @@ bun run schema:check</pre>
       <h2>Rehearse n8n locally</h2>
       <p>
         Keep these template IDs in a new isolated instance. Import
-        <code>workflows</code> using n8n's separate-file import. The adapters
-        embed their sub-workflow, so no publication is needed. Run 01 through
-        05, then run 07 with its default g1 record. Change 07's Select fictional
-        record node to g2 and run 07 again to extract the outgoing promise. Then
-        run 08 and 09. Replay 01 and 07; the stored counts stay seven
-        interactions and two candidates (one per direction).
+        <code>workflows</code> using n8n's separate-file import. Import
+        <code>fixtures/local-ollama.json</code>
+        as the local Ollama connection first (no key or personal account). The
+        adapters embed their sub-workflow, so no publication is needed. Run 01
+        through 05, then run 07 with its default g1 record. Change 07's Select
+        fictional record node to g2 and run 07 again to extract the outgoing
+        promise. Then run 08 and 09. Replay 01 and 07; the stored counts stay
+        seven interactions and two candidates (one per direction).
       </p>
       <p>
         The adapters and model target <code>host.docker.internal</code> for
@@ -403,6 +405,10 @@ bun run schema:check</pre>
         These files touch authorization, stored data or simulated actions. They
         contain only fictional data. No payment code, real account access or
         action on a real contact is present.
+      </p>
+      <p>
+        Also inspect <code>fixtures/local-ollama.json</code>: the keyless local
+        model connection configuration used by the native AI nodes.
       </p>
       <table>
         <tr>
@@ -507,9 +513,9 @@ bun run schema:check</pre>
         WhatsApp account or LinkedIn grant. It does not read private chats.
       </p>
       <p>
-        AI extraction uses HTTP Request to Ollama and Code guards. It does not
-        use a native n8n AI Agent or LLM Chain node. Confirm whether this meets
-        the teacher's AI-node criterion.
+        AI extraction uses native Basic LLM Chain and Ollama Chat Model nodes,
+        followed by Code and API evidence guards. The local-model configuration
+        stores only a localhost base URL and has no API key.
       </p>
       <p class="small">
         AI assistance prepared the local code, fixtures and support material.

@@ -530,8 +530,10 @@ export class TendStore {
           (record) =>
             record.source === "calendar" &&
             !record.cancelled &&
-            record.occurred_at >= "2026-10-13T00:00:00Z" &&
-            record.occurred_at <= "2026-10-20T00:00:00Z",
+            Date.parse(record.occurred_at) >=
+              Date.parse("2026-10-13T00:00:00Z") &&
+            Date.parse(record.occurred_at) <=
+              Date.parse("2026-10-20T00:00:00Z"),
         ),
         commitments: this.commitments(owner).filter(
           (c) =>

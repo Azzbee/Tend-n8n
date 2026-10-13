@@ -17,7 +17,7 @@ import {
 mkdirSync(".scratch", { recursive: true });
 const store = new TendStore(process.env.TEND_DEMO_DB ?? ".scratch/demo.sqlite");
 store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
-let retryAttempts = 0;
+const retryAttempts = new Map<string, number>();
 const maxBody = 100000;
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -43,8 +43,9 @@ const server = createServer(async (req, res) => {
     )
       throw new Error("cross-origin request rejected");
     if (req.method === "GET" && url.pathname === "/") {
+      const content = readFileSync("Review.html", "utf8");
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(readFileSync("Review.html", "utf8"));
+      res.end(content);
       return;
     }
     if (
@@ -53,13 +54,14 @@ const server = createServer(async (req, res) => {
         url.pathname,
       )
     ) {
+      const content = readFileSync("." + url.pathname, "utf8");
       res.writeHead(200, {
         "Content-Type": url.pathname.endsWith(".json")
           ? "application/json"
           : "text/plain",
         "Cache-Control": "no-store",
       });
-      res.end(readFileSync("." + url.pathname, "utf8"));
+      res.end(content);
       return;
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/fixtures/")) {
@@ -115,19 +117,25 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/transient") {
-      retryAttempts++;
-      if (retryAttempts % 3 !== 0) {
+      const runId = url.searchParams.get("run_id") ?? "";
+      if (!/^[a-zA-Z0-9-]{1,100}$/.test(runId))
+        throw new Error("retry scenario requires a run ID");
+      if (!retryAttempts.has(runId) && retryAttempts.size >= 1000)
+        throw new Error("retry fixture run limit reached; restart demo server");
+      const attempt = Math.min((retryAttempts.get(runId) ?? 0) + 1, 3);
+      retryAttempts.set(runId, attempt);
+      if (attempt !== 3) {
         res.setHeader("Retry-After", "1");
         respond(429, {
           fictional: true,
-          attempt: retryAttempts,
+          attempt,
           reason: "synthetic429",
         });
         return;
       }
       respond(200, {
         fictional: true,
-        attempt: retryAttempts,
+        attempt,
         recovered: true,
       });
       return;

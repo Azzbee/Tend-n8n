@@ -12,13 +12,23 @@
       "parameters": {}
     },
     {
+      "id": "begin-isolated-retry-scenario",
+      "name": "Begin isolated retry scenario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "return [{json:{run_id:Date.now()+'-'+Math.random().toString(16).slice(2)}}];"
+      }
+    },
+    {
       "id": "retry-synthetic-429-then-recover",
       "name": "Retry synthetic 429 then recover",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [260, 0],
+      "position": [450, 0],
       "parameters": {
-        "url": "http://host.docker.internal:18767/api/transient",
+        "url": "={{ 'http://host.docker.internal:18767/api/transient?run_id=' + encodeURIComponent($json.run_id) }}",
         "options": { "timeout": 10000 }
       },
       "retryOnFail": true,
@@ -30,14 +40,25 @@
       "name": "Record recovery only",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [540, 0],
+      "position": [710, 0],
       "parameters": {
-        "jsCode": "if($input.first().json.recovered!==true)throw new Error('recovery failed');return $input.all();"
+        "jsCode": "const result=$input.first().json;if(result.recovered!==true||result.attempt!==3)throw new Error('three-attempt recovery failed');return $input.all();"
       }
     }
   ],
   "connections": {
     "Run fictional demo": {
+      "main": [
+        [
+          {
+            "node": "Begin isolated retry scenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Begin isolated retry scenario": {
       "main": [
         [
           {

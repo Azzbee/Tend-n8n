@@ -34,23 +34,24 @@
       "waitBetweenTries": 1000
     },
     {
-      "id": "local-ai-extraction-ollama-",
-      "name": "Local AI extraction (Ollama)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "id": "local-ai-extraction-basic-llm-chain-",
+      "name": "Local AI extraction (Basic LLM Chain)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
       "position": [760, 0],
       "parameters": {
-        "url": "http://host.docker.internal:11434/api/chat",
-        "method": "POST",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json.request) }}",
-        "options": { "timeout": 120000 }
-      },
-      "retryOnFail": false,
-      "maxTries": 3,
-      "waitBetweenTries": 1000
+        "promptType": "define",
+        "text": "={{ $json.request.messages[1].content }}",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "={{ $json.request.messages[0].content }}"
+            }
+          ]
+        },
+        "batching": { "batchSize": 1 }
+      }
     },
     {
       "id": "validate-quoted-model-result",
@@ -59,7 +60,7 @@
       "typeVersion": 2,
       "position": [1030, 0],
       "parameters": {
-        "jsCode": "const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];"
+        "jsCode": "const result=$input.first().json; const candidate=typeof result.text==='string'?JSON.parse(result.text):result; const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];"
       }
     },
     {
@@ -80,6 +81,29 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1000
+    },
+    {
+      "id": "local-ollama-chat-model",
+      "name": "Local Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [760, 260],
+      "parameters": {
+        "model": "qwen3:0.6b",
+        "options": {
+          "temperature": 0,
+          "format": "json",
+          "think": false,
+          "numCtx": 2048,
+          "numPredict": 512
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "TendReviewLocalOllama",
+          "name": "Tend review local Ollama (no key)"
+        }
+      }
     }
   ],
   "connections": {
@@ -95,10 +119,16 @@
     },
     "Prepare local AI request": {
       "main": [
-        [{ "node": "Local AI extraction (Ollama)", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Local AI extraction (Basic LLM Chain)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Local AI extraction (Ollama)": {
+    "Local AI extraction (Basic LLM Chain)": {
       "main": [
         [{ "node": "Validate quoted model result", "type": "main", "index": 0 }]
       ]
@@ -106,6 +136,17 @@
     "Validate quoted model result": {
       "main": [
         [{ "node": "Persist pending candidate", "type": "main", "index": 0 }]
+      ]
+    },
+    "Local Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Local AI extraction (Basic LLM Chain)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
       ]
     }
   },
