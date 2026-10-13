@@ -51,6 +51,7 @@ describe("evidence and persistence", () => {
       source: "linkedin" as const,
       account_id: "demo-linkedin",
       source_record_id: "forwarded",
+      ingestion_mode: "snapshot" as const,
     };
     store.ingest(a);
     store.ingest(b);
@@ -65,8 +66,15 @@ describe("evidence and persistence", () => {
   it("returns stale and snapshot coverage with a partial briefing", () => {
     for (const r of fixtureRecords) store.ingest(r);
     const response = store.command({ ...demoAuth, text: "/prep F17" });
-    expect(JSON.stringify(response)).toContain("stale");
-    expect(JSON.stringify(response)).toContain("snapshot");
+    expect(response.coverage).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "whatsapp_personal",
+          status: "stale",
+        }),
+        expect.objectContaining({ source: "linkedin", mode: "snapshot" }),
+      ]),
+    );
     expect(JSON.stringify(response)).not.toContain("No recent contact");
   });
   it("rejects another owner or group chat before data retrieval", () => {
@@ -91,10 +99,26 @@ describe("evidence and persistence", () => {
     expect(store.sourceStatus("demo-owner")).toEqual(before);
   });
   it("updates a cancelled calendar event without closing a promise", () => {
+    const message = fixtureRecords[0]!;
+    store.ingest(message);
+    const commitment = store.addCandidate(message, {
+      quote: message.body_text,
+      action: "send the demo",
+      suggested_due: "2026-10-15",
+    });
+    store.command({
+      ...demoAuth,
+      text: `/confirm ${commitment.commitment_id} 2026-10-15`,
+    });
     store.ingest(fixtureRecords[3]!);
     store.ingest({ ...fixtureRecords[3]!, cancelled: true });
     const r = store.command({ ...demoAuth, text: "/prep F17" });
     expect(JSON.stringify(r)).not.toContain("2026-10-16T10:00:00Z");
+    expect(
+      store
+        .commitments("demo-owner")
+        .find((c) => c.commitment_id === commitment.commitment_id)?.status,
+    ).toBe("confirmed");
   });
 });
 describe("model output boundary and explicit state", () => {
@@ -227,4 +251,89 @@ it("invalidates commitments when evidence direction changes", () => {
     participant_identities: ["mira@example.invalid"],
   });
   expect(store.commitments("demo-owner")[0]?.status).toBe("invalidated");
+});
+it("lists upcoming uncancelled meetings in today", () => {
+  store.ingest(fixtureRecords[3]!);
+  const r = store.command({ ...demoAuth, text: "/today" });
+  expect(r.meetings).toHaveLength(1);
+  store.ingest({ ...fixtureRecords[3]!, cancelled: true });
+  expect(store.command({ ...demoAuth, text: "/today" }).meetings).toEqual([]);
+});
+describe("review boundaries", () => {
+  it("rejects unresolved and multiple group participants", () => {
+    expect(() =>
+      normalizeRecord(
+        {
+          ...fixtureRecords[1]!,
+          participant_identities: [
+            "mira@example.invalid",
+            "stranger@example.invalid",
+          ],
+        },
+        fixtureIdentities,
+      ),
+    ).toThrow();
+    expect(() =>
+      normalizeRecord(
+        {
+          ...fixtureRecords[0]!,
+          participant_identities: ["stranger@example.invalid"],
+        },
+        fixtureIdentities,
+      ),
+    ).toThrow();
+  });
+  it("redacts revoked source evidence from all returned candidates", () => {
+    const r = fixtureRecords[0]!;
+    store.ingest(r);
+    store.addCandidate(r, {
+      quote: r.body_text,
+      action: "send the demo",
+      suggested_due: "2026-10-15",
+    });
+    store.revokeSource("demo-owner", "gmail");
+    expect(JSON.stringify(store.command(demoAuth))).not.toContain(
+      "I will send the demo",
+    );
+    expect(store.commitments("demo-owner")[0]?.quote).toBe("");
+  });
+  it("retains terminal owner state while invalidating its evidence", () => {
+    const r = fixtureRecords[0]!;
+    store.ingest(r);
+    const c = store.addCandidate(r, {
+      quote: r.body_text,
+      action: "send the demo",
+      suggested_due: "2026-10-15",
+    });
+    store.command({
+      ...demoAuth,
+      text: `/confirm ${c.commitment_id} 2026-10-15`,
+    });
+    store.command({ ...demoAuth, text: `/done ${c.commitment_id}` });
+    store.ingest({ ...r, body_text: "The source was edited." });
+    expect(store.commitments("demo-owner")[0]?.status).toBe("done");
+  });
+  it("rejects another account/mode and quoted reply attribution", () => {
+    expect(() =>
+      store.ingest({ ...fixtureRecords[0]!, account_id: "unregistered" }),
+    ).toThrow();
+    expect(() =>
+      validateCandidate(
+        {
+          ...fixtureRecords[0]!,
+          body_text: "Earlier Mira said: I will send the demo by 2026-10-15.",
+        },
+        {
+          quote: fixtureRecords[0]!.body_text,
+          action: "send the demo",
+          suggested_due: "2026-10-15",
+        },
+      ),
+    ).toThrow();
+  });
+  it("rejects extra state-command arguments", () => {
+    expect(() =>
+      store.command({ ...demoAuth, text: "/status surprise" }),
+    ).toThrow("arguments");
+  });
 });

@@ -48,7 +48,7 @@
       "last_success": "2026-10-13T08:00:00Z",
       "status": "fixture",
       "coverage_start": "2026-10-01T00:00:00Z",
-      "coverage_end": "2026-10-13T08:00:00Z",
+      "coverage_end": "2026-10-20T00:00:00Z",
       "cursor": null
     },
     {
@@ -58,8 +58,8 @@
       "mode": "fixture",
       "last_success": "2026-09-01T00:00:00Z",
       "status": "stale",
-      "coverage_start": "2026-10-01T00:00:00Z",
-      "coverage_end": "2026-10-13T08:00:00Z",
+      "coverage_start": "2026-08-01T00:00:00Z",
+      "coverage_end": "2026-09-01T00:00:00Z",
       "cursor": null
     },
     {
@@ -134,13 +134,13 @@
       "direction": "received",
       "actor_identity": "+00000000017",
       "participant_identities": [],
-      "occurred_at": "2026-10-13T08:00:00Z",
+      "occurred_at": "2026-08-31T08:00:00Z",
       "observed_at": "2026-10-13T08:00:00Z",
       "body_text": "Can we discuss the demo next week?",
       "evidence_reference": "fixture://whatsapp_personal/wp1",
       "ingestion_mode": "fixture",
-      "coverage_start": "2026-10-01T00:00:00Z",
-      "coverage_end": "2026-10-13T08:00:00Z",
+      "coverage_start": "2026-08-01T00:00:00Z",
+      "coverage_end": "2026-09-01T00:00:00Z",
       "cancelled": false
     },
     {
@@ -159,7 +159,7 @@
       "evidence_reference": "fixture://calendar/cal1",
       "ingestion_mode": "fixture",
       "coverage_start": "2026-10-01T00:00:00Z",
-      "coverage_end": "2026-10-13T08:00:00Z",
+      "coverage_end": "2026-10-20T00:00:00Z",
       "cancelled": false
     },
     {

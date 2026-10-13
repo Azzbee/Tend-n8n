@@ -353,7 +353,8 @@ cd "/Users/adamzer/Documents/University/Year 3 (2026-2027)/No code software deve
 bun install
 ollama pull qwen3:0.6b
 bun run verify
-bun run integration</pre>
+bun run integration
+bun run schema:check</pre>
       <p class="small">
         The pinned n8n image is recorded in <code>src/integration.ts</code> and
         the result JSON. Port 18767 must be free. Logs live in the ignored
@@ -373,7 +374,7 @@ bun run integration</pre>
         <code>workflows</code> using n8n's separate-file import. The adapters
         embed their sub-workflow, so no publication is needed. Run 01 through
         05, then 07, 08 and 09. Replay 01 and 07; the stored counts stay seven
-        interactions and one candidate.
+        interactions and two candidates (one per direction).
       </p>
       <p>
         The adapters and model target <code>host.docker.internal</code> for
@@ -393,6 +394,107 @@ bun run integration</pre>
         <li>Show group-chat rejection and bounded synthetic429 recovery.</li>
         <li>State every missing live integration and public-link decision.</li>
       </ol>
+    </section>
+    <section class="card">
+      <h2>Files to inspect line by line</h2>
+      <p>
+        These files touch authorization, stored data or simulated actions. They
+        contain only fictional data. No payment code, real account access or
+        action on a real contact is present.
+      </p>
+      <table>
+        <tr>
+          <th>File</th>
+          <th>What it controls</th>
+        </tr>
+        <tr>
+          <td><a href="src/engine.ts">src/engine.ts</a></td>
+          <td>
+            Owner checks, identities, SQLite writes, evidence validity, explicit
+            confirm/done/cancel and private draft previews.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="src/server.ts">src/server.ts</a></td>
+          <td>
+            Local host/origin and JSON guards; endpoints that ingest records,
+            persist candidates or invoke owner commands.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="src/fixtures.ts">src/fixtures.ts</a></td>
+          <td>
+            Fictional owner/user/chat identifiers, registered source accounts
+            and identity mappings. These are not production credentials.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="src/build-workflows.ts">src/build-workflows.ts</a></td>
+          <td>
+            Generates the scope/owner/model guards and local HTTP calls in all
+            nine exports.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="schema/001-tend.sql">schema/001-tend.sql</a></td>
+          <td>
+            Proposed PostgreSQL ownership, relationships, uniqueness and state
+            constraints. Current application storage is SQLite.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="src/integration.ts">src/integration.ts</a><br /><a
+              href="src/check-schema.ts"
+              >src/check-schema.ts</a
+            >
+          </td>
+          <td>
+            Create isolated test databases/containers, run fictional state
+            changes, record evidence, and stop only their own test processes.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="workflows/01-gmail.json">01 Gmail</a>,
+            <a href="workflows/02-calendar.json">02 Calendar</a>,
+            <a href="workflows/03-whatsapp-personal.json"
+              >03 Personal WhatsApp</a
+            >,
+            <a href="workflows/04-whatsapp-business.json"
+              >04 Business WhatsApp</a
+            >, <a href="workflows/05-linkedin.json">05 LinkedIn</a>
+          </td>
+          <td>
+            Five fictional reads and embedded normalization/storage calls. All
+            inactive.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="workflows/06-normalize-store.json">06 Normalize/store</a>,
+            <a href="workflows/07-extract-commitments.json">07 Local AI</a>,
+            <a href="workflows/08-assistant.json">08 Assistant</a>,
+            <a href="workflows/09-retry-fixture.json">09 Retry</a>
+          </td>
+          <td>
+            Persistence scope guard, model-result guard, owner/private-chat
+            guard and simulated retry traffic. All inactive.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="tests/engine.test.ts">tests/engine.test.ts</a><br /><a
+              href="tests/workflows.test.ts"
+              >tests/workflows.test.ts</a
+            >
+          </td>
+          <td>
+            Exercise authorization and stored-state boundaries using fictional
+            in-memory data and generated node code.
+          </td>
+        </tr>
+      </table>
     </section>
     <section class="card">
       <h2>Before teacher validation</h2>

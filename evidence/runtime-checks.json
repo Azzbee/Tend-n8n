@@ -1,5 +1,23 @@
 {
-  "checked_at": "2026-10-13T18:37:37.397Z",
+  "checked_at": "2026-10-13T19:14:27.552Z",
+  "workflow_sha256": {
+    "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
+    "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
+    "03-whatsapp-personal.json": "b5585757adbd2ae47af5b31ed2754e2ef1fb97ae0a5a51ffc50b4f0348875883",
+    "04-whatsapp-business.json": "5e44ec54dd2794e3764315b07896b7d9cf2ea5aef9add2d03c1becf01c77f387",
+    "05-linkedin.json": "0624adcd06f037128467a22f2555acab0fb688c1e4bf17dbb2326d3b177ee2a1",
+    "06-normalize-store.json": "b6acf483d965ebedd759c4f2d1378b48e477f0ddf163411f8ba0b0f340016985",
+    "07-extract-commitments.json": "d2ac649493872f01e35c4bcc8ea9e8a104cd8ba1de54673ea2e111caecf11a07",
+    "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
+    "09-retry-fixture.json": "3ec62f7865a7331951e7d9250aced4a5ce4cf847d9e441ac0ae50df744335a60"
+  },
+  "source_sha256": {
+    "engine.ts": "97fb31a32c773a902aa0680b1f45c63f23cbbddcbef060498b52228cf4839087",
+    "server.ts": "ebd94a348f27aade5221b2a6e18ecbcad2ec5dee3a64ddaf606884b0dd0363d6",
+    "build-workflows.ts": "ce4cf8ec6f1462d3b740ed6e97347591cdf0c159425b5c8494f1769f8d37b12a",
+    "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
+    "integration.ts": "db9bc5b4696d875cf0b94d9deb661534fd7ac7202d97352facacd783db2ff58a"
+  },
   "runtime": {
     "node": "v24.5.0",
     "n8n": "2.43.4",
@@ -55,6 +73,11 @@
       "detail": "Actual CLI execution status success"
     },
     {
+      "name": "n8n TendReview07OutgoingCheck",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
       "name": "n8n TendReview01",
       "pass": true,
       "detail": "Actual CLI execution status success"
@@ -69,7 +92,7 @@
       "pass": true,
       "detail": {
         "interactions": 7,
-        "commitments": 1
+        "commitments": 2
       }
     },
     {
@@ -82,7 +105,7 @@
     "All five live source connectors",
     "Real Telegram trigger",
     "Public teacher-review link and teacher scope validation",
-    "Postgres schema execution and production migration",
+    "Postgres application adapter and production data migration",
     "Actual provider authorization/429/backoff/deletions/history coverage"
   ]
 }

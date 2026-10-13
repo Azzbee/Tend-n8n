@@ -1,12 +1,22 @@
 {
-  "checked_at": "2026-10-13T18:42:02.657389+00:00",
-  "data": "No user data; isolated PostgreSQL16 container without external network",
-  "command": "psql -U postgres -v ON_ERROR_STOP=1 < schema/001-tend.sql",
+  "checked_at": "2026-10-13T19:17:49.872Z",
   "pass": true,
+  "runtime": "PostgreSQL 16.14 (Debian 16.14-1.pgdg12+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "network": "isolated container, no published port",
+  "schema_sha256": "3497b41d28395df95b8f0699b2b1fdae5d58a9f87087d1e324b15b14cd12aa9a",
+  "command": "psql -U postgres -v ON_ERROR_STOP=1 < schema/001-tend.sql",
   "output": [
     "BEGIN",
-    "8 CREATE TABLE statements succeeded",
-    "2 CREATE INDEX statements succeeded",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE TABLE",
+    "CREATE INDEX",
+    "CREATE INDEX",
     "COMMIT"
   ],
   "tables": [
@@ -19,5 +29,5 @@
     "run_outcomes",
     "source_accounts"
   ],
-  "scope": "Schema creation tested. Application persistence currently uses SQLite; no production migration tested."
+  "scope": "Schema creation executed. Application demo uses SQLite; no production adapter or migration tested."
 }

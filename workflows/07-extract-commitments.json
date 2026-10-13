@@ -12,13 +12,21 @@
       "parameters": {}
     },
     {
+      "id": "select-fictional-record",
+      "name": "Select fictional record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 0],
+      "parameters": { "jsCode": "return [{json:{source_record_id:\"g1\"}}];" }
+    },
+    {
       "id": "prepare-local-ai-request",
       "name": "Prepare local AI request",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [250, 0],
+      "position": [500, 0],
       "parameters": {
-        "url": "http://host.docker.internal:18767/api/model-input",
+        "url": "={{ 'http://host.docker.internal:18767/api/model-input?record_id=' + encodeURIComponent($json.source_record_id) }}",
         "options": { "timeout": 10000 }
       },
       "retryOnFail": true,
@@ -30,7 +38,7 @@
       "name": "Local AI extraction (Ollama)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [510, 0],
+      "position": [760, 0],
       "parameters": {
         "url": "http://host.docker.internal:11434/api/chat",
         "method": "POST",
@@ -49,9 +57,9 @@
       "name": "Validate quoted model result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [790, 0],
+      "position": [1030, 0],
       "parameters": {
-        "jsCode": "const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||!/\\bI (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];"
+        "jsCode": "const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];"
       }
     },
     {
@@ -59,7 +67,7 @@
       "name": "Persist pending candidate",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1070, 0],
+      "position": [1300, 0],
       "parameters": {
         "url": "http://host.docker.internal:18767/api/candidates",
         "method": "POST",
@@ -76,6 +84,11 @@
   ],
   "connections": {
     "Run fictional demo": {
+      "main": [
+        [{ "node": "Select fictional record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Select fictional record": {
       "main": [
         [{ "node": "Prepare local AI request", "type": "main", "index": 0 }]
       ]

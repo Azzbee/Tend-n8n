@@ -51,8 +51,16 @@ export const fixtureSources: SourceState[] = [
       ? "2026-09-01T00:00:00Z"
       : "2026-10-13T08:00:00Z",
   status: source === "whatsapp_personal" ? "stale" : "fixture",
-  coverage_start: "2026-10-01T00:00:00Z",
-  coverage_end: "2026-10-13T08:00:00Z",
+  coverage_start:
+    source === "whatsapp_personal"
+      ? "2026-08-01T00:00:00Z"
+      : "2026-10-01T00:00:00Z",
+  coverage_end:
+    source === "calendar"
+      ? "2026-10-20T00:00:00Z"
+      : source === "whatsapp_personal"
+        ? "2026-09-01T00:00:00Z"
+        : "2026-10-13T08:00:00Z",
   cursor: null,
 }));
 const mk = (
@@ -76,8 +84,16 @@ const mk = (
   body_text: body,
   evidence_reference: `fixture://${source}/${id}`,
   ingestion_mode: source === "linkedin" ? "snapshot" : "fixture",
-  coverage_start: "2026-10-01T00:00:00Z",
-  coverage_end: "2026-10-13T08:00:00Z",
+  coverage_start:
+    source === "whatsapp_personal"
+      ? "2026-08-01T00:00:00Z"
+      : "2026-10-01T00:00:00Z",
+  coverage_end:
+    source === "calendar"
+      ? "2026-10-20T00:00:00Z"
+      : source === "whatsapp_personal"
+        ? "2026-09-01T00:00:00Z"
+        : "2026-10-13T08:00:00Z",
   cancelled: false,
 });
 export const fixtureRecords: RawRecord[] = [
@@ -102,6 +118,7 @@ export const fixtureRecords: RawRecord[] = [
     "wp1",
     "Can we discuss the demo next week?",
     "+00000000017",
+    "2026-08-31T08:00:00Z",
   ),
   mk(
     "calendar",

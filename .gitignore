@@ -5,3 +5,5 @@ node_modules/
 .env*
 !.env.example
 evidence/*.log
+
+.DS_Store

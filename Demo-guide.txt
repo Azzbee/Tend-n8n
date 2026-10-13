@@ -1,7 +1,7 @@
 Tend review demo: six minutes
 
 Before class
-Run bun install, bun run build, then bun run verify. Docker Desktop and Ollama must be running. Ensure qwen3:0.6b is installed. Run bun run integration for the actual clean import/execution test; it creates its own temporary instance and stops it afterward. Check evidence/runtime-checks.json. If it fails, use the failed log, repair the cause and rerun. Never claim an unrun check passed.
+Run bun install, bun run build, then bun run verify. Docker Desktop and Ollama must be running. Ensure qwen3:0.6b is installed. Run bun run schema:check for the reproducible isolated SQL check. Run bun run integration for the actual clean import/execution test; it creates its own temporary instance and stops it afterward. Check evidence/runtime-checks.json. If it fails, use the failed log, repair the cause and rerun. Never claim an unrun check passed.
 For live rehearsal run bun run start, then open http://127.0.0.1:18767. The API is fictional-only. Use the instructions below to import into an isolated local n8n instance. Read Review.html for exact commands. Do not import these fixed IDs into an existing unrelated n8n instance.
 
 0:00-1:15: problem and architecture
@@ -11,7 +11,7 @@ For live rehearsal run bun run start, then open http://127.0.0.1:18767. The API 
 Show one adapter: manual fixture trigger, HTTP read, Execute Sub-workflow. Show Normalize and Store: Code scope guard, HTTP transaction. Execute the five adapter workflows. Show seven persisted records. Replay Gmail; count stays seven. Source IDs define uniqueness. The forwarded LinkedIn copy remains separate evidence.
 
 2:15-3:05: real local AI extraction
-Execute TendReview07. Show its request, quote validation and pending candidate. The model is not allowed to pick recipients, execute tools or close tasks. Show evidence from g1. State that prompt behavior beyond the tested fixture is not proven; deterministic guards reject fabricated quotes/dates/extra fields.
+Execute TendReview07. Show its request, quote validation and pending candidate. The model is not allowed to pick recipients, execute tools or close tasks. Show evidence from g1 and g2. The selector chooses incoming versus outgoing evidence; both remain pending until confirmed. State that prompt behavior beyond the tested fixture is not proven; deterministic guards reject fabricated quotes/dates/extra fields.
 
 3:05-4:15: private briefing and owner commands
 Execute TendReview08 for /prep F17. Show Gmail, meeting and WhatsApp/LinkedIn references plus stale/snapshot coverage. Try “Riley Park” through the local command API: ambiguity requires an ID. Confirm the pending candidate explicitly with a date, view a draft preview and mark done. Replay /done; state does not change again. The demo sends nothing to a contact.

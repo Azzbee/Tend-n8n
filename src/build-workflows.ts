@@ -179,7 +179,7 @@ workflows.push(
     ),
   ]),
 );
-const validateModel = `const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||!/\\bI (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];`;
+const validateModel = `const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||candidate.quote!==record.body_text.trim()||record.body_text.includes('\\n')||!/^I (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];`;
 const ai = http(
   "Local AI extraction (Ollama)",
   "",
@@ -195,13 +195,25 @@ workflows.push(
     "Tend 07: Extract Commitments (local AI, pending only)",
     [
       manual(),
-      http("Prepare local AI request", "/api/model-input", 250),
-      ai,
-      code("Validate quoted model result", validateModel, 790),
+      code(
+        "Select fictional record",
+        'return [{json:{source_record_id:"g1"}}];',
+        250,
+      ),
+      {
+        ...http("Prepare local AI request", "/api/model-input", 500),
+        parameters: {
+          ...http("Prepare local AI request", "/api/model-input", 500)
+            .parameters,
+          url: "={{ 'http://host.docker.internal:18767/api/model-input?record_id=' + encodeURIComponent($json.source_record_id) }}",
+        },
+      },
+      { ...ai, position: [760, 0] },
+      code("Validate quoted model result", validateModel, 1030),
       http(
         "Persist pending candidate",
         "/api/candidates",
-        1070,
+        1300,
         "={{ JSON.stringify($json) }}",
       ),
     ],

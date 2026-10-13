@@ -1,11 +1,14 @@
 # Tend n8n: project map for agents
 
-One line on what this repo is and who uses it: fill this in.
+Inactive n8n workflows and a fictional local API for Adam's No-code review. No real account connector is configured.
 The global rules in `~/.codex/AGENTS.md` still apply; this file adds only what is specific to this repo.
 
 ## Layout
 
-- No package manifest detected at the top two levels.
+- `src/`: typed fixture API, evidence/state engine, export builder and runnable checks.
+- `workflows/`: nine inactive generated exports.
+- `fixtures/`, `schema/`, `evidence/`: fictional inputs, proposed PostgreSQL schema and observed check records.
+- `Review.html`, `Specification.txt`, `Demo-guide.txt`: user review and rehearsal material.
 
 ## Commands
 

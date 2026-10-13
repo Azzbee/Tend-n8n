@@ -1,6 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync, openSync, closeSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  writeFileSync,
+  openSync,
+  closeSync,
+  readFileSync,
+  readdirSync,
+} from "node:fs";
+import { randomUUID, createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { isRecord } from "./engine.ts";
 import { demoAuth, fixtureRecords } from "./fixtures.ts";
@@ -10,6 +17,7 @@ const id = randomUUID().slice(0, 8),
   name = `tend-review-check-${id}`,
   dir = resolve(`.scratch/check-${id}`);
 mkdirSync(dir, { recursive: true });
+let n8nVersion: string;
 const checks: { name: string; pass: true; detail: unknown }[] = [];
 function assert(ok: unknown, msg: string): asserts ok {
   if (!ok) throw new Error(msg);
@@ -111,6 +119,7 @@ try {
       ],
       "container-start",
     );
+    n8nVersion = command(["exec", name, "n8n", "--version"], "version").trim();
     const imported = command(
       [
         "exec",
@@ -142,11 +151,37 @@ try {
       "TendReview09",
     ])
       execution(wid);
+    const outgoing = JSON.parse(
+      readFileSync("workflows/07-extract-commitments.json", "utf8"),
+    ) as {
+      id: string;
+      name: string;
+      nodes: { name: string; parameters: Record<string, unknown> }[];
+    };
+    outgoing.id = "TendReview07OutgoingCheck";
+    outgoing.name += " (outgoing verification)";
+    const selector = outgoing.nodes.find(
+      (n) => n.name === "Select fictional record",
+    );
+    assert(selector, "missing extraction selector");
+    selector.parameters.jsCode = 'return [{json:{source_record_id:"g2"}}];';
+    writeFileSync(`${dir}/outgoing.json`, JSON.stringify(outgoing));
+    command(
+      [
+        "exec",
+        name,
+        "n8n",
+        "import:workflow",
+        "--input=/scratch/outgoing.json",
+      ],
+      "import-outgoing",
+    );
+    execution(outgoing.id);
     const first = await request("/api/status");
     assert(
       isRecord(first.counts) &&
         first.counts.interactions === 7 &&
-        first.counts.commitments === 1,
+        first.counts.commitments === 2,
       "unexpected initial state",
     );
     execution("TendReview01");
@@ -160,6 +195,19 @@ try {
     assert(
       Array.isArray(first.commitments) && isRecord(first.commitments[0]),
       "missing candidate",
+    );
+    assert(
+      first.commitments.every((c) => isRecord(c) && c.status === "pending"),
+      "model activated an obligation",
+    );
+    assert(
+      first.commitments.some(
+        (c) => isRecord(c) && c.direction === "owed_by_me",
+      ) &&
+        first.commitments.some(
+          (c) => isRecord(c) && c.direction === "owed_to_me",
+        ),
+      "both directions not demonstrated",
     );
     const candidate = first.commitments[0];
     assert(
@@ -176,13 +224,45 @@ try {
     ]) {
       const r = await request("/api/command", { ...demoAuth, text });
       assert(r.outbound_sent === false, "outbound action unexpectedly present");
+      if (text.startsWith("/confirm"))
+        assert(
+          r.status === "confirmed" && r.due_date === "2026-10-15",
+          "confirm did not persist",
+        );
+      if (text.startsWith("/draft"))
+        assert(
+          typeof r.preview === "string" && r.preview.length > 0,
+          "missing preview",
+        );
+      if (text.startsWith("/done"))
+        assert(r.status === "done", "done did not persist");
     }
     const denied = await fetch("http://127.0.0.1:18767/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...demoAuth, chat_type: "group" }),
     });
-    assert(denied.status === 400, "group request was accepted");
+    const deniedBody: unknown = await denied.json();
+    assert(
+      denied.status === 400 &&
+        isRecord(deniedBody) &&
+        deniedBody.error === "unauthorized",
+      "group request did not hit owner boundary",
+    );
+    for (const headers of [
+      { "Content-Type": "text/plain" },
+      {
+        "Content-Type": "application/json",
+        Origin: "https://untrusted.example.invalid",
+      },
+    ]) {
+      const r = await fetch("http://127.0.0.1:18767/api/command", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(demoAuth),
+      });
+      assert(r.status === 400, "browser-origin/content-type guard bypassed");
+    }
     const invalid = await fetch("http://127.0.0.1:18767/api/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -195,8 +275,17 @@ try {
     assert(invalid.status === 400, "invalid record accepted");
     const brief = await request("/api/command", demoAuth);
     assert(
-      JSON.stringify(brief).includes("stale") &&
-        JSON.stringify(brief).includes("snapshot"),
+      Array.isArray(brief.coverage) &&
+        brief.coverage.some(
+          (s) =>
+            isRecord(s) &&
+            s.source === "whatsapp_personal" &&
+            s.status === "stale",
+        ) &&
+        brief.coverage.some(
+          (s) =>
+            isRecord(s) && s.source === "linkedin" && s.mode === "snapshot",
+        ),
       "missing partial-coverage warning",
     );
     checks.push({
@@ -216,9 +305,33 @@ try {
   }
   const report = {
     checked_at: new Date().toISOString(),
+    workflow_sha256: Object.fromEntries(
+      readdirSync("workflows")
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => [
+          f,
+          createHash("sha256")
+            .update(readFileSync(`workflows/${f}`))
+            .digest("hex"),
+        ]),
+    ),
+    source_sha256: Object.fromEntries(
+      [
+        "engine.ts",
+        "server.ts",
+        "build-workflows.ts",
+        "fixtures.ts",
+        "integration.ts",
+      ].map((f) => [
+        f,
+        createHash("sha256")
+          .update(readFileSync(`src/${f}`))
+          .digest("hex"),
+      ]),
+    ),
     runtime: {
       node: process.version,
-      n8n: "2.43.4",
+      n8n: n8nVersion,
       image,
       ollama_model: "qwen3:0.6b",
       storage: "fresh local SQLite",

@@ -67,6 +67,7 @@ export interface Commitment extends Candidate {
   direction: "owed_by_me" | "owed_to_me";
   status: string;
   due_date: string | null;
+  evidence_valid: boolean;
 }
 export interface AuthCommand {
   owner_id: string;
@@ -156,13 +157,17 @@ export function normalizeRecord(
   const own = identities.filter((i) => i.owner_id === raw.owner_id);
   const actor = own.find((i) => i.identity === raw.actor_identity);
   if (!actor) throw new Error("unresolved identity");
-  let contacts =
-    actor.contact_id === "OWNER"
-      ? raw.participant_identities
-          .map((id) => own.find((i) => i.identity === id)?.contact_id)
-          .filter((v): v is string => !!v && v !== "OWNER")
-      : [actor.contact_id];
-  contacts = [...new Set(contacts)];
+  const participants = raw.participant_identities.map((id) =>
+    own.find((i) => i.identity === id),
+  );
+  if (participants.some((i) => !i)) throw new Error("unresolved participant");
+  const contacts = [
+    ...new Set(
+      [actor, ...participants.filter((i): i is Identity => !!i)]
+        .map((i) => i.contact_id)
+        .filter((id) => id !== "OWNER"),
+    ),
+  ];
   if (contacts.length !== 1) throw new Error("unresolved/group attribution");
   if (
     (raw.direction === "sent") !== (actor.contact_id === "OWNER") &&
@@ -215,7 +220,11 @@ export function validateCandidate(raw: RawRecord, input: unknown): Candidate {
     !input.quote.toLowerCase().includes(input.action.toLowerCase())
   )
     throw new Error("fabricated quote/action");
-  if (!/\bI (?:will|promise to)\b/i.test(input.quote))
+  if (input.quote !== raw.body_text.trim() || raw.body_text.includes("\n"))
+    throw new Error(
+      "single direct utterance required; quoted reply needs review",
+    );
+  if (!/^I (?:will|promise to)\b/i.test(input.quote))
     throw new Error("not explicit promise");
   if (raw.kind !== "message") throw new Error("not conversation");
   if (
@@ -292,11 +301,29 @@ export class TendStore {
     };
   }
   ingest(raw: RawRecord): NormalizedRecord {
+    this.db.exec("SAVEPOINT single_ingest");
+    try {
+      const result = this.writeRecord(raw);
+      this.db.exec("RELEASE single_ingest");
+      return result;
+    } catch (e) {
+      this.db.exec("ROLLBACK TO single_ingest");
+      this.db.exec("RELEASE single_ingest");
+      throw e;
+    }
+  }
+  private writeRecord(raw: RawRecord): NormalizedRecord {
     const r = normalizeRecord(raw, this.identities(raw.owner_id));
     const state = this.sourceStatus(raw.owner_id).find(
       (s) => s.source === raw.source,
     );
-    if (state?.status === "revoked") throw new Error("source revoked");
+    if (
+      !state ||
+      state.account_id !== raw.account_id ||
+      state.mode !== raw.ingestion_mode
+    )
+      throw new Error("unregistered account/mode");
+    if (state.status === "revoked") throw new Error("source revoked");
     const previous = this.interactions(raw.owner_id).find(
       (record) => record.record_key === r.record_key,
     );
@@ -304,7 +331,13 @@ export class TendStore {
       for (const candidate of this.commitments(raw.owner_id).filter(
         (candidate) => candidate.record_key === r.record_key,
       ))
-        this.put({ ...candidate, status: "invalidated" });
+        this.put({
+          ...candidate,
+          status: ["done", "cancelled"].includes(candidate.status)
+            ? candidate.status
+            : "invalidated",
+          evidence_valid: false,
+        });
     }
     this.db
       .prepare(
@@ -323,7 +356,7 @@ export class TendStore {
   ingestBatch(records: RawRecord[], cursor: string): NormalizedRecord[] {
     this.db.exec("BEGIN");
     try {
-      const out = records.map((r) => this.ingest(r));
+      const out = records.map((r) => this.writeRecord(r));
       for (const source of new Set(out.map((r) => r.source))) {
         const owner = out.find((r) => r.source === source)!.owner_id;
         const state = this.sourceStatus(owner).find((s) => s.source === source);
@@ -379,7 +412,14 @@ export class TendStore {
         "SELECT data FROM commitments WHERE commitment_id=? AND owner_id=?",
       )
       .get(id, raw.owner_id);
-    if (existing) return JSON.parse(String(existing.data)) as Commitment;
+    if (existing) {
+      const current = JSON.parse(String(existing.data)) as Commitment;
+      if (current.evidence_valid === false || current.status === "invalidated")
+        throw new Error(
+          "invalidated candidate requires external owner review; automatic reinstatement unsupported",
+        );
+      return current;
+    }
     const c: Commitment = {
       ...validated,
       commitment_id: id,
@@ -390,6 +430,7 @@ export class TendStore {
       direction: raw.direction === "sent" ? "owed_by_me" : "owed_to_me",
       status: "pending",
       due_date: null,
+      evidence_valid: true,
     };
     this.db
       .prepare("INSERT INTO commitments VALUES(?,?,?,?)")
@@ -416,7 +457,17 @@ export class TendStore {
         .prepare("UPDATE sources SET data=? WHERE owner_id=? AND source=?")
         .run(JSON.stringify({ ...state, status: "revoked" }), owner, source);
     for (const c of this.commitments(owner).filter((c) => c.source === source))
-      this.put({ ...c, status: "invalidated" });
+      this.put({
+        ...c,
+        status: ["done", "cancelled"].includes(c.status)
+          ? c.status
+          : "invalidated",
+        evidence_valid: false,
+        quote: "",
+        action: "",
+        suggested_due: null,
+        due_date: null,
+      });
     this.db
       .prepare("DELETE FROM interactions WHERE owner_id=? AND source=?")
       .run(owner, source);
@@ -431,6 +482,14 @@ export class TendStore {
       throw new Error("unauthorized");
     const tokens = auth.text.trim().split(/\s+/);
     const [cmd, id, date, ...extra] = tokens;
+    const expectedArgs =
+      cmd === "/confirm"
+        ? 3
+        : ["/draft", "/done", "/cancel"].includes(cmd ?? "")
+          ? 2
+          : 1;
+    if (cmd !== "/prep" && tokens.length !== expectedArgs)
+      throw new Error("invalid command arguments");
     if (cmd !== "/prep" && extra.length)
       throw new Error("invalid command arguments");
     const owner = auth.owner_id;
@@ -467,6 +526,13 @@ export class TendStore {
     if (cmd === "/today")
       return {
         outbound_sent: false,
+        meetings: this.interactions(owner).filter(
+          (record) =>
+            record.source === "calendar" &&
+            !record.cancelled &&
+            record.occurred_at >= "2026-10-13T00:00:00Z" &&
+            record.occurred_at <= "2026-10-20T00:00:00Z",
+        ),
         commitments: this.commitments(owner).filter(
           (c) =>
             c.status === "confirmed" &&
