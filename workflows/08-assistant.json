@@ -8,10 +8,7 @@
       "name": "Run fictional demo",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [
-        0,
-        0
-      ],
+      "position": [0, 0],
       "parameters": {}
     },
     {
@@ -19,10 +16,7 @@
       "name": "Fictional private command",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        250,
-        0
-      ],
+      "position": [250, 0],
       "parameters": {
         "jsCode": "return [{json:{\"owner_id\":\"demo-owner\",\"user_id\":\"demo-user\",\"chat_id\":\"demo-private\",\"chat_type\":\"private\",\"text\":\"/prep F17\"}}];"
       }
@@ -32,10 +26,7 @@
       "name": "Authorize owner and private chat",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        500,
-        0
-      ],
+      "position": [500, 0],
       "parameters": {
         "jsCode": "const x=$input.first().json;if(x.owner_id!=='demo-owner'||x.user_id!=='demo-user'||x.chat_id!=='demo-private'||x.chat_type!=='private')throw new Error('unauthorized before retrieval');return [{json:x}];"
       }
@@ -45,10 +36,7 @@
       "name": "Allowed command",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [
-        740,
-        0
-      ],
+      "position": [740, 0],
       "parameters": {
         "conditions": {
           "options": {
@@ -62,10 +50,7 @@
               "id": "command-check",
               "leftValue": "={{ $json.text }}",
               "rightValue": "^/(prep|today|draft|confirm|done|cancel|status)(\\s|$)",
-              "operator": {
-                "type": "string",
-                "operation": "regex"
-              }
+              "operator": { "type": "string", "operation": "regex" }
             }
           ],
           "combinator": "and"
@@ -78,10 +63,7 @@
       "name": "Owner-scoped router and briefing",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1000,
-        0
-      ],
+      "position": [1000, 0],
       "parameters": {
         "url": "http://host.docker.internal:18767/api/command",
         "method": "POST",
@@ -89,9 +71,7 @@
         "contentType": "raw",
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
-        "options": {
-          "timeout": 10000
-        }
+        "options": { "timeout": 10000 }
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -102,25 +82,14 @@
       "name": "Reject command",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1000,
-        180
-      ],
-      "parameters": {
-        "jsCode": "throw new Error('unsupported command');"
-      }
+      "position": [1000, 180],
+      "parameters": { "jsCode": "throw new Error('unsupported command');" }
     }
   ],
   "connections": {
     "Run fictional demo": {
       "main": [
-        [
-          {
-            "node": "Fictional private command",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Fictional private command", "type": "main", "index": 0 }]
       ]
     },
     "Fictional private command": {
@@ -135,15 +104,7 @@
       ]
     },
     "Authorize owner and private chat": {
-      "main": [
-        [
-          {
-            "node": "Allowed command",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Allowed command", "type": "main", "index": 0 }]]
     },
     "Allowed command": {
       "main": [
@@ -154,13 +115,7 @@
             "index": 0
           }
         ],
-        [
-          {
-            "node": "Reject command",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Reject command", "type": "main", "index": 0 }]
       ]
     }
   },
@@ -173,7 +128,5 @@
   "tags": [],
   "pinData": {},
   "versionId": "00000000-0000-4000-8000-000000000008",
-  "meta": {
-    "templateCredsSetupCompleted": false
-  }
+  "meta": { "templateCredsSetupCompleted": false }
 }

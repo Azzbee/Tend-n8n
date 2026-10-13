@@ -1,4 +1,11 @@
 import { writeFile, mkdir } from "node:fs/promises";
+import { format } from "prettier";
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await writeFile(
+    path,
+    await format(JSON.stringify(value), { parser: "json" }),
+  );
+}
 import {
   fixtureRecords,
   fixtureSources,
@@ -295,27 +302,20 @@ for (const w of workflows.slice(0, 5)) {
 }
 await mkdir("workflows", { recursive: true });
 for (let i = 0; i < workflows.length; i++)
-  await writeFile(
+  await writeJson(
     `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture"][i]}.json`,
-    JSON.stringify(workflows[i], null, 2) + "\n",
+    workflows[i],
   );
 await mkdir("fixtures", { recursive: true });
-await writeFile(
-  "fixtures/demo.json",
-  JSON.stringify(
-    {
-      fictional: true,
-      clock: "2026-10-13",
-      contacts: fixtureContacts,
-      identities: fixtureIdentities,
-      sources: fixtureSources,
-      records: fixtureRecords,
-      command: demoAuth,
-    },
-    null,
-    2,
-  ) + "\n",
-);
+await writeJson("fixtures/demo.json", {
+  fictional: true,
+  clock: "2026-10-13",
+  contacts: fixtureContacts,
+  identities: fixtureIdentities,
+  sources: fixtureSources,
+  records: fixtureRecords,
+  command: demoAuth,
+});
 console.log(
   `Built ${workflows.length} inactive workflow exports and fictional fixture data.`,
 );

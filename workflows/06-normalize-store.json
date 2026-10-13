@@ -8,23 +8,15 @@
       "name": "When called by adapter",
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
-      "position": [
-        0,
-        0
-      ],
-      "parameters": {
-        "inputSource": "passthrough"
-      }
+      "position": [0, 0],
+      "parameters": { "inputSource": "passthrough" }
     },
     {
       "id": "validate-fictional-scope",
       "name": "Validate fictional scope",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        260,
-        0
-      ],
+      "position": [260, 0],
       "parameters": {
         "jsCode": "const input=$input.first().json; if(input.fictional!==true || !Array.isArray(input.records))throw new Error('fictional fixture envelope required'); for(const r of input.records){ if(r.owner_id!=='demo-owner' || !r.evidence_reference.startsWith('fixture://') || !['fixture','snapshot'].includes(r.ingestion_mode))throw new Error('fictional owner/source required'); } return [{json:input}];"
       }
@@ -34,10 +26,7 @@
       "name": "Normalize and commit transaction",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        540,
-        0
-      ],
+      "position": [540, 0],
       "parameters": {
         "url": "http://host.docker.internal:18767/api/ingest",
         "method": "POST",
@@ -45,9 +34,7 @@
         "contentType": "raw",
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
-        "options": {
-          "timeout": 10000
-        }
+        "options": { "timeout": 10000 }
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -57,13 +44,7 @@
   "connections": {
     "When called by adapter": {
       "main": [
-        [
-          {
-            "node": "Validate fictional scope",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Validate fictional scope", "type": "main", "index": 0 }]
       ]
     },
     "Validate fictional scope": {
@@ -87,7 +68,5 @@
   "tags": [],
   "pinData": {},
   "versionId": "00000000-0000-4000-8000-000000000006",
-  "meta": {
-    "templateCredsSetupCompleted": false
-  }
+  "meta": { "templateCredsSetupCompleted": false }
 }

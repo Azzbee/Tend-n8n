@@ -8,10 +8,7 @@
       "name": "Run fictional demo",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [
-        0,
-        0
-      ],
+      "position": [0, 0],
       "parameters": {}
     },
     {
@@ -19,15 +16,10 @@
       "name": "Retry synthetic 429 then recover",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        260,
-        0
-      ],
+      "position": [260, 0],
       "parameters": {
         "url": "http://host.docker.internal:18767/api/transient",
-        "options": {
-          "timeout": 10000
-        }
+        "options": { "timeout": 10000 }
       },
       "retryOnFail": true,
       "maxTries": 3,
@@ -38,10 +30,7 @@
       "name": "Record recovery only",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        540,
-        0
-      ],
+      "position": [540, 0],
       "parameters": {
         "jsCode": "if($input.first().json.recovered!==true)throw new Error('recovery failed');return $input.all();"
       }
@@ -60,15 +49,7 @@
       ]
     },
     "Retry synthetic 429 then recover": {
-      "main": [
-        [
-          {
-            "node": "Record recovery only",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Record recovery only", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
@@ -80,7 +61,5 @@
   "tags": [],
   "pinData": {},
   "versionId": "00000000-0000-4000-8000-000000000009",
-  "meta": {
-    "templateCredsSetupCompleted": false
-  }
+  "meta": { "templateCredsSetupCompleted": false }
 }

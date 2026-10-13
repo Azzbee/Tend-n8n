@@ -180,7 +180,17 @@ export function normalizeRecord(
     contact_id: contacts[0]!,
     record_key: createHash("sha256").update(key).digest("hex"),
     content_hash: createHash("sha256")
-      .update(JSON.stringify([raw.body_text, raw.occurred_at, raw.cancelled]))
+      .update(
+        JSON.stringify([
+          raw.body_text,
+          raw.occurred_at,
+          raw.cancelled,
+          raw.direction,
+          raw.actor_identity,
+          raw.participant_identities,
+          contacts[0],
+        ]),
+      )
       .digest("hex"),
   };
 }

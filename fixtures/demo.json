@@ -2,21 +2,9 @@
   "fictional": true,
   "clock": "2026-10-13",
   "contacts": [
-    {
-      "owner_id": "demo-owner",
-      "contact_id": "F17",
-      "name": "Mira Tan"
-    },
-    {
-      "owner_id": "demo-owner",
-      "contact_id": "F18",
-      "name": "Riley Park"
-    },
-    {
-      "owner_id": "demo-owner",
-      "contact_id": "F19",
-      "name": "Riley Park"
-    }
+    { "owner_id": "demo-owner", "contact_id": "F17", "name": "Mira Tan" },
+    { "owner_id": "demo-owner", "contact_id": "F18", "name": "Riley Park" },
+    { "owner_id": "demo-owner", "contact_id": "F19", "name": "Riley Park" }
   ],
   "identities": [
     {
@@ -126,9 +114,7 @@
       "kind": "message",
       "direction": "sent",
       "actor_identity": "owner@example.invalid",
-      "participant_identities": [
-        "mira@example.invalid"
-      ],
+      "participant_identities": ["mira@example.invalid"],
       "occurred_at": "2026-10-13T08:00:00Z",
       "observed_at": "2026-10-13T08:00:00Z",
       "body_text": "I will review your demo by 2026-10-16.",

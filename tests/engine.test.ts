@@ -208,3 +208,23 @@ describe("evidence refresh", () => {
     ).toThrow("ambiguous");
   });
 });
+it("invalidates commitments when evidence direction changes", () => {
+  const r = fixtureRecords[0]!;
+  store.ingest(r);
+  const c = store.addCandidate(r, {
+    quote: r.body_text,
+    action: "send the demo",
+    suggested_due: "2026-10-15",
+  });
+  store.command({
+    ...demoAuth,
+    text: `/confirm ${c.commitment_id} 2026-10-15`,
+  });
+  store.ingest({
+    ...r,
+    direction: "sent",
+    actor_identity: "owner@example.invalid",
+    participant_identities: ["mira@example.invalid"],
+  });
+  expect(store.commitments("demo-owner")[0]?.status).toBe("invalidated");
+});
