@@ -165,7 +165,7 @@
       13:00. A fixture demonstration does not prove live connectivity.
     </div>
     <div class="row">
-      <div class="stat"><strong>9</strong>Inactive n8n workflow exports</div>
+      <div class="stat"><strong>10</strong>Inactive n8n workflow exports</div>
       <div class="stat"><strong>7</strong>Fictional evidence records</div>
       <div class="stat"><strong>0</strong>Connected personal accounts</div>
     </div>
@@ -409,8 +409,22 @@ bun run schema:check</pre>
       <p>
         Also inspect <code>fixtures/local-ollama.json</code>: the keyless local
         model connection configuration used by the native AI nodes.
+        <code>package.json</code> and <code>.agents/verify.sh</code> run the
+        fixture state/container checks and generate exports.
       </p>
       <table>
+        <tr>
+          <td>
+            <code>src/telegram.ts</code><br /><code
+              >src/prepare-telegram.ts</code
+            ><br /><code>src/webhook-proxy.ts</code>
+          </td>
+          <td>
+            Owner and private-chat checks, update validation, safe reply
+            formatting, private deployment IDs and the exact signed webhook-only
+            proxy.
+          </td>
+        </tr>
         <tr>
           <th>File</th>
           <th>What it controls</th>
@@ -440,7 +454,19 @@ bun run schema:check</pre>
           <td><a href="src/build-workflows.ts">src/build-workflows.ts</a></td>
           <td>
             Generates the scope/owner/model guards and local HTTP calls in all
-            nine exports.
+            ten exports.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <code>workflows/10-telegram-private.json</code><br /><code
+              >tests/telegram.test.ts</code
+            ><br /><code>tests/webhook-proxy.test.ts</code>
+          </td>
+          <td>
+            Inactive fail-closed Telegram template and tests for recipient,
+            replay, dates, HTML, length and public-route isolation. Live
+            deployment copies stay private in ignored scratch storage.
           </td>
         </tr>
         <tr>
@@ -503,6 +529,37 @@ bun run schema:check</pre>
           </td>
         </tr>
       </table>
+    </section>
+    <section class="card">
+      <h2>Private Telegram control</h2>
+      <p>
+        The project bot exists at <code>@tend_adam_nocode_2026_bot</code>. Human
+        credential entry and owner enrollment are pending. Its native trigger
+        and reply path are tested against a local mock Bot API, which is not
+        proof of authenticated Telegram connectivity.
+      </p>
+      <p>
+        Both the owner's numeric user ID and private chat ID must match before
+        retrieval. Attachments and ordinary chat text are ignored. Responses say
+        “Course demo • fictional data.” Suggested dates stay proposed and
+        unconfirmed until an explicit confirmation.
+      </p>
+      <p>
+        SQLite commits command state and the update replay key together. This
+        gives at most one committed command application per recorded update. A
+        repeated authenticated update stops before processing or reply,
+        including after restart. Telegram sending and its acknowledgement are
+        separate: a crash can lose a reply or leave delivery uncertain. There is
+        no exactly-once delivery claim. Check the private chat and send a fresh
+        command to recover; old update IDs are never automatically resent.
+      </p>
+      <p>
+        The public webhook proxy exposes only the generated signed POST route.
+        The editor and fixture API stay on localhost. Enrollment temporarily
+        permits the exact signed test route and fails closed before retrieval or
+        reply. Never publish the private live workflow IDs, webhook path, owner
+        IDs or credential.
+      </p>
     </section>
     <section class="card">
       <h2>Before teacher validation</h2>

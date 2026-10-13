@@ -25,3 +25,14 @@ If asked whether the project is validated, say teacher validation and public lin
 
 Fallback
 If Docker/Ollama is unavailable, show the previously recorded evidence/runtime-checks.json, fixture data and tests. Call it recorded evidence, not a live execution. This fallback does not replace a required working class demo.
+
+Secure Telegram setup handoff
+1. Complete the n8n owner password setup directly at http://localhost:5678. Keep the editor local. Adam enters the new bot token directly into a Telegram credential named TendReviewTelegram; never paste it into chat, shell, source or public review.
+2. Run bun run telegram:prepare once. It writes .scratch/live-telegram/workflow.json with private random workflow/trigger/webhook IDs, no token or owner IDs. Import this private file, not the public template. Select the credential on native Trigger and Send. Keep the workflow inactive while enrolling.
+3. Start bun run telegram:proxy -- --enrollment. Only the exact signed production/test webhook routes are permitted. A temporary Cloudflare Quick Tunnel targets localhost:18769. Its HTTPS base URL must become n8n WEBHOOK_URL while preserving the existing data volume; restart only the owned service when no one is entering credentials. Never tunnel localhost:5678 or the fixture API.
+4. For one controlled trigger test clear only its chat/user restrictions. Keep the Code allowlist placeholders unchanged and execution saving set to none. Adam deliberately sends /start with a one-time marker from the known signed-in account to the new bot. In the trigger output verify that known private update; read from.id and chat.id. Do not auto-claim the first visitor and do not use a third-party ID bot. Unconfigured Code stops before any Tend retrieval/reply.
+5. Set both trigger restrictions and both Code allowlist constants from that verified owner update. Stop test listening. Restart proxy without --enrollment. Publish/activate only the privately configured workflow after review. Test owner /status, /prep F17, /today and /help through Telegram, then check duplicate-update and foreign/group rejection using synthetic local checks. Never send a test to another human/contact.
+6. Keep public review artifacts separate. Never publish the live export, webhook path, owner IDs, token, n8n database/configuration or private runtime logs. A Quick Tunnel URL changes when restarted; keep the laptop and owned services running for a live demo. Refresh WEBHOOK_URL and webhook registration after a tunnel change. Public teacher review is a separate stable static page.
+
+Delivery recovery
+A duplicate Telegram update is durably ignored. A newly sent owner command has a new update ID. If a reply is absent or delivery acknowledgement is uncertain after a crash, inspect the private chat and send a fresh /status or the original state-idempotent command. Do not replay the old update ID or claim exactly-once external message delivery.

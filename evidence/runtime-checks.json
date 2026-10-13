@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-13T19:36:33.810Z",
+  "checked_at": "2026-10-13T21:07:58.626Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -9,14 +9,15 @@
     "06-normalize-store.json": "b6acf483d965ebedd759c4f2d1378b48e477f0ddf163411f8ba0b0f340016985",
     "07-extract-commitments.json": "d9d7c01215ad256a7acf61b6defc1dc343820d0e617c225495629c6400c9d2b9",
     "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
-    "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf"
+    "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf",
+    "10-telegram-private.json": "d6023908931ebc49c62ef659cf4f7d30e1f28df2159742c7f74e0d25345d2a35"
   },
   "source_sha256": {
-    "engine.ts": "94a8b277dd83f163871ebdb5419cb853afc556637cb74bfaf0da81961e7c34d2",
-    "server.ts": "3b05a5d3bcb76adad081e2c5ef5e590c430427a959e5efe243f2e1226252040d",
-    "build-workflows.ts": "602958e8fb94beccaea95dceaa928d462c17f1e65348b484f3c7bedb24c532e0",
+    "engine.ts": "e70c89af5b90dcf8b168b6d607349f7bf966ba7a76e1d28343942c3630af161a",
+    "server.ts": "8fba536626066983ee9c74c46422fa69f75164467d7758b520732c10a54012a3",
+    "build-workflows.ts": "4a366cba299e75e51cafadc53dc44685ee39634d0962470db72ef8c0ab12153e",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "d32a4f0686dc117b98f92becfb064a1c9b9d54adccbdb5b30ffee8faabf362d9"
+    "integration.ts": "58031e63f1a52d79bb41ea063dfd0d5cec68458d48f38a39aaefaa40a961e2d9"
   },
   "runtime": {
     "node": "v24.5.0",
@@ -40,7 +41,7 @@
     {
       "name": "Clean n8n import",
       "pass": true,
-      "detail": "9 inactive workflows; local Ollama base-URL configuration only, no account secret/publication"
+      "detail": "10 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive"
     },
     {
       "name": "n8n TendReview01",
@@ -104,6 +105,11 @@
         "interactions": 7,
         "commitments": 2
       }
+    },
+    {
+      "name": "Native Telegram trigger and owner replies (local mock)",
+      "pass": true,
+      "detail": "Actual webhook rejects forged header; foreign user/group produces no reply; status/prep/today/help/unknown execute five readable owner-only native Send-node replies to a local mock, no Telegram account"
     },
     {
       "name": "Owner command boundaries",

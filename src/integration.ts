@@ -251,6 +251,16 @@ try {
       "import-outgoing",
     );
     execution(outgoing.id);
+    const preTelegram = await request("/api/status");
+    execution("TendReview01");
+    execution("TendReview07");
+    const fixtureReplay = await request("/api/status");
+    assert(
+      JSON.stringify(preTelegram.counts) ===
+        JSON.stringify(fixtureReplay.counts),
+      "replay duplicated records/candidates",
+    );
+    checks.push({ name: "Replay", pass: true, detail: fixtureReplay.counts });
     // Exercise the actual native Telegram Trigger and Send node against a local
     // mock Bot API. This never connects to Telegram or a human recipient.
     const telegram = JSON.parse(
@@ -324,7 +334,17 @@ try {
       ["exec", name, "n8n", "publish:workflow", "--id", telegram.id],
       "telegram-fixture-publish",
     );
-    command(["exec", "-d", name, "n8n", "start"], "telegram-fixture-start");
+    command(
+      [
+        "exec",
+        "-d",
+        name,
+        "sh",
+        "-c",
+        "n8n start > /scratch/n8n-webhook.log 2>&1",
+      ],
+      "telegram-fixture-start",
+    );
     const portLine = command(
       ["port", name, "5678/tcp"],
       "telegram-fixture-port",
@@ -371,9 +391,15 @@ try {
         },
         body: JSON.stringify(update),
       });
+    let forgedStatus = 0;
+    for (let i = 0; i < 50; i++) {
+      forgedStatus = (await sendUpdate(fixtureUpdate, false)).status;
+      if (forgedStatus !== 404) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
     assert(
-      (await sendUpdate(fixtureUpdate, false)).status === 403,
-      "native Telegram accepted a forged webhook without its secret header",
+      forgedStatus === 403,
+      `native Telegram secret-header check returned ${forgedStatus}, expected 403; inspect isolated webhook log`,
     );
     for (const message of [
       { ...fixtureUpdate.message, from: { id: 999, is_bot: false } },
@@ -425,6 +451,34 @@ try {
       replyCount === 5,
       "native Telegram owner commands did not produce all five replies",
     );
+    const repeated = {
+      ...fixtureUpdate,
+      update_id: 101,
+      message: { ...fixtureUpdate.message, text: "/status" },
+    };
+    assert(
+      (await sendUpdate(repeated)).ok,
+      "repeated authenticated update rejected at transport",
+    );
+    await new Promise((r) => setTimeout(r, 800));
+    assert(
+      ((await request("/api/status")).mock_telegram_replies as unknown[])
+        .length === 5,
+      "duplicate authenticated update sent another reply",
+    );
+    let acknowledgements = 0;
+    for (let i = 0; i < 30; i++) {
+      const state = await request("/api/status");
+      acknowledgements = isRecord(state.telegram_delivery)
+        ? Number(state.telegram_delivery.sent)
+        : 0;
+      if (acknowledgements === 5) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert(
+      acknowledgements === 5,
+      "native replies did not reach durable send acknowledgement",
+    );
     const mockReplies = (await request("/api/status")).mock_telegram_replies;
     assert(
       Array.isArray(mockReplies) &&
@@ -451,14 +505,11 @@ try {
         first.counts.commitments === 2,
       "unexpected initial state",
     );
-    execution("TendReview01");
-    execution("TendReview07");
     const replay = await request("/api/status");
     assert(
       JSON.stringify(replay.counts) === JSON.stringify(first.counts),
       "replay duplicated records/candidates",
     );
-    checks.push({ name: "Replay", pass: true, detail: replay.counts });
     assert(
       Array.isArray(first.commitments) && isRecord(first.commitments[0]),
       "missing candidate",

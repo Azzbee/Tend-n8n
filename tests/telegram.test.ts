@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
 import vm from "node:vm";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TendStore } from "../src/engine.ts";
+import {
+  fixtureContacts,
+  fixtureIdentities,
+  fixtureSources,
+  fixtureRecords,
+  demoAuth,
+} from "../src/fixtures.ts";
 import {
   telegramGuardCode,
   telegramReplyCode,
@@ -30,6 +41,8 @@ describe("Telegram owner boundary", () => {
         json: {
           reply_chat_id: "424242",
           help: false,
+          telegram_update_id: 1,
+          telegram_channel_id: "tend-course-control",
           command: {
             owner_id: "demo-owner",
             user_id: "demo-user",
@@ -58,6 +71,17 @@ describe("Telegram owner boundary", () => {
         message: { ...update.message, chat: { id: 424242, type: "group" } },
       }),
     ).toEqual([]);
+  });
+  it("requires a nonnegative safe integer update ID before authorizing", () => {
+    for (const update_id of [
+      undefined,
+      -1,
+      1.5,
+      "1",
+      NaN,
+      Number.MAX_SAFE_INTEGER + 1,
+    ])
+      expect(run({ ...update, update_id })).toEqual([]);
   });
   it("drops bots/attachments and gives help only to the owner for unknown commands", () => {
     expect(
@@ -124,5 +148,90 @@ describe("Telegram owner boundary", () => {
     const long = runReply({ preview: "🙂".repeat(5000) })[0]!.json.text;
     expect(long.length).toBeLessThanOrEqual(3900);
     expect(long).toContain("Reply shortened");
+    const proposed = runReply({
+      pending: [
+        {
+          commitment_id: "C1",
+          action: "send demo",
+          status: "pending",
+          direction: "owed_to_me",
+          due_date: null,
+          suggested_due: "2026-10-15",
+        },
+      ],
+    })[0]!.json.text;
+    expect(proposed).toContain("proposed date 2026-10-15 (unconfirmed)");
+    expect(proposed).not.toContain("due 2026-10-15");
+    const markup = runReply({
+      preview: "<a href='https://bad.invalid'>do not parse & link</a>",
+    })[0]!.json.text;
+    expect(markup).toContain("&lt;a");
+    expect(markup).toContain("&amp;");
+    expect(markup).not.toContain("<a");
+  });
+});
+describe("persistent Telegram command replay boundary", () => {
+  it("rejects duplicate updates before processing and after reopening SQLite", () => {
+    const directory = mkdtempSync(join(tmpdir(), "tend-telegram-replay-"));
+    const path = join(directory, "data.sqlite");
+    let store = new TendStore(path);
+    try {
+      store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
+      const record = fixtureRecords[0]!;
+      store.ingest(record);
+      const candidate = store.addCandidate(record, {
+        quote: record.body_text,
+        action: "send the demo",
+        suggested_due: "2026-10-15",
+      });
+      const command = {
+        ...demoAuth,
+        text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+      };
+      expect(
+        store.telegramCommand(command, "tend-course-control", 100),
+      ).toHaveProperty("accepted", true);
+      expect(
+        store.telegramCommand(command, "tend-course-control", 100),
+      ).toEqual({ accepted: false });
+      store.close();
+      store = new TendStore(path);
+      expect(
+        store.telegramCommand(
+          { ...command, text: `/done ${candidate.commitment_id}` },
+          "tend-course-control",
+          100,
+        ),
+      ).toEqual({ accepted: false });
+      expect(store.commitments("demo-owner")[0]!.status).toBe("confirmed");
+      store.acknowledgeTelegramReply(command, "tend-course-control", 100, 1);
+      expect(
+        store.telegramCommand(command, "tend-course-control", 100),
+      ).toEqual({ accepted: false });
+      expect(
+        store.telegramCommand(
+          { ...command, text: `/done ${candidate.commitment_id}` },
+          "tend-course-control",
+          101,
+        ).reply,
+      ).toHaveProperty("status", "done");
+      expect(
+        store.telegramCommand(
+          { ...command, text: `/done ${candidate.commitment_id}` },
+          "tend-course-control",
+          102,
+        ).reply,
+      ).toHaveProperty("status", "done");
+      expect(() =>
+        store.telegramCommand(
+          { ...command, user_id: "foreign" },
+          "tend-course-control",
+          103,
+        ),
+      ).toThrow("unauthorized");
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

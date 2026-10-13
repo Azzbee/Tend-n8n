@@ -3,6 +3,7 @@ export const telegramGuardCode = `
 const allowedUserId = "CONFIGURE_OWNER_USER_ID";
 const allowedChatId = "CONFIGURE_OWNER_CHAT_ID";
 const update = $input.first().json;
+if (!update || typeof update !== 'object' || !Number.isSafeInteger(update.update_id) || update.update_id < 0) return [];
 const message = update && update.message;
 const validId = value => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 if (!/^[1-9]\\d{0,15}$/.test(allowedUserId) || !/^[1-9]\\d{0,15}$/.test(allowedChatId)) return [];
@@ -12,7 +13,7 @@ if (typeof message.text !== 'string' || message.text.length > 500) return [];
 const text = message.text.trim();
 if (!text.startsWith('/')) return [];
 const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel)(?:\\s|$)/.test(text);
-return [{json:{reply_chat_id:allowedChatId,help,command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
+return [{json:{reply_chat_id:allowedChatId,help,telegram_update_id:update.update_id,telegram_channel_id:'tend-course-control',command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
 `;
 
 export const telegramReplyCode = `
@@ -35,7 +36,7 @@ else {
  const commitments = Array.isArray(reply.commitments) ? reply.commitments : [];
  const pending = Array.isArray(reply.pending) ? reply.pending : [];
  if(commitments.length || pending.length) {
-   lines.push('Promises:'); for(const item of [...commitments,...pending].filter(record)) lines.push(string(item.commitment_id) + ': ' + (item.direction === 'owed_by_me' ? 'You owe' : 'Owed to you') + ' ' + string(item.action) + '. ' + string(item.status) + '; due ' + (item.due_date || item.suggested_due || 'not confirmed') + '.');
+   lines.push('Promises:'); for(const item of [...commitments,...pending].filter(record)) {const date = item.due_date ? 'due ' + string(item.due_date) : item.suggested_due ? 'proposed date ' + string(item.suggested_due) + ' (unconfirmed)' : 'date not confirmed';lines.push(string(item.commitment_id) + ': ' + (item.direction === 'owed_by_me' ? 'You owe' : 'Owed to you') + ' ' + string(item.action) + '. ' + string(item.status) + '; ' + date + '.');}
  }
  if(Array.isArray(reply.meetings)) {lines.push('Upcoming fixture meetings:');if(!reply.meetings.length) lines.push('None in the fixture window.');for(const item of reply.meetings.filter(record))lines.push(string(item.occurred_at) + ': ' + string(item.body_text));}
  if(Array.isArray(reply.evidence)) {lines.push('Evidence:');for(const item of reply.evidence.filter(record))lines.push(string(item.source) + ': ' + string(item.text) + ' [' + string(item.reference) + ']');}
@@ -45,7 +46,9 @@ else {
 }
 let text = lines.join('\\n');
 if(text.length > 3900) text = text.slice(0,3800).replace(/[\\uD800-\\uDBFF]$/, '') + '\\n… Reply shortened. Ask for a narrower contact or task.';
-return [{json:{chat_id:authorized.reply_chat_id,text}}];
+const escaped = []; let length=0;
+for(const character of text){const safe=character==='&'?'&amp;':character==='<'?'&lt;':character==='>'?'&gt;':character;if(length+safe.length>3800){escaped.push('\\n… Reply shortened. Ask for a narrower contact or task.');break;}escaped.push(safe);length+=safe.length;}
+return [{json:{chat_id:authorized.reply_chat_id,text:escaped.join('')}}];
 `;
 
 export function configuredGuard(userId: string, chatId: string): string {

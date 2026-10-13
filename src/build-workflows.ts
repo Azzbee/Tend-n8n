@@ -400,13 +400,18 @@ const liveTelegram = workflow(
     {
       ...http(
         "Read or change fictional demo state",
-        "/api/command",
+        "/api/telegram/command",
         560,
-        "={{ JSON.stringify($json.command) }}",
+        "={{ JSON.stringify({...$json.command,telegram_update_id:$json.telegram_update_id,telegram_channel_id:$json.telegram_channel_id}) }}",
       ),
       retryOnFail: false,
       continueOnFail: true,
     },
+    code(
+      "Continue only a newly committed update",
+      "const result=$input.first().json;if(result.accepted!==true||!result.reply||typeof result.reply!=='object')return [];return [{json:result.reply}];",
+      720,
+    ),
     code("Format private owner reply", telegramReplyCode, 840),
     {
       ...node(
@@ -418,6 +423,7 @@ const liveTelegram = workflow(
           chatId: "={{ $json.chat_id }}",
           text: "={{ $json.text }}",
           additionalFields: {
+            parse_mode: "HTML",
             appendAttribution: false,
             disable_web_page_preview: true,
             disable_notification: true,
@@ -429,6 +435,12 @@ const liveTelegram = workflow(
       ),
       credentials: telegramCredential,
     },
+    http(
+      "Record Telegram send acknowledgement",
+      "/api/telegram/ack",
+      1380,
+      "={{ JSON.stringify({...$('Authorize Telegram owner').first().json.command,telegram_update_id:$('Authorize Telegram owner').first().json.telegram_update_id,telegram_channel_id:$('Authorize Telegram owner').first().json.telegram_channel_id,telegram_message_id:($json.result?.message_id ?? $json.message_id)}) }}",
+    ),
   ],
 );
 liveTelegram.settings.saveDataSuccessExecution = "none";

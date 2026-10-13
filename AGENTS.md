@@ -1,12 +1,12 @@
 # Tend n8n: project map for agents
 
-Inactive n8n workflows and a fictional local API for Adam's No-code review. No real account connector is configured.
+Inactive n8n workflows and a fictional local API for Adam's No-code review. A guarded private Telegram control route is prepared; credential entry/enrollment remain human steps. Source inbox adapters remain fictional.
 The global rules in `~/.codex/AGENTS.md` still apply; this file adds only what is specific to this repo.
 
 ## Layout
 
 - `src/`: typed fixture API, evidence/state engine, export builder and runnable checks.
-- `workflows/`: nine inactive generated exports.
+- `workflows/`: ten inactive generated exports. Private live deployment IDs stay under ignored .scratch and must never enter public bundles.
 - `fixtures/`, `schema/`, `evidence/`: fictional inputs, proposed PostgreSQL schema and observed check records.
 - `Review.html`, `Specification.txt`, `Demo-guide.txt`: user review and rehearsal material.
 

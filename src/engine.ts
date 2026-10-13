@@ -260,7 +260,8 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS sources(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(owner_id,source));
  CREATE TABLE IF NOT EXISTS interactions(record_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,source_record_id TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,source,account_id,source_record_id));
  CREATE TABLE IF NOT EXISTS commitments(commitment_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,record_key TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,record_key));
- CREATE TABLE IF NOT EXISTS quarantines(id INTEGER PRIMARY KEY,source TEXT,reason TEXT NOT NULL);`);
+ CREATE TABLE IF NOT EXISTS quarantines(id INTEGER PRIMARY KEY,source TEXT,reason TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS telegram_updates(channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(channel_id,update_id));`);
   }
   close(): void {
     this.db.close();
@@ -297,6 +298,24 @@ export class TendStore {
       ),
       commitments: Number(
         this.db.prepare("SELECT count(*) AS n FROM commitments").get()?.n,
+      ),
+    };
+  }
+  telegramDeliveryCounts(): { reply_pending: number; sent: number } {
+    return {
+      reply_pending: Number(
+        this.db
+          .prepare(
+            "SELECT count(*) AS n FROM telegram_updates WHERE status='reply_pending'",
+          )
+          .get()?.n,
+      ),
+      sent: Number(
+        this.db
+          .prepare(
+            "SELECT count(*) AS n FROM telegram_updates WHERE status='sent'",
+          )
+          .get()?.n,
       ),
     };
   }
@@ -473,6 +492,10 @@ export class TendStore {
       .run(owner, source);
   }
   command(auth: AuthCommand): Reply {
+    this.authorizeCommand(auth);
+    return this.executeCommand(auth);
+  }
+  private authorizeCommand(auth: AuthCommand): void {
     if (
       auth.owner_id !== "demo-owner" ||
       auth.user_id !== "demo-user" ||
@@ -480,6 +503,73 @@ export class TendStore {
       auth.chat_type !== "private"
     )
       throw new Error("unauthorized");
+  }
+  telegramCommand(
+    auth: AuthCommand,
+    channelId: string,
+    updateId: number,
+  ): { accepted: boolean; reply?: Reply } {
+    this.authorizeCommand(auth);
+    this.validateTelegramKey(channelId, updateId);
+    const hash = createHash("sha256").update(auth.text).digest("hex");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = this.db
+        .prepare(
+          "SELECT payload_hash FROM telegram_updates WHERE channel_id=? AND update_id=?",
+        )
+        .get(channelId, updateId);
+      if (prior) {
+        this.db.exec("COMMIT");
+        return { accepted: false };
+      }
+      let reply: Reply;
+      try {
+        reply = this.executeCommand(auth);
+      } catch {
+        reply = {
+          outbound_sent: false,
+          error: "Command failed. Use /help for examples.",
+        };
+      }
+      this.db
+        .prepare(
+          "INSERT INTO telegram_updates(channel_id,update_id,payload_hash,reply_data,status) VALUES(?,?,?,?,?)",
+        )
+        .run(channelId, updateId, hash, JSON.stringify(reply), "reply_pending");
+      this.db.exec("COMMIT");
+      return { accepted: true, reply };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  acknowledgeTelegramReply(
+    auth: AuthCommand,
+    channelId: string,
+    updateId: number,
+    messageId: number,
+  ): void {
+    this.authorizeCommand(auth);
+    this.validateTelegramKey(channelId, updateId);
+    if (!Number.isSafeInteger(messageId) || messageId <= 0)
+      throw new Error("invalid Telegram message ID");
+    const result = this.db
+      .prepare(
+        "UPDATE telegram_updates SET status='sent',telegram_message_id=? WHERE channel_id=? AND update_id=?",
+      )
+      .run(messageId, channelId, updateId);
+    if (result.changes !== 1) throw new Error("unknown Telegram update");
+  }
+  private validateTelegramKey(channelId: string, updateId: number): void {
+    if (
+      !/^[a-z0-9-]{1,80}$/.test(channelId) ||
+      !Number.isSafeInteger(updateId) ||
+      updateId < 0
+    )
+      throw new Error("invalid Telegram update key");
+  }
+  private executeCommand(auth: AuthCommand): Reply {
     const tokens = auth.text.trim().split(/\s+/);
     const [cmd, id, date, ...extra] = tokens;
     const expectedArgs =

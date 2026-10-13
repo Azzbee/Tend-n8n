@@ -85,6 +85,7 @@ const server = createServer(async (req, res) => {
         interactions: store.interactions("demo-owner"),
         commitments: store.commitments("demo-owner"),
         mock_telegram_replies: mockTelegramReplies,
+        telegram_delivery: store.telegramDeliveryCounts(),
       });
       return;
     }
@@ -256,6 +257,45 @@ const server = createServer(async (req, res) => {
         if (typeof input[k] !== "string")
           throw new Error("invalid command envelope");
       respond(200, store.command(input as unknown as AuthCommand));
+      return;
+    }
+    if (
+      url.pathname === "/api/telegram/command" ||
+      url.pathname === "/api/telegram/ack"
+    ) {
+      for (const key of [
+        "owner_id",
+        "user_id",
+        "chat_id",
+        "chat_type",
+        "text",
+        "telegram_channel_id",
+      ])
+        if (typeof input[key] !== "string")
+          throw new Error("invalid Telegram command envelope");
+      if (typeof input.telegram_update_id !== "number")
+        throw new Error("invalid Telegram update ID");
+      const auth = input as unknown as AuthCommand;
+      if (url.pathname === "/api/telegram/command")
+        respond(
+          200,
+          store.telegramCommand(
+            auth,
+            String(input.telegram_channel_id),
+            input.telegram_update_id,
+          ),
+        );
+      else {
+        if (typeof input.telegram_message_id !== "number")
+          throw new Error("missing Telegram send acknowledgement");
+        store.acknowledgeTelegramReply(
+          auth,
+          String(input.telegram_channel_id),
+          input.telegram_update_id,
+          input.telegram_message_id,
+        );
+        respond(200, { acknowledged: true });
+      }
       return;
     }
     respond(404, { error: "unknown endpoint" });

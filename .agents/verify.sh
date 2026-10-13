@@ -12,6 +12,9 @@ BASELINE_DATE=2026-10-13
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$ROOT" || exit 1
 export CI=1
+if ! command -v bun >/dev/null 2>&1 && [ -x "$HOME/.bun/bin/bun" ]; then
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
 MODE=fast
 [ "${VERIFY_FULL:-0}" = 1 ] && MODE=full
 [ "${VERIFY_BASELINE:-0}" = 1 ] && MODE=baseline
