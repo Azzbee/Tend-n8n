@@ -1,0 +1,179 @@
+{
+  "id": "TendReview08",
+  "name": "Tend 08: Assistant Router and Briefing (private local preview)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-fictional-demo",
+      "name": "Run fictional demo",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "fictional-private-command",
+      "name": "Fictional private command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{json:{\"owner_id\":\"demo-owner\",\"user_id\":\"demo-user\",\"chat_id\":\"demo-private\",\"chat_type\":\"private\",\"text\":\"/prep F17\"}}];"
+      }
+    },
+    {
+      "id": "authorize-owner-and-private-chat",
+      "name": "Authorize owner and private chat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.owner_id!=='demo-owner'||x.user_id!=='demo-user'||x.chat_id!=='demo-private'||x.chat_type!=='private')throw new Error('unauthorized before retrieval');return [{json:x}];"
+      }
+    },
+    {
+      "id": "allowed-command",
+      "name": "Allowed command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "command-check",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "^/(prep|today|draft|confirm|done|cancel|status)(\\s|$)",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "owner-scoped-router-and-briefing",
+      "name": "Owner-scoped router and briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/command",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "reject-command",
+      "name": "Reject command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        180
+      ],
+      "parameters": {
+        "jsCode": "throw new Error('unsupported command');"
+      }
+    }
+  ],
+  "connections": {
+    "Run fictional demo": {
+      "main": [
+        [
+          {
+            "node": "Fictional private command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fictional private command": {
+      "main": [
+        [
+          {
+            "node": "Authorize owner and private chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorize owner and private chat": {
+      "main": [
+        [
+          {
+            "node": "Allowed command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allowed command": {
+      "main": [
+        [
+          {
+            "node": "Owner-scoped router and briefing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000008",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

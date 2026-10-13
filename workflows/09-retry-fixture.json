@@ -1,0 +1,86 @@
+{
+  "id": "TendReview09",
+  "name": "Tend 09: Bounded Retry Fixture (synthetic 429)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-fictional-demo",
+      "name": "Run fictional demo",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "retry-synthetic-429-then-recover",
+      "name": "Retry synthetic 429 then recover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/transient",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "record-recovery-only",
+      "name": "Record recovery only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        0
+      ],
+      "parameters": {
+        "jsCode": "if($input.first().json.recovered!==true)throw new Error('recovery failed');return $input.all();"
+      }
+    }
+  ],
+  "connections": {
+    "Run fictional demo": {
+      "main": [
+        [
+          {
+            "node": "Retry synthetic 429 then recover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry synthetic 429 then recover": {
+      "main": [
+        [
+          {
+            "node": "Record recovery only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000009",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

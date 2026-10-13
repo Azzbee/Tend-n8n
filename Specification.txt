@@ -1,0 +1,48 @@
+Tend local No-code review package
+Prepared 13 October 2026. Production mode and local preparation plan approved.
+
+Purpose
+Combine conversation and meeting evidence for a verified fictional contact. Show what the owner owes, what the contact owes, meeting context and source coverage. A model proposes a commitment; the owner confirms it explicitly. The package never sends to a contact.
+
+Current delivered scope
+Nine inactive n8n JSON exports. Five read fictional source records over a local HTTP API: Gmail, Calendar, WhatsApp Personal, WhatsApp Business and a LinkedIn snapshot. Each invokes the normalization/storage sub-workflow through its embedded JSON. This avoids requiring publication of an imported sub-workflow in n8n 2.43.4.
+The local API checks record schema, timestamps and verified identities. It writes a transaction to SQLite. Source record IDs, owner, account and source define uniqueness. The same text on two channels remains two pieces of evidence. Failed transactions do not advance the cursor. Evidence edits invalidate derived commitments; an invalidated item cannot be confirmed or drafted without a separate review. Automatic replacement of invalidated candidates is outside this local demo.
+The AI extraction workflow calls a real local Ollama qwen3:0.6b model. It receives only fictional evidence. n8n checks exact quote/action fields; the API repeats validation against persisted evidence and validates dates. Accepted output is pending, never an active obligation.
+The assistant workflow checks fictional owner ID, user ID and private chat ID before retrieval. It branches on allowed commands, then calls the owner-scoped API. /prep, /status and /today read. /confirm explicitly sets a date. /draft returns a template preview only. /done and /cancel require an existing confirmed obligation; repeated identical transitions are idempotent. The fixture clock is fixed at 13 October 2026.
+The retry workflow demonstrates a synthetic 429 with Retry-After: 1. It retries at one-second intervals, at most three attempts, then records recovery. A separately tested retry policy rejects delays beyond its budget. This is not proof of any real provider's retry behavior.
+
+Fictional fixtures
+Mira Tan, contact F17, plus two distinct Riley Park contacts. Seven records include an incoming promise, outgoing promise, meeting, Personal/Business WhatsApp records, LinkedIn copied promise and malicious email instructions. .invalid addresses and +000 phone identifiers are fictional. Source state deliberately marks Personal WhatsApp stale and LinkedIn a snapshot. A briefing reports these gaps and never infers no recent contact from missing evidence.
+
+Data and AI boundaries
+The API accepts only demo-owner records with fixture:// references and fixture/snapshot mode. Do not feed real exports into it. The fixed fictional IDs are not production authentication. The API listens on 127.0.0.1. Docker Desktop reaches it at host.docker.internal.
+No credential files are shipped. No Telegram account, Google OAuth, WhatsApp provider or LinkedIn account is connected. The Ollama model runs locally. The only draft destination is the owner preview. Source text cannot select recipients or mutate state. Model output with extra fields is rejected.
+Persistence is real local SQLite. The PostgreSQL schema was executed successfully in an isolated PostgreSQL16 container (eight tables and two indexes). It remains a future migration design, separate from the demonstrated SQLite adapter. The package does not claim that Postgres backs the current demo.
+
+Course mapping
+Implemented: Code, HTTP/API requests to local fixtures and local AI, conditional branch, real persistence, callable sub-workflow, AI output validation and bounded retry demonstration.
+Not connected: external Telegram message trigger; real Gmail/Calendar/WhatsApp/LinkedIn initial and incremental reads. n8n represents the orchestration and calls the local engine for validation/state. Expanded Tend scope needs Benjamin's approval. Confirm whether the local fixture demonstration is accepted as the interim validation artifact.
+
+Dates and review
+15 October 2026: teacher requires a completed unvalidated project, description and publicly accessible link for validation. No closing hour stated. The local package alone does not establish compliance with the public-link or live-integration expectation.
+22 October 2026 at 13:00: individual demo session begins; Adam's personal slot follows the sheet order. Five to seven minutes total: specification/diagram one to two minutes, working demo three to four minutes, then one or two questions. No live debugging time.
+No teacher sheet, email, Moodle activity or account has been changed. No hosting or publication performed.
+
+Inputs still needed
+1. Teacher approves manageable Tend scope and whether the fixture-only interim package is acceptable.
+2. Choose n8n instance and teacher-review destination; separately approve any public link and redacted content.
+3. Choose permitted Google account, selected contacts/history window and OAuth grants.
+4. Choose Personal WhatsApp route, account linking/data recipient and any cost. Business WhatsApp needs its own route/number/eligibility.
+5. Verify LinkedIn portability access or choose an explicitly labeled snapshot import; no live-history claim without proof.
+6. Choose real private control channel IDs and AI recipient/retention policy before private data is used.
+7. Test real initial/update reads, cursor handoff, revocation/deletions and provider limits per source. Do not use fictional checks as evidence of connectivity.
+
+Sources
+Approved local preparation plan: /Users/adamzer/Desktop/03 University/docs/plans/semester-coursework-review-preparation.md.
+Tend proposal: ../../Tend - Level 3 Project Proposal.pdf.
+Original plan: /Users/adamzer/Desktop/03 University/docs/plans/tend-multichannel-nocode.md.
+Teacher deadline email: https://mail.google.com/mail/u/?authuser=adamzeraiki%40gmail.com#all/1a13125484efe727
+Teacher sheet: https://docs.google.com/spreadsheets/d/1Z0w7kMCKhuSm4t8OLrdhJpeNb4hlHUiHiOYbHIO4oyM/edit?gid=0#gid=0
+n8n CLI: https://docs.n8n.io/hosting/cli-commands/
+n8n sub-workflow node: https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.executeworkflow/
+n8n Code node: https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.code/

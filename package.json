@@ -1,0 +1,25 @@
+{
+  "name": "tend-n8n-review",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "build": "bun run src/build-workflows.ts",
+    "start": "node --experimental-strip-types src/server.ts",
+    "verify": "bun run typecheck && bun run lint && bun run test && bun run build && bun run format:check",
+    "integration": "node --experimental-strip-types src/integration.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.0",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,19 @@
+flowchart LR
+ G[Gmail fictional adapter] --> N[n8n Normalize and Store sub-workflow]
+ C[Calendar fictional adapter] --> N
+ WP[Personal WhatsApp fictional adapter] --> N
+ WB[Business WhatsApp fictional adapter] --> N
+ L[LinkedIn fictional snapshot adapter] --> N
+ N --> V[Local API: schema, identity and date checks]
+ V --> D[(Persistent local SQLite)]
+ D --> A[n8n local Ollama request]
+ A --> Q[Validate exact quote and date]
+ Q --> P[Pending commitment]
+ P --> D
+ CMD[Fictional private owner command] --> AUTH[Owner, user and private chat check]
+ AUTH --> R[n8n branch and local command router]
+ R --> D
+ D --> B[Briefing with evidence and coverage]
+ B --> OUT[Private preview only]
+ RETRY[Synthetic 429 endpoint] --> ERR[n8n bounded retry]
+ ERR --> REC[Recovery result]

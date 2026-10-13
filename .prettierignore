@@ -1,0 +1,7 @@
+node_modules
+.scratch
+bun.lock
+.agents
+CLAUDE.md
+AGENTS.md
+evidence/*.log

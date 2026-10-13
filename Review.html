@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Tend | No-code review package</title>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #173139;
+        background: #eef2f0;
+        line-height: 1.5;
+      }
+      body {
+        max-width: 1040px;
+        margin: auto;
+        padding: 36px 24px 70px;
+      }
+      h1 {
+        font-size: 40px;
+        letter-spacing: -1.2px;
+        margin: 12px 0;
+      }
+      h2 {
+        margin-top: 0;
+        font-size: 23px;
+      }
+      p {
+        max-width: 800px;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        background: #d9eee5;
+        color: #205c42;
+        padding: 7px 12px;
+        border-radius: 30px;
+      }
+      .warning {
+        border-left: 4px solid #b87a19;
+        background: #fff3dc;
+        padding: 14px 18px;
+        margin: 22px 0;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #d8e3df;
+        border-radius: 14px;
+        padding: 25px;
+        margin: 20px 0;
+        box-shadow: 0 2px 4px #1233;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 15px;
+      }
+      .stat {
+        background: #e9f4ef;
+        border-radius: 8px;
+        padding: 18px;
+      }
+      .stat strong {
+        font-size: 30px;
+        display: block;
+      }
+      a {
+        color: #155b68;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+      }
+      td,
+      th {
+        text-align: left;
+        padding: 12px;
+        border-bottom: 1px solid #dde5e2;
+        vertical-align: top;
+      }
+      th {
+        background: #f4f7f5;
+      }
+      pre {
+        background: #132a31;
+        color: #edf6f1;
+        padding: 18px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        border-radius: 8px;
+        font-size: 12px;
+      }
+      .diagram {
+        width: 100%;
+        height: auto;
+      }
+      ul,
+      ol {
+        padding-left: 22px;
+      }
+      li {
+        margin: 7px 0;
+      }
+      .small {
+        font-size: 13px;
+        color: #536b71;
+      }
+      svg text {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      code {
+        font-size: 13px;
+        background: #edf2ef;
+        padding: 2px 4px;
+        border-radius: 3px;
+      }
+      @media (max-width: 650px) {
+        .row {
+          grid-template-columns: 1fr;
+        }
+        h1 {
+          font-size: 32px;
+        }
+        .card {
+          padding: 18px;
+        }
+        body {
+          padding: 20px 12px;
+        }
+      }
+      @media print {
+        body {
+          background: white;
+          padding: 0;
+        }
+        .card {
+          box-shadow: none;
+          break-inside: avoid;
+        }
+        pre {
+          color: black;
+          background: #eee;
+        }
+        .warning {
+          background: #fff4dc;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <span class="badge">FOR ADAM'S REVIEW • FICTIONAL DATA</span>
+    <h1>Tend: evidence to commitments</h1>
+    <p>
+      Five source adapters feed one contact briefing. A local model extracts a
+      quoted promise. It stays pending until the owner confirms it. This package
+      sends nothing to a contact.
+    </p>
+    <div class="warning">
+      <strong>15 October is the completed-project validation cutoff.</strong>
+      Teacher scope approval, a public review link and all real account
+      connections remain pending. The later demo session starts 22 October at
+      13:00. A fixture demonstration does not prove live connectivity.
+    </div>
+    <div class="row">
+      <div class="stat"><strong>9</strong>Inactive n8n workflow exports</div>
+      <div class="stat"><strong>7</strong>Fictional evidence records</div>
+      <div class="stat"><strong>0</strong>Connected personal accounts</div>
+    </div>
+    <section class="card">
+      <h2>Architecture</h2>
+      <svg
+        class="diagram"
+        viewBox="0 0 960 410"
+        role="img"
+        aria-label="Five fictional adapters enter n8n normalization, SQLite storage, local model extraction and an owner-controlled private preview"
+      >
+        <defs>
+          <marker
+            id="arrow"
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            orient="auto"
+          >
+            <path d="M0 0 L7 3.5 L0 7" fill="#628079" />
+          </marker>
+        </defs>
+        <g
+          fill="none"
+          stroke="#628079"
+          stroke-width="2"
+          marker-end="url(#arrow)"
+        >
+          <path d="M200 47H225V190H253" />
+          <path d="M200 112H225V190H253" />
+          <path d="M200 177H253" />
+          <path d="M200 242H225V190H253" />
+          <path d="M200 307H225V190H253" />
+          <path d="M455 190H500" />
+          <path d="M685 190H725" />
+          <path d="M827 235V280H592V242" />
+          <path d="M592 240V325H710" />
+          <path d="M457 334H530" />
+        </g>
+        <g fill="#edf6f1" stroke="#bed9cb">
+          <rect x="15" y="25" width="185" height="45" rx="8" />
+          <rect x="15" y="90" width="185" height="45" rx="8" />
+          <rect x="15" y="155" width="185" height="45" rx="8" />
+          <rect x="15" y="220" width="185" height="45" rx="8" />
+          <rect x="15" y="285" width="185" height="45" rx="8" />
+        </g>
+        <g font-size="14" text-anchor="middle" fill="#204735">
+          <text x="107" y="53">Gmail fixture</text>
+          <text x="107" y="118">Calendar fixture</text>
+          <text x="107" y="183">Personal WhatsApp fixture</text>
+          <text x="107" y="248">Business WhatsApp fixture</text>
+          <text x="107" y="313">LinkedIn fixture snapshot</text>
+        </g>
+        <rect x="253" y="142" width="202" height="98" rx="10" fill="#173f4a" />
+        <g font-size="16" text-anchor="middle" fill="white">
+          <text x="354" y="169">n8n sub-workflow</text>
+          <text x="354" y="195">Scope guard</text>
+          <text x="354" y="220">HTTP normalize + store</text>
+        </g>
+        <rect
+          x="500"
+          y="145"
+          width="185"
+          height="98"
+          rx="10"
+          fill="#edf0f8"
+          stroke="#cdd3e7"
+        />
+        <g text-anchor="middle" fill="#344662">
+          <text x="592" y="175" font-size="17">Local SQLite</text>
+          <text x="592" y="198" font-size="13">
+            Identity • evidence • state
+          </text>
+          <text x="592" y="220" font-size="13">
+            Transaction + replay checks
+          </text>
+        </g>
+        <rect
+          x="725"
+          y="140"
+          width="210"
+          height="95"
+          rx="10"
+          fill="#fff3dc"
+          stroke="#ddca9d"
+        />
+        <g text-anchor="middle" fill="#765315">
+          <text x="830" y="166" font-size="16">Local Ollama AI</text>
+          <text x="830" y="192" font-size="13">
+            Exact quote/date validation
+          </text>
+          <text x="830" y="215" font-size="13">Pending candidate only</text>
+        </g>
+        <rect
+          x="255"
+          y="307"
+          width="202"
+          height="60"
+          rx="9"
+          fill="#edf6f1"
+          stroke="#bed9cb"
+        />
+        <g text-anchor="middle" fill="#204735" font-size="14">
+          <text x="356" y="331">Private owner command</text>
+          <text x="356" y="353">Owner + user + chat guard</text>
+        </g>
+        <rect x="710" y="298" width="225" height="62" rx="9" fill="#173f4a" />
+        <g text-anchor="middle" fill="white">
+          <text x="822" y="324" font-size="16">
+            Cited briefing / draft preview
+          </text>
+          <text x="822" y="346" font-size="13">No send-to-contact action</text>
+        </g>
+        <text
+          x="500"
+          y="395"
+          font-size="13"
+          text-anchor="middle"
+          fill="#637b74"
+        >
+          Manual fixture triggers only. Real external-message triggers and five
+          account connectors are not configured.
+        </text>
+      </svg>
+      <p class="small">
+        Editable diagram source:
+        <a href="Architecture.mmd">Architecture.mmd</a>. PostgreSQL migration
+        design: <a href="schema/001-tend.sql">001-tend.sql</a>. The current
+        fixture flow persists in SQLite, not Postgres.
+      </p>
+    </section>
+    <section class="card">
+      <h2>Read the package</h2>
+      <table>
+        <tr>
+          <th>Artifact</th>
+          <th>What to review</th>
+        </tr>
+        <tr>
+          <td><a href="Specification.txt">Specification</a></td>
+          <td>
+            Delivered behavior, course mapping, dates and precise live-access
+            gaps.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="Demo-guide.txt">Six-minute demo guide</a></td>
+          <td>
+            Working flow, replay, local model, owner commands and failure cases.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <a href="evidence/runtime-checks.json">Observed runtime checks</a>
+          </td>
+          <td>
+            Clean n8n import/execution results. Generated only after an actual
+            passing run.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="fixtures/demo.json">Fictional fixtures</a></td>
+          <td>
+            Exact seven records, verified identities, stale state and snapshot
+            coverage.
+          </td>
+        </tr>
+        <tr>
+          <td><a href="workflows/08-assistant.json">Assistant workflow</a></td>
+          <td>Owner guard, allowed-command branch and private preview API.</td>
+        </tr>
+      </table>
+    </section>
+    <section class="card">
+      <h2>Run the checks</h2>
+      <p>
+        Use Node 24, Bun, Docker Desktop and Ollama. Install the local model
+        once. The check creates a fresh SQLite database and an isolated n8n
+        container, executes the workflows, records results and stops its own
+        processes. It does not publish workflows or contact providers.
+      </p>
+      <pre>
+cd "/Users/adamzer/Documents/University/Year 3 (2026-2027)/No code software development/Assignments/For Review/Tend n8n"
+bun install
+ollama pull qwen3:0.6b
+bun run verify
+bun run integration</pre>
+      <p class="small">
+        The pinned n8n image is recorded in <code>src/integration.ts</code> and
+        the result JSON. Port 18767 must be free. Logs live in the ignored
+        <code>.scratch</code> directory.
+      </p>
+      <p>
+        To open this guide through the fixture server, run
+        <code>bun run start</code>, then open
+        <a href="http://127.0.0.1:18767">http://127.0.0.1:18767</a>. Reading the
+        page does not ingest records or change commitments.
+      </p>
+    </section>
+    <section class="card">
+      <h2>Rehearse n8n locally</h2>
+      <p>
+        Keep these template IDs in a new isolated instance. Import
+        <code>workflows</code> using n8n's separate-file import. The adapters
+        embed their sub-workflow, so no publication is needed. Run 01 through
+        05, then 07, 08 and 09. Replay 01 and 07; the stored counts stay seven
+        interactions and one candidate.
+      </p>
+      <p>
+        The adapters and model target <code>host.docker.internal</code> for
+        Docker Desktop. For an installed n8n process running directly on the
+        laptop, replace that hostname with <code>127.0.0.1</code> in your local
+        copies. No cloud import or public service has been tested.
+      </p>
+      <ol>
+        <li>
+          Show exact source IDs and citations. Same-name contacts do not merge.
+        </li>
+        <li>
+          Show the local model output and pending status. Confirm it explicitly
+          before draft/done.
+        </li>
+        <li>Show stale Personal WhatsApp and LinkedIn snapshot coverage.</li>
+        <li>Show group-chat rejection and bounded synthetic429 recovery.</li>
+        <li>State every missing live integration and public-link decision.</li>
+      </ol>
+    </section>
+    <section class="card">
+      <h2>Before teacher validation</h2>
+      <p>
+        Review the scope with Benjamin. Choose the n8n destination, public
+        review content and any account grants separately. The package has no
+        Telegram credential, Google OAuth, personal WhatsApp gateway, Business
+        WhatsApp account or LinkedIn grant. It does not read private chats.
+      </p>
+      <p class="small">
+        AI assistance prepared the local code, fixtures and support material.
+        Adam reviews and explains the design, results and limitations. The
+        current teacher sheet remains unchanged.
+      </p>
+    </section>
+  </body>
+</html>

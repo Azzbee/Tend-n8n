@@ -1,0 +1,88 @@
+{
+  "checked_at": "2026-10-13T18:37:37.397Z",
+  "runtime": {
+    "node": "v24.5.0",
+    "n8n": "2.43.4",
+    "image": "docker.n8n.io/n8nio/n8n@sha256:c34ee9107a42b837e25cec0c8a927ab90a45b776aa2ccbf15e5b9cda466fad2c",
+    "ollama_model": "qwen3:0.6b",
+    "storage": "fresh local SQLite"
+  },
+  "data": "7 fictional records; no real account connections",
+  "checks": [
+    {
+      "name": "Clean n8n import",
+      "pass": true,
+      "detail": "9inactive workflows; no publication or credentials"
+    },
+    {
+      "name": "n8n TendReview01",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview02",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview03",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview04",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview05",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview07",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview08",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview09",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview01",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "n8n TendReview07",
+      "pass": true,
+      "detail": "Actual CLI execution status success"
+    },
+    {
+      "name": "Replay",
+      "pass": true,
+      "detail": {
+        "interactions": 7,
+        "commitments": 1
+      }
+    },
+    {
+      "name": "Owner command boundaries",
+      "pass": true,
+      "detail": "Pending until confirm; preview only; repeated done idempotent; group rejected; invalid record rejected; partial coverage explicit"
+    }
+  ],
+  "remaining_unverified": [
+    "All five live source connectors",
+    "Real Telegram trigger",
+    "Public teacher-review link and teacher scope validation",
+    "Postgres schema execution and production migration",
+    "Actual provider authorization/429/backoff/deletions/history coverage"
+  ]
+}

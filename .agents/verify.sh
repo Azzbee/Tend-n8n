@@ -105,8 +105,14 @@ slow() {
 }
 
 # >>> project_gate checks (verbs: step | known_red | slow; `project_gate.py baseline` rewrites them)
-# No checks detected. Add step lines, for example:
-# if want "."; then step "root: test" . make test; fi
+if want "."; then
+  step "root: typecheck" . bun run typecheck
+  step "root: lint" . bun run lint
+  step "root: tests" . bun run test
+  step "root: exports" . bun run build
+  step "root: format" . bun run format:check
+  slow "root: n8n runtime" . bun run integration
+fi
 # <<< project_gate checks
 
 [ "$MODE" = baseline ] && exit 0

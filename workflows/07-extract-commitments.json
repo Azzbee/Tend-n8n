@@ -1,0 +1,156 @@
+{
+  "id": "TendReview07",
+  "name": "Tend 07: Extract Commitments (local AI, pending only)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-fictional-demo",
+      "name": "Run fictional demo",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "prepare-local-ai-request",
+      "name": "Prepare local AI request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        250,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/model-input",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "local-ai-extraction-ollama-",
+      "name": "Local AI extraction (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        510,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:11434/api/chat",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "validate-quoted-model-result",
+      "name": "Validate quoted model result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        790,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const result=$input.first().json; const candidate=JSON.parse(result.message.content); const record=$('Prepare local AI request').first().json.record; const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k)))throw new Error('invalid model fields');if(typeof candidate.quote!=='string'||typeof candidate.action!=='string'||!record.body_text.includes(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||!/\\bI (?:will|promise to)\\b/i.test(candidate.quote))throw new Error('fabricated quote/action');if(candidate.suggested_due!==null && (typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due)))throw new Error('fabricated date');return [{json:{record,candidate}}];"
+      }
+    },
+    {
+      "id": "persist-pending-candidate",
+      "name": "Persist pending candidate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1070,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/candidates",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Run fictional demo": {
+      "main": [
+        [
+          {
+            "node": "Prepare local AI request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare local AI request": {
+      "main": [
+        [
+          {
+            "node": "Local AI extraction (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local AI extraction (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Validate quoted model result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate quoted model result": {
+      "main": [
+        [
+          {
+            "node": "Persist pending candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000007",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

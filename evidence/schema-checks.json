@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-10-13T18:42:02.657389+00:00",
+  "data": "No user data; isolated PostgreSQL16 container without external network",
+  "command": "psql -U postgres -v ON_ERROR_STOP=1 < schema/001-tend.sql",
+  "pass": true,
+  "output": [
+    "BEGIN",
+    "8 CREATE TABLE statements succeeded",
+    "2 CREATE INDEX statements succeeded",
+    "COMMIT"
+  ],
+  "tables": [
+    "commitments",
+    "contacts",
+    "evidence_links",
+    "identities",
+    "interactions",
+    "owners",
+    "run_outcomes",
+    "source_accounts"
+  ],
+  "scope": "Schema creation tested. Application persistence currently uses SQLite; no production migration tested."
+}

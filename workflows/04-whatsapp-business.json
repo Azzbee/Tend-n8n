@@ -1,0 +1,93 @@
+{
+  "id": "TendReview04",
+  "name": "Tend 04-whatsapp-business: FICTIONAL adapter",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-fictional-demo",
+      "name": "Run fictional demo",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {},
+      "notes": "Fictional snapshot/fixture adapter only. No live account, provider credential or message trigger is connected.",
+      "notesInFlow": true
+    },
+    {
+      "id": "read-fictional-source",
+      "name": "Read fictional source",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/fixtures/whatsapp_business",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "normalize-and-persist",
+      "name": "Normalize and persist",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        540,
+        0
+      ],
+      "parameters": {
+        "source": "parameter",
+        "workflowJson": "{\"id\":\"TendReview06\",\"name\":\"Tend 06: Normalize and Store (local SQLite API)\",\"active\":false,\"nodes\":[{\"id\":\"when-called-by-adapter\",\"name\":\"When called by adapter\",\"type\":\"n8n-nodes-base.executeWorkflowTrigger\",\"typeVersion\":1.1,\"position\":[0,0],\"parameters\":{\"inputSource\":\"passthrough\"}},{\"id\":\"validate-fictional-scope\",\"name\":\"Validate fictional scope\",\"type\":\"n8n-nodes-base.code\",\"typeVersion\":2,\"position\":[260,0],\"parameters\":{\"jsCode\":\"const input=$input.first().json; if(input.fictional!==true || !Array.isArray(input.records))throw new Error('fictional fixture envelope required'); for(const r of input.records){ if(r.owner_id!=='demo-owner' || !r.evidence_reference.startsWith('fixture://') || !['fixture','snapshot'].includes(r.ingestion_mode))throw new Error('fictional owner/source required'); } return [{json:input}];\"}},{\"id\":\"normalize-and-commit-transaction\",\"name\":\"Normalize and commit transaction\",\"type\":\"n8n-nodes-base.httpRequest\",\"typeVersion\":4.2,\"position\":[540,0],\"parameters\":{\"url\":\"http://host.docker.internal:18767/api/ingest\",\"method\":\"POST\",\"sendBody\":true,\"contentType\":\"raw\",\"rawContentType\":\"application/json\",\"body\":\"={{ JSON.stringify($json) }}\",\"options\":{\"timeout\":10000}},\"retryOnFail\":true,\"maxTries\":3,\"waitBetweenTries\":1000}],\"connections\":{\"When called by adapter\":{\"main\":[[{\"node\":\"Validate fictional scope\",\"type\":\"main\",\"index\":0}]]},\"Validate fictional scope\":{\"main\":[[{\"node\":\"Normalize and commit transaction\",\"type\":\"main\",\"index\":0}]]}},\"settings\":{\"executionOrder\":\"v1\",\"saveDataSuccessExecution\":\"all\",\"saveDataErrorExecution\":\"all\",\"timezone\":\"Europe/Paris\"},\"tags\":[],\"pinData\":{},\"versionId\":\"00000000-0000-4000-8000-000000000006\",\"meta\":{\"templateCredsSetupCompleted\":false}}",
+        "mode": "once",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Run fictional demo": {
+      "main": [
+        [
+          {
+            "node": "Read fictional source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read fictional source": {
+      "main": [
+        [
+          {
+            "node": "Normalize and persist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000004",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
