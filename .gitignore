@@ -1,0 +1,3 @@
+# agent scratch output and personal Claude Code approvals (ai-native-kit)
+.scratch/
+.claude/settings.local.json
