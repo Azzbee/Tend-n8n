@@ -1,0 +1,57 @@
+// Public templates fail closed until the owner configures both allowlist IDs in n8n.
+export const telegramGuardCode = `
+const allowedUserId = "CONFIGURE_OWNER_USER_ID";
+const allowedChatId = "CONFIGURE_OWNER_CHAT_ID";
+const update = $input.first().json;
+const message = update && update.message;
+const validId = value => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+if (!/^[1-9]\\d{0,15}$/.test(allowedUserId) || !/^[1-9]\\d{0,15}$/.test(allowedChatId)) return [];
+if (!message || !message.from || !message.chat || message.chat.type !== 'private' || message.from.is_bot === true) return [];
+if (!validId(message.from.id) || !validId(message.chat.id) || String(message.from.id) !== allowedUserId || String(message.chat.id) !== allowedChatId) return [];
+if (typeof message.text !== 'string' || message.text.length > 500) return [];
+const text = message.text.trim();
+if (!text.startsWith('/')) return [];
+const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel)(?:\\s|$)/.test(text);
+return [{json:{reply_chat_id:allowedChatId,help,command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
+`;
+
+export const telegramReplyCode = `
+const authorized = $('Authorize Telegram owner').first().json;
+if (!authorized || typeof authorized.reply_chat_id !== 'string' || !/^[1-9]\\d{0,15}$/.test(authorized.reply_chat_id)) throw new Error('missing authorized reply destination');
+const reply = $input.first().json;
+const record = value => typeof value === 'object' && value !== null && !Array.isArray(value);
+const string = value => typeof value === 'string' ? value : '';
+const lines = ['Course demo • fictional data'];
+if(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');
+else if(!record(reply) || reply.error) lines.push('Command failed. Check the command and local service. Use /help for examples.');
+else {
+ if(record(reply.counts)) lines.push('Source records: ' + reply.counts.interactions + '. Promise candidates: ' + reply.counts.commitments + '.');
+ if(record(reply.contact)) lines.push('Contact: ' + string(reply.contact.name) + ' (' + string(reply.contact.contact_id) + ').');
+ if(typeof reply.clock === 'string') lines.push('Fixture clock: ' + reply.clock + '.');
+ if(Array.isArray(reply.sources) || Array.isArray(reply.coverage)) {
+   const sources = Array.isArray(reply.sources) ? reply.sources : reply.coverage;
+   lines.push('Sources:'); for(const source of sources.filter(record)) lines.push(string(source.source) + ': ' + string(source.status) + ', ' + string(source.mode) + '.');
+ }
+ const commitments = Array.isArray(reply.commitments) ? reply.commitments : [];
+ const pending = Array.isArray(reply.pending) ? reply.pending : [];
+ if(commitments.length || pending.length) {
+   lines.push('Promises:'); for(const item of [...commitments,...pending].filter(record)) lines.push(string(item.commitment_id) + ': ' + (item.direction === 'owed_by_me' ? 'You owe' : 'Owed to you') + ' ' + string(item.action) + '. ' + string(item.status) + '; due ' + (item.due_date || item.suggested_due || 'not confirmed') + '.');
+ }
+ if(Array.isArray(reply.meetings)) {lines.push('Upcoming fixture meetings:');if(!reply.meetings.length) lines.push('None in the fixture window.');for(const item of reply.meetings.filter(record))lines.push(string(item.occurred_at) + ': ' + string(item.body_text));}
+ if(Array.isArray(reply.evidence)) {lines.push('Evidence:');for(const item of reply.evidence.filter(record))lines.push(string(item.source) + ': ' + string(item.text) + ' [' + string(item.reference) + ']');}
+ if(typeof reply.commitment_id === 'string')lines.push(reply.commitment_id + ': ' + string(reply.status) + '. Due ' + (reply.due_date || 'not confirmed') + '.',string(reply.action));
+ if(typeof reply.preview === 'string')lines.push('Private draft preview only. Nothing sent to a contact.',reply.preview);
+ if(typeof reply.warning === 'string')lines.push(reply.warning);
+}
+let text = lines.join('\\n');
+if(text.length > 3900) text = text.slice(0,3800).replace(/[\\uD800-\\uDBFF]$/, '') + '\\n… Reply shortened. Ask for a narrower contact or task.';
+return [{json:{chat_id:authorized.reply_chat_id,text}}];
+`;
+
+export function configuredGuard(userId: string, chatId: string): string {
+  if (!/^[1-9]\d{0,15}$/.test(userId) || !/^[1-9]\d{0,15}$/.test(chatId))
+    throw new Error("invalid owner IDs");
+  return telegramGuardCode
+    .replace("CONFIGURE_OWNER_USER_ID", userId)
+    .replace("CONFIGURE_OWNER_CHAT_ID", chatId);
+}

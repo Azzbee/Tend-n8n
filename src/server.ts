@@ -19,6 +19,8 @@ const store = new TendStore(process.env.TEND_DEMO_DB ?? ".scratch/demo.sqlite");
 store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
 const retryAttempts = new Map<string, number>();
 const maxBody = 100000;
+const mockTelegramReplies: { chat_id: string; text: string }[] = [];
+let mockWebhookUrl = "";
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   const respond = (status: number, data: unknown): void => {
@@ -82,6 +84,7 @@ const server = createServer(async (req, res) => {
         sources: store.sourceStatus("demo-owner"),
         interactions: store.interactions("demo-owner"),
         commitments: store.commitments("demo-owner"),
+        mock_telegram_replies: mockTelegramReplies,
       });
       return;
     }
@@ -145,6 +148,28 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (
+      (req.method === "POST" || req.method === "GET") &&
+      url.pathname === "/api/mock-telegram/botFIXTURE_ONLY/getWebhookInfo"
+    ) {
+      respond(200, {
+        ok: true,
+        result: {
+          url: mockWebhookUrl,
+          has_custom_certificate: false,
+          pending_update_count: 0,
+        },
+      });
+      return;
+    }
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/mock-telegram/botFIXTURE_ONLY/deleteWebhook"
+    ) {
+      mockWebhookUrl = "";
+      respond(200, { ok: true, result: true });
+      return;
+    }
+    if (
       !req.headers["content-type"]?.toLowerCase().startsWith("application/json")
     )
       throw new Error("application/json required");
@@ -161,6 +186,40 @@ const server = createServer(async (req, res) => {
     const body = Buffer.concat(chunks).toString("utf8");
     const input: unknown = JSON.parse(body);
     if (!isRecord(input)) throw new Error("invalid input");
+    if (url.pathname === "/api/mock-telegram/botFIXTURE_ONLY/setWebhook") {
+      if (
+        typeof input.url !== "string" ||
+        !input.url.startsWith("http://localhost:")
+      )
+        throw new Error("invalid fictional webhook");
+      mockWebhookUrl = input.url;
+      respond(200, {
+        ok: true,
+        result: true,
+        description: "Fictional webhook registered",
+      });
+      return;
+    }
+    if (url.pathname === "/api/mock-telegram/botFIXTURE_ONLY/sendMessage") {
+      if (
+        String(input.chat_id) !== "424242" ||
+        typeof input.text !== "string" ||
+        !input.text.startsWith("Course demo • fictional data") ||
+        input.text.length > 4096
+      )
+        throw new Error("invalid fictional Telegram reply");
+      mockTelegramReplies.push({ chat_id: "424242", text: input.text });
+      respond(200, {
+        ok: true,
+        result: {
+          message_id: mockTelegramReplies.length,
+          date: 1791849600,
+          chat: { id: 424242, type: "private" },
+          text: input.text,
+        },
+      });
+      return;
+    }
     if (url.pathname === "/api/ingest") {
       if (!Array.isArray(input.records)) throw new Error("records required");
       const records = input.records.map(parseRaw);

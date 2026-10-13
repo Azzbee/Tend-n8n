@@ -12,6 +12,7 @@ import { request as httpRequest } from "node:http";
 import { resolve } from "node:path";
 import { isRecord } from "./engine.ts";
 import { demoAuth, fixtureRecords } from "./fixtures.ts";
+import { configuredGuard } from "./telegram.ts";
 const image =
   "docker.n8n.io/n8nio/n8n@sha256:c34ee9107a42b837e25cec0c8a927ab90a45b776aa2ccbf15e5b9cda466fad2c";
 const id = randomUUID().slice(0, 8),
@@ -155,6 +156,8 @@ try {
         "-d",
         "--name",
         name,
+        "-p",
+        "127.0.0.1::5678",
         "--user",
         "root",
         "-e",
@@ -165,6 +168,8 @@ try {
         "N8N_VERSION_NOTIFICATIONS_ENABLED=false",
         "-e",
         "N8N_RUNNERS_ENABLED=false",
+        "-e",
+        "WEBHOOK_URL=http://localhost:5678/",
         "-v",
         `${process.cwd()}:/workspace:ro`,
         "-v",
@@ -200,14 +205,14 @@ try {
       "import",
     );
     assert(
-      imported.includes("Successfully imported 9 workflows"),
-      "nine-workflow import failed",
+      imported.includes("Successfully imported 10 workflows"),
+      "ten-workflow import failed",
     );
     checks.push({
       name: "Clean n8n import",
       pass: true,
       detail:
-        "9 inactive workflows; local Ollama base-URL configuration only, no account secret/publication",
+        "10 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive",
     });
     for (const wid of [
       "TendReview01",
@@ -246,6 +251,199 @@ try {
       "import-outgoing",
     );
     execution(outgoing.id);
+    // Exercise the actual native Telegram Trigger and Send node against a local
+    // mock Bot API. This never connects to Telegram or a human recipient.
+    const telegram = JSON.parse(
+      readFileSync("workflows/10-telegram-private.json", "utf8"),
+    ) as {
+      id: string;
+      name: string;
+      nodes: {
+        id: string;
+        name: string;
+        type: string;
+        webhookId?: string;
+        parameters: Record<string, unknown>;
+        credentials?: Record<string, { id: string; name: string }>;
+      }[];
+    };
+    telegram.id = "TendTelegramFixtureCheck";
+    telegram.name = "Synthetic Telegram trigger and private reply check";
+    const trigger = telegram.nodes.find(
+      (n) => n.type === "n8n-nodes-base.telegramTrigger",
+    )!;
+    trigger.webhookId = "tend-telegram-fixture-check";
+    trigger.parameters.additionalFields = { download: false };
+    telegram.nodes.find(
+      (n) => n.name === "Authorize Telegram owner",
+    )!.parameters.jsCode = configuredGuard("424242", "424242");
+    for (const node of telegram.nodes)
+      if (node.credentials)
+        node.credentials = {
+          telegramApi: {
+            id: "TendTelegramFixtureCredential",
+            name: "Fictional local Bot API",
+          },
+        };
+    writeFileSync(`${dir}/telegram-fixture.json`, JSON.stringify(telegram));
+    writeFileSync(
+      `${dir}/telegram-fixture-credential.json`,
+      JSON.stringify([
+        {
+          id: "TendTelegramFixtureCredential",
+          name: "Fictional local Bot API",
+          type: "telegramApi",
+          data: {
+            accessToken: "FIXTURE_ONLY",
+            baseUrl: "http://host.docker.internal:18767/api/mock-telegram",
+          },
+        },
+      ]),
+    );
+    command(
+      [
+        "exec",
+        name,
+        "n8n",
+        "import:credentials",
+        "--input=/scratch/telegram-fixture-credential.json",
+      ],
+      "telegram-mock-credential",
+    );
+    command(
+      [
+        "exec",
+        name,
+        "n8n",
+        "import:workflow",
+        "--input=/scratch/telegram-fixture.json",
+      ],
+      "telegram-mock-import",
+    );
+    command(
+      ["exec", name, "n8n", "publish:workflow", "--id", telegram.id],
+      "telegram-fixture-publish",
+    );
+    command(["exec", "-d", name, "n8n", "start"], "telegram-fixture-start");
+    const portLine = command(
+      ["port", name, "5678/tcp"],
+      "telegram-fixture-port",
+    );
+    const port = portLine.match(/:(\d+)\s*$/)?.[1];
+    assert(port, "missing local n8n webhook port");
+    const base = `http://127.0.0.1:${port}`;
+    let webhookReady = false;
+    for (let i = 0; i < 60; i++) {
+      try {
+        const r = await fetch(base + "/healthz");
+        if (r.status === 200) {
+          webhookReady = true;
+          break;
+        }
+      } catch {
+        // The isolated n8n process may still be starting.
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    assert(webhookReady, "native Telegram fixture server did not start");
+    await new Promise((r) => setTimeout(r, 800));
+    const webhook = `${base}/webhook/${trigger.webhookId}/webhook`;
+    const fixtureUpdate = {
+      update_id: 100,
+      message: {
+        message_id: 1,
+        from: { id: 424242, is_bot: false },
+        chat: { id: 424242, type: "private" },
+        text: "/status",
+      },
+    };
+    const sendUpdate = (update: unknown, authenticated = true) =>
+      fetch(webhook, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authenticated
+            ? {
+                "x-telegram-bot-api-secret-token":
+                  `${telegram.id}_${trigger.id}`.replace(/[^a-zA-Z0-9_-]/g, ""),
+              }
+            : {}),
+        },
+        body: JSON.stringify(update),
+      });
+    assert(
+      (await sendUpdate(fixtureUpdate, false)).status === 403,
+      "native Telegram accepted a forged webhook without its secret header",
+    );
+    for (const message of [
+      { ...fixtureUpdate.message, from: { id: 999, is_bot: false } },
+      { ...fixtureUpdate.message, chat: { id: 424242, type: "group" } },
+    ]) {
+      assert(
+        (await sendUpdate({ ...fixtureUpdate, message })).ok,
+        "native fixture rejected transport unexpectedly",
+      );
+    }
+    await new Promise((r) => setTimeout(r, 800));
+    assert(
+      (await request("/api/status")).mock_telegram_replies instanceof Array,
+      "missing mock reply ledger",
+    );
+    assert(
+      ((await request("/api/status")).mock_telegram_replies as unknown[])
+        .length === 0,
+      "unauthorized Telegram update reached a reply",
+    );
+    for (const text of [
+      "/status",
+      "/prep F17",
+      "/today",
+      "/help",
+      "/unknown",
+    ]) {
+      assert(
+        (
+          await sendUpdate({
+            ...fixtureUpdate,
+            update_id: ++fixtureUpdate.update_id,
+            message: { ...fixtureUpdate.message, text },
+          })
+        ).ok,
+        "native Telegram owner update rejected",
+      );
+    }
+    let replyCount = 0;
+    for (let i = 0; i < 60; i++) {
+      const state = await request("/api/status");
+      replyCount = Array.isArray(state.mock_telegram_replies)
+        ? state.mock_telegram_replies.length
+        : 0;
+      if (replyCount === 5) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert(
+      replyCount === 5,
+      "native Telegram owner commands did not produce all five replies",
+    );
+    const mockReplies = (await request("/api/status")).mock_telegram_replies;
+    assert(
+      Array.isArray(mockReplies) &&
+        mockReplies.every(
+          (r) =>
+            isRecord(r) &&
+            r.chat_id === "424242" &&
+            typeof r.text === "string" &&
+            r.text.startsWith("Course demo • fictional data") &&
+            r.text.length <= 3900,
+        ),
+      "invalid private Telegram response formatting/recipient",
+    );
+    checks.push({
+      name: "Native Telegram trigger and owner replies (local mock)",
+      pass: true,
+      detail:
+        "Actual webhook rejects forged header; foreign user/group produces no reply; status/prep/today/help/unknown execute five readable owner-only native Send-node replies to a local mock, no Telegram account",
+    });
     const first = await request("/api/status");
     assert(
       isRecord(first.counts) &&

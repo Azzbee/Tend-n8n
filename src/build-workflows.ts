@@ -1,5 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
+import { telegramGuardCode, telegramReplyCode } from "./telegram.ts";
 async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(
     path,
@@ -27,6 +28,8 @@ type Node = {
   notes?: string;
   notesInFlow?: boolean;
   credentials?: Record<string, { id: string; name: string }>;
+  webhookId?: string;
+  continueOnFail?: boolean;
 };
 type Workflow = {
   id: string;
@@ -39,8 +42,8 @@ type Workflow = {
   >;
   settings: {
     executionOrder: "v1";
-    saveDataSuccessExecution: "all";
-    saveDataErrorExecution: "all";
+    saveDataSuccessExecution: "all" | "none";
+    saveDataErrorExecution: "all" | "none";
     timezone: "Europe/Paris";
   };
   tags: never[];
@@ -367,10 +370,74 @@ for (const w of workflows.slice(0, 5)) {
     options: { waitForSubWorkflow: true },
   };
 }
+const telegramCredential = {
+  telegramApi: { id: "TendReviewTelegram", name: "TendReviewTelegram" },
+};
+const liveTelegram = workflow(
+  "TendLiveTelegram",
+  "Tend 10: Private Telegram control (fictional evidence)",
+  [
+    {
+      ...node(
+        "Telegram private message",
+        "telegramTrigger",
+        {
+          updates: ["message"],
+          additionalFields: {
+            download: false,
+            chatIds: "CONFIGURE_OWNER_CHAT_ID",
+            userIds: "CONFIGURE_OWNER_USER_ID",
+          },
+        },
+        0,
+        0,
+        1.5,
+      ),
+      webhookId: "GENERATE_PRIVATE_DEPLOYMENT_COPY",
+      credentials: telegramCredential,
+    },
+    code("Authorize Telegram owner", telegramGuardCode, 270),
+    {
+      ...http(
+        "Read or change fictional demo state",
+        "/api/command",
+        560,
+        "={{ JSON.stringify($json.command) }}",
+      ),
+      retryOnFail: false,
+      continueOnFail: true,
+    },
+    code("Format private owner reply", telegramReplyCode, 840),
+    {
+      ...node(
+        "Reply only to the authorized owner",
+        "telegram",
+        {
+          resource: "message",
+          operation: "sendMessage",
+          chatId: "={{ $json.chat_id }}",
+          text: "={{ $json.text }}",
+          additionalFields: {
+            appendAttribution: false,
+            disable_web_page_preview: true,
+            disable_notification: true,
+          },
+        },
+        1120,
+        0,
+        1.2,
+      ),
+      credentials: telegramCredential,
+    },
+  ],
+);
+liveTelegram.settings.saveDataSuccessExecution = "none";
+liveTelegram.settings.saveDataErrorExecution = "none";
+workflows.push(liveTelegram);
 await mkdir("workflows", { recursive: true });
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
-    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture"][i]}.json`,
+    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private"][i]}.json`,
     workflows[i],
   );
 await mkdir("fixtures", { recursive: true });

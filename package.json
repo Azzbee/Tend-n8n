@@ -12,7 +12,9 @@
     "start": "node --experimental-strip-types src/server.ts",
     "verify": "bun run typecheck && bun run lint && bun run test && bun run build && bun run format:check",
     "integration": "node --experimental-strip-types src/integration.ts",
-    "schema:check": "node --experimental-strip-types src/check-schema.ts"
+    "schema:check": "node --experimental-strip-types src/check-schema.ts",
+    "telegram:prepare": "node --experimental-strip-types src/prepare-telegram.ts",
+    "telegram:proxy": "node --experimental-strip-types src/webhook-proxy.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

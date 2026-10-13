@@ -48,14 +48,17 @@ describe("import and node boundaries", () => {
   });
   it("ships nine inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(9);
+    expect(files).toHaveLength(10);
     for (const f of files) {
       const raw = readFileSync(`workflows/${f}`, "utf8");
       expect(load(f).active).toBe(false);
       if (f === "07-extract-commitments.json")
         expect(raw).toContain('"ollamaApi"');
+      else if (f === "10-telegram-private.json")
+        expect(raw).toContain('"telegramApi"');
       else expect(raw).not.toContain('"credentials"');
-      expect(raw).not.toMatch(/n8n-nodes-base\.(gmail|telegram|whatsApp)/);
+      if (f !== "10-telegram-private.json")
+        expect(raw).not.toMatch(/n8n-nodes-base\.(gmail|telegram|whatsApp)/);
     }
   });
   it("adapters embed a callable unpublished subworkflow", () => {

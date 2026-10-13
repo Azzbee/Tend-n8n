@@ -1,0 +1,137 @@
+{
+  "id": "TendLiveTelegram",
+  "name": "Tend 10: Private Telegram control (fictional evidence)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "telegram-private-message",
+      "name": "Telegram private message",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.5,
+      "position": [0, 0],
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {
+          "download": false,
+          "chatIds": "CONFIGURE_OWNER_CHAT_ID",
+          "userIds": "CONFIGURE_OWNER_USER_ID"
+        }
+      },
+      "webhookId": "GENERATE_PRIVATE_DEPLOYMENT_COPY",
+      "credentials": {
+        "telegramApi": {
+          "id": "TendReviewTelegram",
+          "name": "TendReviewTelegram"
+        }
+      }
+    },
+    {
+      "id": "authorize-telegram-owner",
+      "name": "Authorize Telegram owner",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [270, 0],
+      "parameters": {
+        "jsCode": "\nconst allowedUserId = \"CONFIGURE_OWNER_USER_ID\";\nconst allowedChatId = \"CONFIGURE_OWNER_CHAT_ID\";\nconst update = $input.first().json;\nconst message = update && update.message;\nconst validId = value => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;\nif (!/^[1-9]\\d{0,15}$/.test(allowedUserId) || !/^[1-9]\\d{0,15}$/.test(allowedChatId)) return [];\nif (!message || !message.from || !message.chat || message.chat.type !== 'private' || message.from.is_bot === true) return [];\nif (!validId(message.from.id) || !validId(message.chat.id) || String(message.from.id) !== allowedUserId || String(message.chat.id) !== allowedChatId) return [];\nif (typeof message.text !== 'string' || message.text.length > 500) return [];\nconst text = message.text.trim();\nif (!text.startsWith('/')) return [];\nconst help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel)(?:\\s|$)/.test(text);\nreturn [{json:{reply_chat_id:allowedChatId,help,command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];\n"
+      }
+    },
+    {
+      "id": "read-or-change-fictional-demo-state",
+      "name": "Read or change fictional demo state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/command",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.command) }}",
+        "options": { "timeout": 10000 }
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "continueOnFail": true
+    },
+    {
+      "id": "format-private-owner-reply",
+      "name": "Format private owner reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 0],
+      "parameters": {
+        "jsCode": "\nconst authorized = $('Authorize Telegram owner').first().json;\nif (!authorized || typeof authorized.reply_chat_id !== 'string' || !/^[1-9]\\d{0,15}$/.test(authorized.reply_chat_id)) throw new Error('missing authorized reply destination');\nconst reply = $input.first().json;\nconst record = value => typeof value === 'object' && value !== null && !Array.isArray(value);\nconst string = value => typeof value === 'string' ? value : '';\nconst lines = ['Course demo • fictional data'];\nif(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');\nelse if(!record(reply) || reply.error) lines.push('Command failed. Check the command and local service. Use /help for examples.');\nelse {\n if(record(reply.counts)) lines.push('Source records: ' + reply.counts.interactions + '. Promise candidates: ' + reply.counts.commitments + '.');\n if(record(reply.contact)) lines.push('Contact: ' + string(reply.contact.name) + ' (' + string(reply.contact.contact_id) + ').');\n if(typeof reply.clock === 'string') lines.push('Fixture clock: ' + reply.clock + '.');\n if(Array.isArray(reply.sources) || Array.isArray(reply.coverage)) {\n   const sources = Array.isArray(reply.sources) ? reply.sources : reply.coverage;\n   lines.push('Sources:'); for(const source of sources.filter(record)) lines.push(string(source.source) + ': ' + string(source.status) + ', ' + string(source.mode) + '.');\n }\n const commitments = Array.isArray(reply.commitments) ? reply.commitments : [];\n const pending = Array.isArray(reply.pending) ? reply.pending : [];\n if(commitments.length || pending.length) {\n   lines.push('Promises:'); for(const item of [...commitments,...pending].filter(record)) lines.push(string(item.commitment_id) + ': ' + (item.direction === 'owed_by_me' ? 'You owe' : 'Owed to you') + ' ' + string(item.action) + '. ' + string(item.status) + '; due ' + (item.due_date || item.suggested_due || 'not confirmed') + '.');\n }\n if(Array.isArray(reply.meetings)) {lines.push('Upcoming fixture meetings:');if(!reply.meetings.length) lines.push('None in the fixture window.');for(const item of reply.meetings.filter(record))lines.push(string(item.occurred_at) + ': ' + string(item.body_text));}\n if(Array.isArray(reply.evidence)) {lines.push('Evidence:');for(const item of reply.evidence.filter(record))lines.push(string(item.source) + ': ' + string(item.text) + ' [' + string(item.reference) + ']');}\n if(typeof reply.commitment_id === 'string')lines.push(reply.commitment_id + ': ' + string(reply.status) + '. Due ' + (reply.due_date || 'not confirmed') + '.',string(reply.action));\n if(typeof reply.preview === 'string')lines.push('Private draft preview only. Nothing sent to a contact.',reply.preview);\n if(typeof reply.warning === 'string')lines.push(reply.warning);\n}\nlet text = lines.join('\\n');\nif(text.length > 3900) text = text.slice(0,3800).replace(/[\\uD800-\\uDBFF]$/, '') + '\\n… Reply shortened. Ask for a narrower contact or task.';\nreturn [{json:{chat_id:authorized.reply_chat_id,text}}];\n"
+      }
+    },
+    {
+      "id": "reply-only-to-the-authorized-owner",
+      "name": "Reply only to the authorized owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1120, 0],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "disable_notification": true
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "TendReviewTelegram",
+          "name": "TendReviewTelegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram private message": {
+      "main": [
+        [{ "node": "Authorize Telegram owner", "type": "main", "index": 0 }]
+      ]
+    },
+    "Authorize Telegram owner": {
+      "main": [
+        [
+          {
+            "node": "Read or change fictional demo state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read or change fictional demo state": {
+      "main": [
+        [{ "node": "Format private owner reply", "type": "main", "index": 0 }]
+      ]
+    },
+    "Format private owner reply": {
+      "main": [
+        [
+          {
+            "node": "Reply only to the authorized owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000000",
+  "meta": { "templateCredsSetupCompleted": false }
+}
