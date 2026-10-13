@@ -21,6 +21,7 @@ Persistence is real local SQLite. The PostgreSQL schema was executed successfull
 
 Course mapping
 Implemented: Code, HTTP/API requests to local fixtures and local AI, conditional branch, real persistence, callable sub-workflow, AI output validation and bounded retry demonstration.
+The model runs through HTTP Request to Ollama and Code guards, not a native n8n AI Agent or LLM Chain node. Teacher acceptance of the course's AI-node criterion remains to be confirmed.
 Not connected: external Telegram message trigger; real Gmail/Calendar/WhatsApp/LinkedIn initial and incremental reads. n8n represents the orchestration and calls the local engine for validation/state. Expanded Tend scope needs Benjamin's approval. Confirm whether the local fixture demonstration is accepted as the interim validation artifact.
 
 Dates and review
