@@ -373,7 +373,9 @@ bun run schema:check</pre>
         Keep these template IDs in a new isolated instance. Import
         <code>workflows</code> using n8n's separate-file import. The adapters
         embed their sub-workflow, so no publication is needed. Run 01 through
-        05, then 07, 08 and 09. Replay 01 and 07; the stored counts stay seven
+        05, then run 07 with its default g1 record. Change 07's Select fictional
+        record node to g2 and run 07 again to extract the outgoing promise. Then
+        run 08 and 09. Replay 01 and 07; the stored counts stay seven
         interactions and two candidates (one per direction).
       </p>
       <p>
