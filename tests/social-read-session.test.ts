@@ -22,6 +22,10 @@ const personal = {
     source: "whatsapp_personal" as const,
     account_id: "personal-one",
   },
+  business = {
+    source: "whatsapp_business" as const,
+    account_id: "business-one",
+  },
   linked = { source: "linkedin" as const, account_id: "urn:li:person:owner" };
 const policy = parseSocialPolicy({
   window_days: 30,
@@ -30,6 +34,13 @@ const policy = parseSocialPolicy({
       ...personal,
       provider: "unipile",
       owner_identity: "owner-user",
+      owner_verified: true,
+      api_base_url: "https://api1.unipile.com:13111",
+    },
+    {
+      ...business,
+      provider: "unipile",
+      owner_identity: "business-owner",
       owner_verified: true,
       api_base_url: "https://api1.unipile.com:13111",
     },
@@ -92,7 +103,7 @@ describe.each(["sqlite", "postgres"] as const)(
       await store.seed(
         [],
         [],
-        [personal, linked].map((a) => ({
+        [personal, business, linked].map((a) => ({
           owner_id: owner,
           ...a,
           mode: "live",
@@ -113,28 +124,24 @@ describe.each(["sqlite", "postgres"] as const)(
     afterEach(async () => {
       await store.close();
     });
-    async function identity(account = personal): Promise<string> {
+    async function identity(
+      account: typeof personal | typeof business = personal,
+    ): Promise<string> {
       const p = request(await sessions.plan({ ...account, phase: "identity" }));
-      const body =
-        account.source === "whatsapp_personal"
-          ? {
-              object: "Account",
-              type: "WHATSAPP",
-              id: account.account_id,
-              connection_params: { im: { phone_number: "owner-user" } },
-              sources: [{ status: "OK" }],
-            }
-          : {
-              elements: [
-                {
-                  memberComplianceAuthorizationKey: {
-                    member: account.account_id,
-                  },
-                  memberComplianceScopes: ["DMA"],
-                  regulatedAt: now.getTime() - 86400000,
-                },
-              ],
-            };
+      const body = {
+        object: "Account",
+        type: "WHATSAPP",
+        id: account.account_id,
+        connection_params: {
+          im: {
+            phone_number:
+              account.source === "whatsapp_business"
+                ? "business-owner"
+                : "owner-user",
+          },
+        },
+        sources: [{ status: "OK" }],
+      };
       return proof(
         await sessions.result({ request_id: p.request_id, status: 200, body }),
       ).proof_id;
@@ -184,6 +191,135 @@ describe.each(["sqlite", "postgres"] as const)(
         }),
       ).toMatchObject({ kind: "page", complete: true });
     }
+    it.each(["wrong_phone", "wrong_account"] as const)(
+      "rejects Business identity %s without issuing a proof",
+      async (invalid) => {
+        const planned = request(
+          await sessions.plan({ ...business, phase: "identity" }),
+        );
+        expect(
+          await sessions.result({
+            request_id: planned.request_id,
+            status: 200,
+            body: {
+              object: "Account",
+              type: "WHATSAPP",
+              id:
+                invalid === "wrong_account"
+                  ? personal.account_id
+                  : business.account_id,
+              connection_params: {
+                im: {
+                  phone_number:
+                    invalid === "wrong_phone" ? "owner-user" : "business-owner",
+                },
+              },
+              sources: [{ status: "OK" }],
+            },
+          }),
+        ).toEqual({ kind: "blocked", reason: "unverified_provider_owner" });
+        expect((await store.counts(owner)).interactions).toBe(0);
+      },
+    );
+    it("binds Personal and Business proofs independently in both directions", async () => {
+      const personalProof = await identity(),
+        businessProof = await identity(business);
+      for (const [account, proof_id] of [
+        [business, personalProof],
+        [personal, businessProof],
+      ] as const) {
+        expect(
+          await sessions.plan({ ...account, phase: "snapshot", proof_id }),
+        ).toEqual({
+          available: false,
+          reason: "fresh_identity_proof_required",
+        });
+      }
+      const selected = request(
+        await sessions.plan({
+          ...business,
+          phase: "snapshot",
+          proof_id: businessProof,
+        }),
+      );
+      expect(selected.plan.source).toBe("whatsapp_business");
+      expect(selected.plan.account_id).toBe(business.account_id);
+      expect(selected.plan.expected_owner_identity).toBe("business-owner");
+      expect(
+        await sessions.result({
+          request_id: selected.request_id,
+          status: 200,
+          body: {
+            object: "MessageList",
+            cursor: null,
+            items: [
+              {
+                id: "business-message",
+                account_id: business.account_id,
+                chat_id: "business-thread",
+                sender_id: "business-friend",
+                timestamp: "2026-10-13T12:00:00Z",
+                is_sender: false,
+                text: "Business fictional text",
+                attendees: [
+                  { attendee_provider_id: "business-owner" },
+                  { attendee_provider_id: "business-friend" },
+                ],
+              },
+            ],
+          },
+        }),
+      ).toMatchObject({ kind: "page", accepted: 1, complete: true });
+      expect((await store.interactions(owner))[0]?.source).toBe(
+        "whatsapp_business",
+      );
+      expect(
+        (await store.sourceStatus(owner)).find(
+          (value) => value.source === "whatsapp_personal",
+        )?.last_success,
+      ).toBeNull();
+      expect(
+        await sessions.result({
+          request_id: selected.request_id,
+          status: 200,
+          body: {},
+        }),
+      ).toEqual({
+        kind: "blocked",
+        reason: "social_request_expired_or_consumed",
+      });
+    });
+    it("expires Business pending reads and proof sessions without transferable recovery", async () => {
+      const pending = request(
+        await sessions.plan({ ...business, phase: "identity" }),
+      );
+      now = new Date(now.getTime() + 120000);
+      expect(
+        await sessions.result({
+          request_id: pending.request_id,
+          status: 200,
+          body: {},
+        }),
+      ).toEqual({
+        kind: "blocked",
+        reason: "social_request_expired_or_consumed",
+      });
+      const proof_id = await identity(business);
+      const restarted = new SocialReadSessions({
+        policy,
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      expect(
+        await restarted.plan({ ...business, phase: "snapshot", proof_id }),
+      ).toEqual({ available: false, reason: "fresh_identity_proof_required" });
+      now = new Date(now.getTime() + 300000);
+      expect(
+        await sessions.plan({ ...business, phase: "snapshot", proof_id }),
+      ).toEqual({ available: false, reason: "fresh_identity_proof_required" });
+      expect((await store.counts(owner)).interactions).toBe(0);
+    });
     it("requires server-issued exact owner proof and never accepts caller plans", async () => {
       expect(
         await sessions.plan({
