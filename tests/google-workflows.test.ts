@@ -30,9 +30,13 @@ function evaluate(
   code: string,
   input: unknown,
   linked: Record<string, unknown> = {},
+  allInput: unknown[] = [input],
 ): unknown {
   return vm.runInNewContext(`(function(){${code}})()`, {
-    $input: { first: () => ({ json: input }), all: () => [{ json: input }] },
+    $input: {
+      first: () => ({ json: input }),
+      all: () => allInput.map((json) => ({ json })),
+    },
     $: (name: string) => ({
       item: { json: linked[name] },
       first: () => ({ json: linked[name] }),
@@ -436,6 +440,85 @@ describe("read-only Google workflow contracts", () => {
       ).toThrow();
     },
   );
+  it.each(["gmail", "calendar"])(
+    "keeps %s child payloads linear and matches every expected page receipt",
+    (source) => {
+      const workflow = load(files[source === "gmail" ? 0 : 1]!);
+      const fan = workflow.nodes.find(
+        (n) => n.name === "Prepare bounded provider records",
+      )!;
+      const collector = workflow.nodes.find(
+        (n) => n.name === "Acknowledge only the committed complete page",
+      )!;
+      const records = Array.from({ length: 20 }, (_, i) => ({
+        id: `fictional-${i}`,
+        payload: "x".repeat(10000),
+      }));
+      const context = {
+        source,
+        account_email: "owner@example.invalid",
+        profile_account_email: "owner@example.invalid",
+        ...(source === "calendar" ? { calendar_id: "fictional-calendar" } : {}),
+        cursor: null,
+        next_cursor: "fictional-next",
+        window_start: "2026-09-14T12:00:00.000Z",
+        window_end: "2026-10-14T12:00:00.000Z",
+        deadline_at: Date.now() + 60000,
+        page_size: 20,
+        budget: { max_body_bytes: 262144 },
+        message_refs: records.map(({ id }) => ({ id })),
+        provider_records: records,
+      };
+      const items = evaluate(String(fan.parameters.jsCode), context) as {
+        json: {
+          context: Record<string, unknown>;
+          record: { id: string };
+          storage_body: string;
+        };
+      }[];
+      expect(items).toHaveLength(20);
+      expect(Buffer.byteLength(JSON.stringify(items))).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(records)) * 3,
+      );
+      for (const { json } of items) {
+        expect(json.context).not.toHaveProperty("provider_records");
+        expect(json.context).not.toHaveProperty("message_refs");
+        expect(json.context.expected_record_ids).toEqual(
+          records.map(({ id }) => id),
+        );
+        expect(JSON.parse(json.storage_body).records).toEqual([json.record]);
+      }
+      const receipts = items.map(({ json }) => ({
+        context: json.context,
+        source_record_id: json.record.id,
+        committed: true,
+      }));
+      const collect = (input: unknown[]) =>
+        evaluate(
+          String(collector.parameters.jsCode),
+          input[0],
+          {
+            "Prepare bounded provider records": items[0]!.json,
+          },
+          input,
+        );
+      expect(collect(receipts)).toEqual([
+        {
+          json: expect.objectContaining({
+            cursor: context.next_cursor,
+            seen_record_ids: records.map(({ id }) => id),
+            complete: false,
+            reconcile: false,
+          }),
+        },
+      ]);
+      expect(() => collect(receipts.slice(1))).toThrow();
+      expect(() => collect([...receipts.slice(1), receipts[1]])).toThrow();
+      expect(() =>
+        collect([{ ...receipts[0], committed: false }, ...receipts.slice(1)]),
+      ).toThrow();
+    },
+  );
   it("keeps empty pages and missing child receipts distinct from completion", () => {
     const n = load(files[0]!).nodes.find(
       (n) => n.name === "Acknowledge only the committed complete page",
@@ -446,7 +529,7 @@ describe("read-only Google workflow contracts", () => {
       profile_account_email: "owner@example.invalid",
       cursor: null,
       next_cursor: "page2",
-      provider_records: [],
+      expected_record_ids: [],
       deadline_at: Date.now() + 60000,
     };
     const run = (ctx: unknown, input: unknown) =>
@@ -473,7 +556,7 @@ describe("read-only Google workflow contracts", () => {
     );
     expect(() =>
       run(
-        { ...context, provider_records: [{ id: "m1" }, { id: "m2" }] },
+        { ...context, expected_record_ids: ["m1", "m2"] },
         { source_record_id: "m1", committed: true },
       ),
     ).toThrow();
