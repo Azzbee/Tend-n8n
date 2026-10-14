@@ -184,6 +184,15 @@ try {
         name: "Fictional AI16 header",
       };
   }
+  assert(
+    workflow.nodes.some(
+      (value) =>
+        isRecord(value) &&
+        value.name === "Deliver validated review only to enrolled owner" &&
+        value.disabled === true,
+    ),
+    "Default local review must not require an enabled Telegram credential",
+  );
   writeFileSync(join(scratch, "workflow.json"), JSON.stringify(workflow));
   writeFileSync(
     join(scratch, "credentials.json"),
@@ -311,6 +320,32 @@ try {
       Array.isArray(result.items) &&
       result.items.length > 0,
     "Native review result violated delivery boundary",
+  );
+  for (const name of [
+    "Prepare bounded validated owner review",
+    "Deliver validated review only to enrolled owner",
+    "Verify owner delivery receipt",
+  ])
+    assert(
+      !Object.hasOwn(runData, name),
+      "Default local review dispatched owner transport",
+    );
+  const localRuns = runData["Return local review without delivery"];
+  assert(
+    Array.isArray(localRuns) && isRecord(localRuns[0]),
+    "Default local terminal output missing",
+  );
+  const localData = recordMap(localRuns[0], "data");
+  assert(
+    Array.isArray(localData.main) &&
+      Array.isArray(localData.main[0]) &&
+      isRecord(localData.main[0][0]),
+    "Default local terminal result missing",
+  );
+  assert(
+    JSON.stringify(recordMap(localData.main[0][0], "json")) ===
+      JSON.stringify(result),
+    "Default terminal output changed the reviewed result",
   );
   for (const item of result.items) {
     assert(

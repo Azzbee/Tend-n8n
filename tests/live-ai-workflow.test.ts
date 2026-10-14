@@ -8,6 +8,7 @@ interface ReviewNode {
   parameters: Record<string, unknown>;
   retryOnFail?: boolean;
   continueOnFail?: boolean;
+  disabled?: boolean;
   credentials?: Record<string, { id: string }>;
 }
 interface ReviewWorkflow {
@@ -172,6 +173,7 @@ describe("manual private cited AI workflow", () => {
       workflow.connections["Prepare bounded validated owner review"]
         ?.main?.[0]?.[0]?.node,
     ).toBe(transport.name);
+    expect(transport.disabled).toBe(true);
     expect(transport.retryOnFail).toBe(false);
     expect(transport.continueOnFail).not.toBe(true);
     expect(transport.credentials?.telegramApi?.id).toBe(
@@ -363,6 +365,45 @@ describe("manual private cited AI workflow", () => {
     expect(() =>
       evaluate("Prepare bounded validated owner review", {}, linked),
     ).toThrow(/limit/);
+  });
+  it("accepts the installed Telegram node raw API envelope and rejects failed or malformed wrappers", () => {
+    const linked = {
+      "Validate explicit private AI selection": { owner_chat_id: "12345" },
+      "Return review only without delivery": {
+        status: "validated",
+        outbound_sent: false,
+        draft: null,
+      },
+    };
+    const message = { message_id: 42, chat: { id: 12345, type: "private" } };
+    expect(
+      evaluate(
+        "Verify owner delivery receipt",
+        { ok: true, result: message },
+        linked,
+      ),
+    ).toEqual([
+      {
+        json: expect.objectContaining({
+          owner_delivery: { status: "sent", message_id: 42 },
+        }),
+      },
+    ]);
+    for (const response of [
+      { ok: false, result: message },
+      { ok: false, ...message },
+      { ok: true, ...message },
+      { result: message },
+      { ok: true, result: null },
+      { ok: true, result: [] },
+      {
+        ok: true,
+        result: { ...message, chat: { id: 12346, type: "private" } },
+      },
+    ])
+      expect(() =>
+        evaluate("Verify owner delivery receipt", response, linked),
+      ).toThrow();
   });
   it("acknowledges only the configured private owner and never claims contact delivery", () => {
     const linked = {

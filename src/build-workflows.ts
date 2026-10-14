@@ -1231,6 +1231,7 @@ const reviewDelivery = {
     0,
     1.2,
   ),
+  disabled: true,
   retryOnFail: false,
   credentials: {
     telegramApi: {
@@ -1241,7 +1242,7 @@ const reviewDelivery = {
 };
 const reviewDeliveryReceipt = code(
   "Verify owner delivery receipt",
-  "const x=$input.first().json;const c=$('Validate explicit private AI selection').first().json;if(!Number.isSafeInteger(x.message_id)||x.message_id<=0||!x.chat||x.chat.type!=='private'||String(x.chat.id)!==c.owner_chat_id)throw new Error('Owner transport acknowledgement unavailable or mismatched; inspect delivery before any manual retry');return [{json:{...$('Return review only without delivery').first().json,owner_delivery:{status:'sent',message_id:x.message_id}}}];",
+  "const raw=$input.first().json;const wrapped=Object.hasOwn(raw,'result');if(!wrapped&&Object.hasOwn(raw,'ok'))throw new Error('Incomplete owner transport envelope; inspect delivery before any manual retry');if(wrapped&&(raw.ok!==true||!raw.result||typeof raw.result!=='object'||Array.isArray(raw.result)))throw new Error('Invalid owner transport envelope; inspect delivery before any manual retry');const x=wrapped?raw.result:raw;const c=$('Validate explicit private AI selection').first().json;if(!Number.isSafeInteger(x.message_id)||x.message_id<=0||!x.chat||x.chat.type!=='private'||String(x.chat.id)!==c.owner_chat_id)throw new Error('Owner transport acknowledgement unavailable or mismatched; inspect delivery before any manual retry');return [{json:{...$('Return review only without delivery').first().json,owner_delivery:{status:'sent',message_id:x.message_id}}}];",
   3500,
 );
 liveReviewAI.nodes.push(
