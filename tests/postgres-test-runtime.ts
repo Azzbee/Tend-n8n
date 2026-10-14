@@ -27,7 +27,7 @@ export async function postgresTestRuntime(): Promise<{
     { stdio: "pipe" },
   );
   const close = () => {
-    execFileSync("docker", ["stop", "--time", "1", name], { stdio: "pipe" });
+    execFileSync("docker", ["stop", "--timeout", "1", name], { stdio: "pipe" });
   };
   try {
     const port = execFileSync("docker", ["port", name, "5432/tcp"], {
@@ -37,7 +37,8 @@ export async function postgresTestRuntime(): Promise<{
       .split(":")
       .at(-1)!;
     const connectionString = `postgresql://tend_test@127.0.0.1:${port}/tend_test`;
-    for (let i = 0; i < 100; i++) {
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
       const pool = new Pool({ connectionString, connectionTimeoutMillis: 500 });
       try {
         await pool.query("SELECT 1");

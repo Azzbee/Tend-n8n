@@ -107,16 +107,26 @@ describe("canonical PostgreSQL live parity", () => {
         ],
         [state],
       );
-  }, 20000);
+  }, 90000);
   afterAll(async () => {
     await pg?.close();
     sqlite?.close();
     runtime?.close();
   });
   it("matches normalized records, candidate transitions, cursors and reply recovery", async () => {
-    const a = await pg.commitLiveBatch(batch()),
-      b = sqlite.commitLiveBatch(batch());
+    const initial = { ...batch(), operation_hash: "a".repeat(64) };
+    const a = await pg.commitLiveBatch(initial),
+      b = sqlite.commitLiveBatch(initial);
     expect(a).toEqual(b);
+    const replay = { ...initial, expected_cursor: "obsolete", records: [] };
+    expect(await pg.commitLiveBatch(replay)).toEqual([]);
+    expect(sqlite.commitLiveBatch(replay)).toEqual([]);
+    await expect(
+      pg.commitLiveBatch({ ...replay, operation_hash: "b".repeat(64) }),
+    ).rejects.toThrow("cursor");
+    await expect(
+      pg.commitLiveBatch({ ...replay, operation_hash: "invalid" }),
+    ).rejects.toThrow("operation hash");
     const candidate = {
       quote: record.body_text,
       action: "send the report",
@@ -255,6 +265,65 @@ describe("canonical PostgreSQL live parity", () => {
     ).rejects.toThrow("invalid transition");
   });
 
+  it("preserves confirmed decisions after evidence edits and permits explicit owner closure", async () => {
+    for (const store of [pg, sqlite]) {
+      const current = (await store.commitments(principal.owner_id))[0]!;
+      expect(current).toMatchObject({
+        status: "confirmed",
+        due_date: "2026-10-15",
+        evidence_valid: false,
+        quote: "",
+        action: "",
+      });
+      await store.ingest(record);
+      const replay = await store.addCandidate(record, {
+        quote: record.body_text,
+        action: "send the report",
+        suggested_due: "2026-10-15",
+      });
+      expect(replay).toEqual(current);
+      const auth = {
+        ...principal,
+        chat_type: "private",
+        text: `/draft ${current.commitment_id}`,
+      };
+      await expect(
+        Promise.resolve().then(() => store.command(auth)),
+      ).rejects.toThrow();
+      await expect(
+        Promise.resolve().then(() =>
+          store.command({
+            ...auth,
+            text: `/confirm ${current.commitment_id} 2026-10-15`,
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(
+        await store.command({
+          ...auth,
+          text: `/done ${current.commitment_id}`,
+        }),
+      ).toMatchObject({
+        status: "done",
+        due_date: "2026-10-15",
+        evidence_valid: false,
+      });
+    }
+    expect(
+      await pg.originalMessageTimes(
+        principal.owner_id,
+        "gmail",
+        state.account_id,
+      ),
+    ).toMatchObject({ r1: record.occurred_at });
+    expect(
+      await pg.originalMessageTimes(
+        principal.owner_id,
+        "gmail",
+        "foreign-account",
+      ),
+    ).toEqual({});
+  });
   it("stores multi-contact context with nullable scalar attribution and no personal candidate", async () => {
     const context = {
       ...record,

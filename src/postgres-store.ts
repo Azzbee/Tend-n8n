@@ -254,6 +254,23 @@ export class PostgresStore implements LiveStore {
       [state.owner_id, state.source, state.account_id, JSON.stringify(state)],
     );
   }
+  async originalMessageTimes(
+    owner: string,
+    source: Source,
+    account: string,
+  ): Promise<Record<string, string>> {
+    this.owner(owner);
+    return this.run(async (s) =>
+      Object.fromEntries(
+        (
+          await s.q<{ source_record_id: string; occurred_at: string }>(
+            "SELECT source_record_id,occurred_at FROM live_records WHERE owner_id=$1 AND source=$2 AND account_id=$3",
+            [owner, source, account],
+          )
+        ).map((row) => [row.source_record_id, row.occurred_at]),
+      ),
+    );
+  }
   async interactions(owner: string): Promise<NormalizedRecord[]> {
     this.owner(owner);
     return this.run(async (s) =>
@@ -294,7 +311,11 @@ export class PostgresStore implements LiveStore {
       await this.identities(raw.owner_id),
     );
     const state = await this.state(raw.owner_id, raw.source, raw.account_id);
-    if (state.mode !== raw.ingestion_mode || state.status === "revoked")
+    if (
+      state.mode !== "live" ||
+      !["live", "snapshot"].includes(raw.ingestion_mode) ||
+      state.status === "revoked"
+    )
       throw new Error("unregistered account/mode or source revoked");
     const prior = (
       await this.q<{ content_hash: string }>(
@@ -332,7 +353,7 @@ export class PostgresStore implements LiveStore {
   }
   private async invalidate(owner: string, key: string): Promise<void> {
     await this.q(
-      "UPDATE live_obligations SET status=CASE WHEN status IN ('done','cancelled') THEN status ELSE 'invalidated' END,evidence_valid=false,quote='',action='',suggested_due=NULL,due_date=NULL WHERE owner_id=$1 AND record_key=$2",
+      "UPDATE live_obligations SET status=CASE WHEN status IN ('confirmed','done','cancelled') THEN status ELSE 'invalidated' END,evidence_valid=false,quote='',action='',suggested_due=NULL,due_date=CASE WHEN status='confirmed' THEN due_date ELSE NULL END WHERE owner_id=$1 AND record_key=$2",
       [owner, key],
     );
     await this.scrub(owner);
@@ -383,7 +404,14 @@ export class PostgresStore implements LiveStore {
           batch.source,
           batch.account_id,
         ),
-        hash = createHash("sha256").update(JSON.stringify(batch)).digest("hex");
+        hash =
+          batch.operation_hash ??
+          createHash("sha256").update(JSON.stringify(batch)).digest("hex");
+      if (
+        batch.operation_hash !== undefined &&
+        !/^[a-f0-9]{64}$/.test(batch.operation_hash)
+      )
+        throw new Error("invalid operation hash");
       if (state.mode !== "live" || state.status === "revoked")
         throw new Error("unregistered live account");
       if (state.last_batch_hash === hash) return [];
@@ -695,7 +723,11 @@ export class PostgresStore implements LiveStore {
           (c) => c.commitment_id === id,
         );
       if (current && current.status !== "invalidated") {
-        if (!current.evidence_valid) throw new Error("invalid evidence");
+        if (
+          !current.evidence_valid &&
+          !["confirmed", "done", "cancelled"].includes(current.status)
+        )
+          throw new Error("invalid evidence");
         return current;
       }
       const c: Commitment = {
@@ -1016,7 +1048,8 @@ export class PostgresStore implements LiveStore {
       );
       if (!c) throw new Error("unknown commitment");
       if (cmd === "/draft") {
-        if (c.status !== "confirmed") throw new Error("unconfirmed draft");
+        if (c.status !== "confirmed" || !c.evidence_valid)
+          throw new Error("unconfirmed or unavailable evidence for draft");
         return {
           outbound_sent: false,
           preview:
@@ -1029,6 +1062,8 @@ export class PostgresStore implements LiveStore {
       if (cmd === "/confirm") {
         if (!date || !exactTimestamp(`${date}T00:00:00Z`))
           throw new Error("explicit valid date required");
+        if (!c.evidence_valid)
+          throw new Error("invalid transition: evidence unavailable");
         if (c.status === "confirmed" && c.due_date === date)
           return { outbound_sent: false, ...c };
         if (c.status !== "pending" || !c.evidence_valid)

@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS live_records (
  source_record_id text NOT NULL, source_thread_id text NOT NULL, kind text NOT NULL CHECK(kind IN ('message','meeting')),
  direction text NOT NULL CHECK(direction IN ('sent','received','event')), actor_identity text NOT NULL,
  participant_identities text[] NOT NULL, occurred_at text NOT NULL, observed_at text NOT NULL, body_text text NOT NULL,
- evidence_reference text NOT NULL, ingestion_mode text NOT NULL CHECK(ingestion_mode='live'), coverage_start text NOT NULL, coverage_end text NOT NULL,
+ evidence_reference text NOT NULL, ingestion_mode text NOT NULL CHECK(ingestion_mode IN ('live','snapshot')), coverage_start text NOT NULL, coverage_end text NOT NULL,
  cancelled boolean NOT NULL, contact_id text, content_hash text NOT NULL, contact_ids text[] NOT NULL,
  authored_text text NOT NULL, authored_spans jsonb NOT NULL, attribution text NOT NULL, eligible_for_extraction boolean NOT NULL,
  end_at text, all_day boolean,
