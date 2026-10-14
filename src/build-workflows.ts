@@ -681,6 +681,7 @@ function addSyncStart(w: Workflow, source: "gmail" | "calendar"): string {
   return allowed.name;
 }
 const profileAccept = `if(!body||typeof body.emailAddress!=='string')throw new Error('profile shape');const email=body.emailAddress.toLowerCase();out=email===ctx.account_email?{...out,ok:true,profile_account_email:email,retry_allowed:false,reconnect_required:false}:{...out,status_code:403,profile_account_email:null,reconnect_required:true,retry_allowed:false,failure_kind:'account-mismatch'};`;
+const approvedRecordBodyCode = `(context,record)=>JSON.stringify({source:context.source,account_email:context.account_email,profile_account_email:context.profile_account_email,...(context.calendar_id?{calendar_id:context.calendar_id}:{}),records:[record],previous_cursor:context.cursor,cursor:context.cursor,complete:false,reconcile:false,window_start:context.window_start,window_end:context.window_end,seen_record_ids:[record.id]})`;
 const normalizeLive = privateWorkflow(
   "TendGoogle13",
   "Tend 13: Approved Google normalize and store",
@@ -695,14 +696,14 @@ const normalizeTrigger = node(
 );
 const normalizeCheck = code(
   "Validate approved raw input",
-  `const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');return [{json:x}];`,
+  `const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');const serialize=${approvedRecordBodyCode};if(typeof x.storage_body!=='string'||Buffer.byteLength(x.storage_body,'utf8')>c.budget.max_body_bytes||x.storage_body!==serialize(c,x.record))throw new Error('invalid approved storage body');return [{json:x}];`,
   250,
 );
 const normalizeCall = liveHttp(
   "Normalize and commit approved record",
   "/api/live/sync",
   500,
-  "={{ JSON.stringify({source:$json.context.source,account_email:$json.context.account_email,profile_account_email:$json.context.profile_account_email,...($json.context.calendar_id?{calendar_id:$json.context.calendar_id}:{}),records:[$json.record],previous_cursor:$json.context.cursor,cursor:$json.context.cursor,complete:false,reconcile:false,window_start:$json.context.window_start,window_end:$json.context.window_end,seen_record_ids:[$json.record.id]}) }}",
+  "={{ $json.storage_body }}",
 );
 const normalizedReceipt = code(
   "Return committed page context",
@@ -726,7 +727,7 @@ function addCommitPage(
 ): void {
   const fan = code(
     "Prepare bounded provider records",
-    `const ctx=$input.first().json;const records=${recordsExpression};if(!Array.isArray(records)||records.length>ctx.page_size)throw new Error('page budget exceeded');if(records.length===0)return [{json:{context:ctx,empty:true}}];return records.map(record=>{if(!record||typeof record.id!=='string'||!record.id)throw new Error('missing provider id');const bytes=Buffer.byteLength(JSON.stringify(record),'utf8');const bounded=bytes<=ctx.budget.max_body_bytes?record:{id:record.id,oversized:true};return {json:{context:ctx,record:bounded,empty:false}};});`,
+    `const ctx=$input.first().json;const records=${recordsExpression};if(!Array.isArray(records)||records.length>ctx.page_size)throw new Error('page budget exceeded');if(records.length===0)return [{json:{context:ctx,empty:true}}];return records.map(record=>{if(!record||typeof record.id!=='string'||!record.id)throw new Error('missing provider id');const serialize=${approvedRecordBodyCode};let storage_body=serialize(ctx,record);const bounded=Buffer.byteLength(storage_body,'utf8')<=ctx.budget.max_body_bytes?record:{id:record.id,oversized:true};if(bounded!==record)storage_body=serialize(ctx,bounded);if(Buffer.byteLength(storage_body,'utf8')>ctx.budget.max_body_bytes)throw new Error('storage envelope exceeds run budget; checkpoint unchanged');return {json:{context:ctx,record:bounded,storage_body,empty:false}};});`,
     x,
   );
   const empty = condition("Provider page is empty", "empty", x + 200);

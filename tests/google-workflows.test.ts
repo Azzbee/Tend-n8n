@@ -321,6 +321,121 @@ describe("read-only Google workflow contracts", () => {
       run({ quote: span, action: "send the money", suggested_due: null }),
     ).toThrow();
   });
+  it.each(["gmail", "calendar"])(
+    "bounds the complete %s storage envelope and sends the measured body unchanged",
+    (source) => {
+      const w = load(files[source === "gmail" ? 0 : 1]!);
+      const fan = w.nodes.find(
+        (n) => n.name === "Prepare bounded provider records",
+      )!;
+      const child = load(files[2]!);
+      const check = child.nodes.find(
+        (n) => n.name === "Validate approved raw input",
+      )!;
+      const request = child.nodes.find(
+        (n) => n.name === "Normalize and commit approved record",
+      )!;
+      const limit = 262144;
+      const context = {
+        source,
+        account_email: "owner@example.invalid",
+        profile_account_email: "owner@example.invalid",
+        ...(source === "calendar"
+          ? { calendar_id: "fictional-calendar@example.invalid" }
+          : {}),
+        cursor: '"\\'.repeat(1000),
+        window_start: "2026-09-14T12:00:00.000Z",
+        window_end: "2026-10-14T12:00:00.000Z",
+        deadline_at: Date.now() + 60000,
+        page_size: 20,
+        budget: { max_body_bytes: limit },
+      };
+      const envelope = (record: { id: string; payload?: string }) => ({
+        source,
+        account_email: context.account_email,
+        profile_account_email: context.profile_account_email,
+        ...("calendar_id" in context
+          ? { calendar_id: context.calendar_id }
+          : {}),
+        records: [record],
+        previous_cursor: context.cursor,
+        cursor: context.cursor,
+        complete: false,
+        reconcile: false,
+        window_start: context.window_start,
+        window_end: context.window_end,
+        seen_record_ids: [record.id],
+      });
+      const base = { id: "fictional-record", payload: '"\\你好' };
+      const overhead = Buffer.byteLength(JSON.stringify(envelope(base)));
+      const exact = {
+        ...base,
+        payload: base.payload + "x".repeat(limit - overhead),
+      };
+      const oversized = { ...exact, payload: exact.payload + "x" };
+      const run = (record: typeof exact) => {
+        const [item] = evaluate(String(fan.parameters.jsCode), {
+          ...context,
+          provider_records: [record],
+        }) as {
+          json: { context: unknown; record: unknown; storage_body: string };
+        }[];
+        return item!.json;
+      };
+      const bounded = run(exact);
+      expect(bounded.record).toEqual(exact);
+      expect(Buffer.byteLength(bounded.storage_body)).toBe(limit);
+      expect(bounded.storage_body).toBe(JSON.stringify(envelope(exact)));
+      expect(() =>
+        evaluate(String(check.parameters.jsCode), bounded),
+      ).not.toThrow();
+      const bodyExpression = String(request.parameters.body)
+        .slice(3, -3)
+        .replaceAll("$json", "$input.first().json");
+      expect(evaluate(`return ${bodyExpression};`, bounded)).toBe(
+        bounded.storage_body,
+      );
+      const rawAtLimit = {
+        ...base,
+        payload:
+          base.payload +
+          "x".repeat(limit - Buffer.byteLength(JSON.stringify(base))),
+      };
+      expect(Buffer.byteLength(JSON.stringify(rawAtLimit))).toBe(limit);
+      expect(run(rawAtLimit).record).toEqual({ id: base.id, oversized: true });
+      const sentinel = run(oversized);
+      expect(sentinel.record).toEqual({ id: exact.id, oversized: true });
+      expect(Buffer.byteLength(sentinel.storage_body)).toBeLessThan(limit);
+      expect(JSON.parse(sentinel.storage_body).records).toEqual([
+        sentinel.record,
+      ]);
+      expect(() =>
+        evaluate(String(check.parameters.jsCode), sentinel),
+      ).not.toThrow();
+      expect(() =>
+        evaluate(String(check.parameters.jsCode), {
+          ...bounded,
+          storage_body: bounded.storage_body.replace(
+            '"complete":false',
+            '"complete":true',
+          ),
+        }),
+      ).toThrow();
+      expect(() =>
+        evaluate(String(check.parameters.jsCode), {
+          ...bounded,
+          storage_body: undefined,
+        }),
+      ).toThrow();
+      expect(() =>
+        evaluate(String(fan.parameters.jsCode), {
+          ...context,
+          budget: { max_body_bytes: 1 },
+          provider_records: [oversized],
+        }),
+      ).toThrow();
+    },
+  );
   it("keeps empty pages and missing child receipts distinct from completion", () => {
     const n = load(files[0]!).nodes.find(
       (n) => n.name === "Acknowledge only the committed complete page",
