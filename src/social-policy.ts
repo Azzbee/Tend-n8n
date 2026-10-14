@@ -204,7 +204,7 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
         account.source === "whatsapp_personal" ||
         account.source === "whatsapp_business",
     )
-    .map((account) => account.owner_identity);
+    .map((account) => account.owner_identity.replace(/^\+(?=\d+$)/, ""));
   if (new Set(whatsappOwners).size !== whatsappOwners.length)
     throw new Error("duplicate WhatsApp owner identity");
   return { window_days: 30, accounts };

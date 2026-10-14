@@ -219,6 +219,44 @@ describe("explicit Unipile Business binding", () => {
       ).toThrow("duplicate WhatsApp owner identity");
     },
   );
+  it.each(["unipile", "meta"] as const)(
+    "rejects optional leading-plus owner aliases across Personal and %s Business",
+    (provider) => {
+      const owner_identity = "33123456789";
+      const selectedBusiness =
+        provider === "unipile"
+          ? { ...business, owner_identity }
+          : { ...example.accounts[1], owner_identity };
+      expect(() =>
+        parseSocialPolicy({
+          window_days: 30,
+          accounts: [
+            { ...example.accounts[0], owner_identity: "+" + owner_identity },
+            selectedBusiness,
+          ],
+        }),
+      ).toThrow("duplicate WhatsApp owner identity");
+    },
+  );
+  it("preserves exact provider owner strings and does not normalize nonnumeric identities", () => {
+    const parsed = parseSocialPolicy({
+      window_days: 30,
+      accounts: [
+        { ...example.accounts[0], owner_identity: "+33123456789" },
+        { ...business, owner_identity: "33123456780" },
+      ],
+    })!;
+    expect(parsed.accounts[0]?.owner_identity).toBe("+33123456789");
+    expect(
+      parseSocialPolicy({
+        window_days: 30,
+        accounts: [
+          { ...example.accounts[0], owner_identity: "+named-owner" },
+          { ...business, owner_identity: "named-owner" },
+        ],
+      })?.accounts,
+    ).toHaveLength(2);
+  });
   it("rejects one Unipile account bound to both sources", () => {
     expect(() =>
       parseSocialPolicy({
