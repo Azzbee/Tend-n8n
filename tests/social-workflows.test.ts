@@ -625,6 +625,70 @@ for (const [file, source, host, credential] of [
           ]).body.items[0]?.attendees,
         ).toHaveLength(2);
       });
+      it("retains phone-JID versus LID uncertainty without merging identities or blocking verified neighbors", () => {
+        for (const [messageProvider, chatProvider] of [
+          ["15550000099@s.whatsapp.net", "999999999@lid"],
+          ["999999999@lid", "15550000099@s.whatsapp.net"],
+        ])
+          for (const sent of [true, false]) {
+            const uncertain = {
+              ...message,
+              chat_provider_id: messageProvider,
+              is_sender: sent ? 1 : 0,
+              sender_id: sent ? "88888888@lid" : peer,
+            };
+            const neighbor = {
+              ...message,
+              id: "m2",
+              chat_provider_id: chatProvider,
+            };
+            const out = enriched(
+              { statusCode: 200, body: { ...chat, provider_id: chatProvider } },
+              [uncertain, neighbor],
+            );
+            expect(out.body.cursor).toBe("next");
+            expect(out.body.items[0]).not.toHaveProperty("attendees");
+            expect(out.body.items[1]?.attendees).toHaveLength(2);
+            const context = {
+              principal_id: "fictional-owner",
+              account_id: "fictional-account",
+              owner_identity: owner,
+              now: new Date("2026-10-14T12:00:00Z"),
+              authenticated: {
+                provider: "unipile" as const,
+                account_id: "fictional-account",
+              },
+            };
+            expect(
+              normalizeUnipileMessage(out.body.items[0], context, source),
+            ).toMatchObject({
+              kind: "accepted",
+              record: {
+                attribution: "unknown",
+                eligible_for_extraction: false,
+              },
+            });
+            expect(
+              normalizeUnipileMessage(out.body.items[1], context, source),
+            ).toMatchObject({
+              kind: "accepted",
+              record: { attribution: "direct", eligible_for_extraction: true },
+            });
+          }
+        for (const chat_provider_id of [
+          undefined,
+          "foreign",
+          "x@s.whatsapp.net",
+        ])
+          expect(
+            enriched({ statusCode: 200, body: chat }, [
+              { ...message, chat_provider_id },
+            ]),
+          ).toMatchObject({
+            statusCode: 599,
+            body: { error: "whatsapp_chat_provider_mismatch" },
+          });
+      });
       it("keeps outgoing opaque self chats unknown instead of inventing a peer", () => {
         const out = enriched({ statusCode: 200, body: chat }, [
           { ...message, sender_id: peer, is_sender: 1 },

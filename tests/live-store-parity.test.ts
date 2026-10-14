@@ -241,6 +241,80 @@ describe("canonical PostgreSQL live parity", () => {
       await foreign.close();
     }
   });
+  it("invalidates existing promises when unchanged text loses direct attribution", async () => {
+    const identity = {
+      owner_id: "downgrade-owner",
+      user_id: "downgrade-user",
+      chat_id: "downgrade-chat",
+    };
+    const postgres = await PostgresStore.open({
+      connectionString: runtime.connectionString,
+      principal: identity,
+      clock,
+    });
+    const memory = new TendStore(":memory:", {
+      mode: "live",
+      principal: identity,
+      clock,
+    });
+    const direct = { ...record, owner_id: identity.owner_id };
+    const input = {
+      quote: direct.body_text,
+      action: "send the report",
+      suggested_due: "2026-10-15",
+    };
+    try {
+      for (const store of [postgres, memory]) {
+        await store.seed(
+          [
+            {
+              owner_id: identity.owner_id,
+              contact_id: "friend",
+              name: "Friend",
+            },
+          ],
+          [
+            {
+              owner_id: identity.owner_id,
+              identity: "friend@example.com",
+              contact_id: "friend",
+            },
+            {
+              owner_id: identity.owner_id,
+              identity: "owner@example.com",
+              contact_id: "OWNER",
+            },
+          ],
+          [{ ...state, owner_id: identity.owner_id }],
+        );
+        const initial = await store.ingest(direct);
+        const candidate = await store.addCandidate(direct, input);
+        expect(candidate.evidence_valid).toBe(true);
+        const unknown = {
+          ...direct,
+          participant_identities: [],
+          contact_ids: [],
+          attribution: "unknown" as const,
+          eligible_for_extraction: false,
+        };
+        const retained = await store.ingest(unknown);
+        expect(retained.body_text).toBe(initial.body_text);
+        expect(retained.content_hash).not.toBe(initial.content_hash);
+        expect((await store.commitments(identity.owner_id))[0]).toMatchObject({
+          status: "invalidated",
+          evidence_valid: false,
+          quote: "",
+          action: "",
+        });
+        await expect(
+          Promise.resolve().then(() => store.addCandidate(unknown, input)),
+        ).rejects.toThrow();
+      }
+    } finally {
+      await postgres.close();
+      memory.close();
+    }
+  });
   it("invalidates changed evidence and scrubs pending replies atomically", async () => {
     const changed = {
       ...record,
