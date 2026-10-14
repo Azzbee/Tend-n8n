@@ -159,3 +159,56 @@ describe("approved social read policy", () => {
       end: "2026-10-14T12:00:00.000Z",
     }));
 });
+
+describe("explicit Unipile Business binding", () => {
+  const business = {
+    ...example.accounts[0],
+    source: "whatsapp_business",
+    account_id: "business-unipile",
+    owner_identity: "business-owner",
+  };
+  it("permits the approved Business provider without Meta fields", () => {
+    const parsed = parseSocialPolicy({
+      window_days: 30,
+      accounts: [example.accounts[0], business],
+    })!;
+    expect(parsed.accounts[1]).toMatchObject({
+      source: "whatsapp_business",
+      provider: "unipile",
+      account_id: "business-unipile",
+    });
+    expect(
+      assertSocialRead(
+        parsed,
+        "whatsapp_business",
+        "business-unipile",
+        "unipile.messages.list",
+      ).provider,
+    ).toBe("unipile");
+    expect(() =>
+      assertSocialRead(
+        parsed,
+        "whatsapp_business",
+        "business-unipile",
+        "meta.waba.get",
+      ),
+    ).toThrow();
+    expect(() =>
+      parseSocialPolicy({
+        window_days: 30,
+        accounts: [{ ...business, business_phone_number_id: "not-meta" }],
+      }),
+    ).toThrow();
+  });
+  it("rejects one Unipile account bound to both sources", () => {
+    expect(() =>
+      parseSocialPolicy({
+        window_days: 30,
+        accounts: [
+          example.accounts[0],
+          { ...business, account_id: example.accounts[0]!.account_id },
+        ],
+      }),
+    ).toThrow();
+  });
+});

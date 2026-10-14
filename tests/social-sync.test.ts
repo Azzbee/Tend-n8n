@@ -197,3 +197,39 @@ describe("bounded social page normalization", () => {
     expect(r.batch.removed_record_ids).toEqual(["message-one"]);
   });
 });
+
+describe("approved Unipile Business synchronization", () => {
+  const businessPolicy = {
+    window_days: 30,
+    accounts: [{ ...policy.accounts[0], source: "whatsapp_business" }],
+  };
+  it("uses policy-selected Business source across accepted and rejected results", () => {
+    const selected = parseSocialPolicy(businessPolicy)!;
+    const page = { ...request(), source: "whatsapp_business" as const };
+    const accepted = normalizeSocialBatch(selected, page, context);
+    expect(accepted.batch.source).toBe("whatsapp_business");
+    expect(accepted.batch.records[0]?.source).toBe("whatsapp_business");
+    expect(
+      normalizeSocialBatch(
+        selected,
+        { ...page, items: [{ ...message(), deleted: true }] },
+        context,
+      ).batch.removed_record_ids,
+    ).toEqual(["message-one"]);
+    expect(
+      normalizeSocialBatch(
+        selected,
+        { ...page, items: [{ ...message(), account_id: "foreign" }] },
+        context,
+      ).batch.quarantines,
+    ).toHaveLength(1);
+    expect(() => normalizeSocialBatch(selected, request(), context)).toThrow();
+    expect(() =>
+      normalizeSocialBatch(
+        selected,
+        { ...page, format: "meta_webhook" },
+        context,
+      ),
+    ).toThrow();
+  });
+});

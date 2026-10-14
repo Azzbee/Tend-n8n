@@ -326,8 +326,11 @@ function unipileMembers(raw: Record<string, unknown>): {
 export function normalizeUnipileMessage(
   input: unknown,
   context: MessagingContext,
+  source: "whatsapp_personal" | "whatsapp_business",
 ): MessagingResult {
-  return safe("whatsapp_personal", context, input, () => {
+  if (!["whatsapp_personal", "whatsapp_business"].includes(source))
+    throw new Error("unapproved_unipile_source");
+  return safe(source, context, input, () => {
     authenticate(context, "unipile");
     const raw = obj(input);
     if (id(raw.account_id) !== context.account_id)
@@ -343,7 +346,7 @@ export function normalizeUnipileMessage(
     const stableId = id(raw.id ?? raw.message_id);
     if (raw.is_event === true || raw.is_event === 1)
       return reject(
-        "whatsapp_personal",
+        source,
         context,
         stableId,
         "provider_system_event",
@@ -355,16 +358,10 @@ export function normalizeUnipileMessage(
     )
       throw new Error("unsupported_message_event");
     if (raw.deleted === 1 || raw.deleted === true)
-      return reject(
-        "whatsapp_personal",
-        context,
-        stableId,
-        "provider_deleted",
-        "deleted",
-      );
+      return reject(source, context, stableId, "provider_deleted", "deleted");
     if (raw.hidden === 1 || raw.hidden === true)
       return reject(
-        "whatsapp_personal",
+        source,
         context,
         stableId,
         "provider_hidden",
@@ -384,7 +381,7 @@ export function normalizeUnipileMessage(
       members.participants = [...new Set([context.owner_identity, actor])];
     return message(
       {
-        source: "whatsapp_personal",
+        source,
         provider: "unipile",
         recordId: id(raw.id ?? raw.message_id),
         threadId: id(raw.chat_id),
@@ -405,8 +402,11 @@ export function normalizeUnipileMessage(
 export function normalizeUnipileWebhook(
   input: unknown,
   context: MessagingContext,
+  source: "whatsapp_personal" | "whatsapp_business",
 ): MessagingResult {
-  return safe("whatsapp_personal", context, input, () => {
+  if (!["whatsapp_personal", "whatsapp_business"].includes(source))
+    throw new Error("unapproved_unipile_source");
+  return safe(source, context, input, () => {
     authenticate(context, "unipile");
     const raw = obj(input);
     if (
@@ -417,13 +417,7 @@ export function normalizeUnipileWebhook(
       throw new Error("foreign_account");
     const recordId = id(raw.message_id);
     if (raw.event === "message_deleted")
-      return reject(
-        "whatsapp_personal",
-        context,
-        recordId,
-        "provider_deleted",
-        "deleted",
-      );
+      return reject(source, context, recordId, "provider_deleted", "deleted");
     if (!["message_received", "message_edited"].includes(str(raw.event)))
       throw new Error("unsupported_event");
     const eventTime = instant(raw.timestamp);
@@ -432,7 +426,7 @@ export function normalizeUnipileWebhook(
     if (raw.event === "message_edited") {
       if (!context.original_message_times?.[recordId])
         return reject(
-          "whatsapp_personal",
+          source,
           context,
           recordId,
           "original_message_time_required",
@@ -442,7 +436,7 @@ export function normalizeUnipileWebhook(
         str(raw.message, 262144);
       } catch {
         return reject(
-          "whatsapp_personal",
+          source,
           context,
           recordId,
           "edited_content_unavailable",
@@ -456,7 +450,7 @@ export function normalizeUnipileWebhook(
       members.participants = [...new Set([context.owner_identity, actor])];
     return message(
       {
-        source: "whatsapp_personal",
+        source,
         provider: "unipile",
         recordId,
         threadId: id(raw.chat_id),

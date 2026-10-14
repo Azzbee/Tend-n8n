@@ -38,7 +38,11 @@ const accepted = (result: ReturnType<typeof normalizeUnipileMessage>) => {
 describe("Unipile personal messages", () => {
   it("excludes authenticated system events without accepting them as evidence", () => {
     for (const is_event of [true, 1]) {
-      const result = normalizeUnipileMessage({ ...msg(), is_event }, ctx);
+      const result = normalizeUnipileMessage(
+        { ...msg(), is_event },
+        ctx,
+        "whatsapp_personal",
+      );
       expect(result).toMatchObject({
         kind: "excluded",
         source_record_id: "message-one",
@@ -48,6 +52,7 @@ describe("Unipile personal messages", () => {
         normalizeUnipileMessage(
           { ...msg(), is_event, account_id: "foreign" },
           ctx,
+          "whatsapp_personal",
         ).kind,
       ).toBe("quarantined");
     }
@@ -56,10 +61,12 @@ describe("Unipile personal messages", () => {
     const a = normalizeUnipileMessage(
       { ...msg(), id: "bad-one", is_sender: "bad" },
       ctx,
+      "whatsapp_personal",
     );
     const b = normalizeUnipileMessage(
       { ...msg(), id: "bad-two", is_sender: "bad" },
       ctx,
+      "whatsapp_personal",
     );
     expect(a).toMatchObject({
       kind: "quarantined",
@@ -72,10 +79,12 @@ describe("Unipile personal messages", () => {
     const unknownA = normalizeUnipileMessage(
       { account_id: "account-one", text: "PRIVATE BAD A" },
       ctx,
+      "whatsapp_personal",
     );
     const unknownB = normalizeUnipileMessage(
       { account_id: "account-one", text: "PRIVATE BAD B" },
       ctx,
+      "whatsapp_personal",
     );
     if (unknownA.kind === "accepted" || unknownB.kind === "accepted")
       throw new Error("Invalid fixture accepted");
@@ -85,26 +94,43 @@ describe("Unipile personal messages", () => {
   });
   it("honors documented numeric deleted/hidden/event flags", () => {
     expect(
-      normalizeUnipileMessage({ ...msg(), deleted: 1 }, ctx),
+      normalizeUnipileMessage(
+        { ...msg(), deleted: 1 },
+        ctx,
+        "whatsapp_personal",
+      ),
     ).toMatchObject({ kind: "deleted", source_record_id: "message-one" });
-    expect(normalizeUnipileMessage({ ...msg(), hidden: 1 }, ctx)).toMatchObject(
-      { kind: "invalidated", source_record_id: "message-one" },
-    );
     expect(
-      normalizeUnipileMessage({ ...msg(), is_event: 1 }, ctx),
+      normalizeUnipileMessage(
+        { ...msg(), hidden: 1 },
+        ctx,
+        "whatsapp_personal",
+      ),
+    ).toMatchObject({ kind: "invalidated", source_record_id: "message-one" });
+    expect(
+      normalizeUnipileMessage(
+        { ...msg(), is_event: 1 },
+        ctx,
+        "whatsapp_personal",
+      ),
     ).toMatchObject({
       kind: "excluded",
       source_record_id: "message-one",
       reason: "provider_system_event",
     });
-    expect(normalizeUnipileMessage({ ...msg(), deleted: "1" }, ctx).kind).toBe(
-      "quarantined",
-    );
+    expect(
+      normalizeUnipileMessage(
+        { ...msg(), deleted: "1" },
+        ctx,
+        "whatsapp_personal",
+      ).kind,
+    ).toBe("quarantined");
     expect(
       accepted(
         normalizeUnipileMessage(
           { ...msg(), edited: 1, text: "I'll send the revision." },
           ctx,
+          "whatsapp_personal",
         ),
       ).record.body_text,
     ).toContain("revision");
@@ -117,11 +143,14 @@ describe("Unipile personal messages", () => {
           ...ctx,
           original_message_times: { "message-one": "2026-09-01T00:00:00Z" },
         },
+        "whatsapp_personal",
       ).kind,
     ).toBe("expired");
   });
   it("binds the account and direction, preserving source provenance", () => {
-    const r = accepted(normalizeUnipileMessage(msg(), ctx));
+    const r = accepted(
+      normalizeUnipileMessage(msg(), ctx, "whatsapp_personal"),
+    );
     expect(r.record.direction).toBe("received");
     expect(r.record.actor_identity).toBe("unipile:account-one:other-user");
     expect(r.record.eligible_for_extraction).toBe(true);
@@ -129,7 +158,9 @@ describe("Unipile personal messages", () => {
     expect(r.record.source).toBe("whatsapp_personal");
   });
   it("never merges display names across IDs or accounts", () => {
-    const a = accepted(normalizeUnipileMessage(msg(), ctx));
+    const a = accepted(
+      normalizeUnipileMessage(msg(), ctx, "whatsapp_personal"),
+    );
     const b = accepted(
       normalizeUnipileMessage(
         {
@@ -141,6 +172,7 @@ describe("Unipile personal messages", () => {
           ],
         },
         ctx,
+        "whatsapp_personal",
       ),
     );
     expect(a.contacts[0]?.contact_id).not.toBe(b.contacts[0]?.contact_id);
@@ -156,24 +188,31 @@ describe("Unipile personal messages", () => {
     { is_event: "true" },
     { is_hidden: true },
   ])("quarantines malformed or foreign messages", (patch) =>
-    expect(normalizeUnipileMessage({ ...msg(), ...patch }, ctx).kind).toBe(
-      "quarantined",
-    ),
+    expect(
+      normalizeUnipileMessage({ ...msg(), ...patch }, ctx, "whatsapp_personal")
+        .kind,
+    ).toBe("quarantined"),
   );
   it("requires authenticated binding and rejects expired/future dates", () => {
     expect(
-      normalizeUnipileMessage(msg(), { ...ctx, authenticated: null }).kind,
+      normalizeUnipileMessage(
+        msg(),
+        { ...ctx, authenticated: null },
+        "whatsapp_personal",
+      ).kind,
     ).toBe("quarantined");
     expect(
       normalizeUnipileMessage(
         { ...msg(), timestamp: "2026-09-01T00:00:00Z" },
         ctx,
+        "whatsapp_personal",
       ).kind,
     ).toBe("expired");
     expect(
       normalizeUnipileMessage(
         { ...msg(), timestamp: "2026-10-15T00:00:00Z" },
         ctx,
+        "whatsapp_personal",
       ).kind,
     ).toBe("quarantined");
   });
@@ -182,6 +221,7 @@ describe("Unipile personal messages", () => {
       normalizeUnipileMessage(
         { ...msg(), text: " Hi\n  I'll send it.\n> I will write." },
         ctx,
+        "whatsapp_personal",
       ),
     );
     for (const span of r.record.authored_spans)
@@ -197,6 +237,7 @@ describe("Unipile personal messages", () => {
           attendees: [...msg().attendees, { attendee_provider_id: "third" }],
         },
         ctx,
+        "whatsapp_personal",
       ),
     );
     expect(r.record.attribution).toBe("group");
@@ -206,7 +247,8 @@ describe("Unipile personal messages", () => {
     const { attendees: _ignored, ...input } = msg();
     void _ignored;
     expect(
-      accepted(normalizeUnipileMessage(input, ctx)).record.attribution,
+      accepted(normalizeUnipileMessage(input, ctx, "whatsapp_personal")).record
+        .attribution,
     ).toBe("unknown");
   });
   it("validates edit event timestamps as well as retained creation time", () => {
@@ -223,10 +265,14 @@ describe("Unipile personal messages", () => {
       attendees: msg().attendees,
     };
     expect(
-      normalizeUnipileWebhook(payload, {
-        ...ctx,
-        original_message_times: { "message-one": "2026-10-13T12:00:00Z" },
-      }).kind,
+      normalizeUnipileWebhook(
+        payload,
+        {
+          ...ctx,
+          original_message_times: { "message-one": "2026-10-13T12:00:00Z" },
+        },
+        "whatsapp_personal",
+      ).kind,
     ).toBe("quarantined");
   });
   it("never renews an expired message through an edit event", () => {
@@ -242,15 +288,21 @@ describe("Unipile personal messages", () => {
       sender: { attendee_provider_id: "other-user" },
       attendees: msg().attendees,
     };
-    expect(normalizeUnipileWebhook(payload, ctx)).toMatchObject({
+    expect(
+      normalizeUnipileWebhook(payload, ctx, "whatsapp_personal"),
+    ).toMatchObject({
       kind: "invalidated",
       reason: "original_message_time_required",
     });
     expect(
-      normalizeUnipileWebhook(payload, {
-        ...ctx,
-        original_message_times: { "message-one": "2026-09-01T00:00:00Z" },
-      }).kind,
+      normalizeUnipileWebhook(
+        payload,
+        {
+          ...ctx,
+          original_message_times: { "message-one": "2026-09-01T00:00:00Z" },
+        },
+        "whatsapp_personal",
+      ).kind,
     ).toBe("expired");
   });
   it("handles webhook edits and deletion on the same stable message ID", () => {
@@ -267,15 +319,23 @@ describe("Unipile personal messages", () => {
       attendees: msg().attendees,
     };
     const r = accepted(
-      normalizeUnipileWebhook(payload, {
-        ...ctx,
-        original_message_times: { "message-one": "2026-10-13T12:00:00Z" },
-      }),
+      normalizeUnipileWebhook(
+        payload,
+        {
+          ...ctx,
+          original_message_times: { "message-one": "2026-10-13T12:00:00Z" },
+        },
+        "whatsapp_personal",
+      ),
     );
     expect(r.record.source_record_id).toBe("message-one");
     expect(r.record.body_text).toContain("revised");
     expect(
-      normalizeUnipileWebhook({ ...payload, event: "message_deleted" }, ctx),
+      normalizeUnipileWebhook(
+        { ...payload, event: "message_deleted" },
+        ctx,
+        "whatsapp_personal",
+      ),
     ).toMatchObject({ kind: "deleted", source_record_id: "message-one" });
   });
 });
@@ -634,4 +694,91 @@ describe("LinkedIn official portability", () => {
     );
     expect(a.record.ingestion_mode).toBe("snapshot");
   });
+});
+
+describe("trusted Unipile WhatsApp source", () => {
+  it("rejects a missing or non-WhatsApp trusted source at runtime", () => {
+    for (const source of [undefined, "linkedin"] as const) {
+      expect(() =>
+        normalizeUnipileMessage(msg(), ctx, source as never),
+      ).toThrow("unapproved_unipile_source");
+      expect(() => normalizeUnipileWebhook({}, ctx, source as never)).toThrow(
+        "unapproved_unipile_source",
+      );
+    }
+  });
+  it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+    "keeps %s attribution across all message outcomes",
+    (source) => {
+      const good = accepted(
+        normalizeUnipileMessage({ ...msg(), source: "linkedin" }, ctx, source),
+      );
+      expect(good.record.source).toBe(source);
+      expect(
+        normalizeUnipileMessage(msg(), { ...ctx, authenticated: null }, source),
+      ).toMatchObject({ source, kind: "quarantined" });
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), edited: true },
+          {
+            ...ctx,
+            original_message_times: { "message-one": "2020-01-01T00:00:00Z" },
+          },
+          source,
+        ),
+      ).toMatchObject({ source, kind: "expired" });
+      const group = accepted(
+        normalizeUnipileMessage(
+          {
+            ...msg(),
+            attendees: [
+              ...msg().attendees,
+              { attendee_provider_id: "third-user" },
+            ],
+          },
+          ctx,
+          source,
+        ),
+      );
+      expect(group.record.source).toBe(source);
+      expect(group.record.eligible_for_extraction).toBe(false);
+
+      for (const [patch, kind] of [
+        [{ deleted: true }, "deleted"],
+        [{ hidden: true }, "invalidated"],
+        [{ is_event: true }, "excluded"],
+        [{ sender_id: "owner-user" }, "quarantined"],
+        [{ timestamp: "2020-01-01T00:00:00Z" }, "expired"],
+      ] as const) {
+        expect(
+          normalizeUnipileMessage({ ...msg(), ...patch }, ctx, source),
+        ).toMatchObject({ source, kind });
+      }
+      const payload = {
+        account_id: ctx.account_id,
+        account_type: "WHATSAPP",
+        account_info: { user_id: ctx.owner_identity },
+        event: "message_received",
+        chat_id: "chat-one",
+        message_id: "message-one",
+        timestamp: "2026-10-13T12:00:00Z",
+        sender: { attendee_provider_id: "other-user" },
+        message: "I'll send it.",
+        attendees: msg().attendees,
+      };
+      expect(
+        accepted(normalizeUnipileWebhook(payload, ctx, source)).record.source,
+      ).toBe(source);
+      for (const [patch, kind] of [
+        [{ event: "message_deleted" }, "deleted"],
+        [{ event: "message_edited" }, "invalidated"],
+        [{ account_id: "foreign" }, "quarantined"],
+        [{ timestamp: "2020-01-01T00:00:00Z" }, "expired"],
+      ] as const) {
+        expect(
+          normalizeUnipileWebhook({ ...payload, ...patch }, ctx, source),
+        ).toMatchObject({ source, kind });
+      }
+    },
+  );
 });

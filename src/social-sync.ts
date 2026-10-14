@@ -203,9 +203,17 @@ export function normalizeSocialBatch(
     (item): MessagingResult[] => {
       switch (request.format) {
         case "unipile_messages":
-          return [normalizeUnipileMessage(item, normalizeContext)];
+          if (account.provider !== "unipile")
+            throw new Error("unipile_source_required");
+          return [
+            normalizeUnipileMessage(item, normalizeContext, account.source),
+          ];
         case "unipile_webhook":
-          return [normalizeUnipileWebhook(item, normalizeContext)];
+          if (account.provider !== "unipile")
+            throw new Error("unipile_source_required");
+          return [
+            normalizeUnipileWebhook(item, normalizeContext, account.source),
+          ];
         case "meta_webhook":
           return normalizeMetaWebhook(item, normalizeContext);
         case "linkedin_snapshot":

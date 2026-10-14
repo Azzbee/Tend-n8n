@@ -9,6 +9,11 @@ export interface PersonalWhatsAppAccount extends AccountBinding {
   provider: "unipile";
   api_base_url: string;
 }
+export interface UnipileBusinessWhatsAppAccount extends AccountBinding {
+  source: "whatsapp_business";
+  provider: "unipile";
+  api_base_url: string;
+}
 export interface BusinessWhatsAppAccount extends AccountBinding {
   source: "whatsapp_business";
   provider: "meta";
@@ -24,7 +29,10 @@ export interface LinkedInAccount extends AccountBinding {
   }[];
 }
 export type SocialAccount =
-  PersonalWhatsAppAccount | BusinessWhatsAppAccount | LinkedInAccount;
+  | PersonalWhatsAppAccount
+  | UnipileBusinessWhatsAppAccount
+  | BusinessWhatsAppAccount
+  | LinkedInAccount;
 export interface SocialPolicy {
   window_days: 30;
   accounts: SocialAccount[];
@@ -131,7 +139,10 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
       owner_identity,
       owner_verified: true,
     };
-    if (source === "whatsapp_personal" && a.provider === "unipile") {
+    if (
+      (source === "whatsapp_personal" || source === "whatsapp_business") &&
+      a.provider === "unipile"
+    ) {
       keys(a, [...common, "api_base_url"]);
       return {
         ...binding,
@@ -182,6 +193,11 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
   });
   if (new Set(accounts.map((a) => a.source)).size !== accounts.length)
     throw new Error("duplicate social source");
+  if (
+    new Set(accounts.map((a) => JSON.stringify([a.provider, a.account_id])))
+      .size !== accounts.length
+  )
+    throw new Error("duplicate social provider account");
   return { window_days: 30, accounts };
 }
 export function socialAccount(
