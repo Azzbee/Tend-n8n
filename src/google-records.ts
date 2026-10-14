@@ -335,8 +335,6 @@ function entities(value: string): string {
 }
 /** Text-only HTML tokenizer. Attributes are never interpreted as URLs or fetched. */
 function htmlText(html: string): string {
-  const tokens =
-    html.match(/<!--[\s\S]*?-->|<(?:[^>"']|"[^"]*"|'[^']*')*>|[^<]+|</g) ?? [];
   const stack: { tag: string; suppressed: boolean }[] = [];
   const voidTags = new Set([
     "area",
@@ -368,21 +366,47 @@ function htmlText(html: string): string {
     "pre",
   ]);
   let text = "";
-  for (const token of tokens) {
+  for (let offset = 0; offset < html.length;) {
+    let end: number;
+    if (html[offset] !== "<") {
+      end = html.indexOf("<", offset);
+      if (end < 0) end = html.length;
+    } else if (html.startsWith("<!--", offset)) {
+      const close = html.indexOf("-->", offset + 4);
+      if (close < 0) throw new Error("malformed_html");
+      end = close + 3;
+    } else {
+      let quote = "";
+      for (end = offset + 1; end < html.length; end++) {
+        const char = html[end]!;
+        if (quote) {
+          if (char === quote) quote = "";
+        } else if (char === '"' || char === "'") quote = char;
+        else if (char === ">") break;
+        else if (char === "<") throw new Error("malformed_html");
+      }
+      if (end === html.length) throw new Error("malformed_html");
+      end++;
+    }
+    const token = html.slice(offset, end);
+    offset = end;
     if (token.startsWith("<!--") || token.startsWith("<!")) continue;
     if (token === "<") throw new Error("malformed_html");
     if (!token.startsWith("<")) {
       if (!stack.some((s) => s.suppressed)) text += entities(token);
       continue;
     }
-    const match = /^<\s*(\/?)\s*([a-z][a-z0-9:-]*)\b([\s\S]*?)>$/i.exec(token);
+    let content = token.slice(1, -1).trimStart();
+    const closing = content.startsWith("/");
+    if (closing) content = content.slice(1).trimStart();
+    const match = /^([a-z][a-z0-9:-]*)\b([\s\S]*)$/i.exec(content);
     if (!match) throw new Error("malformed_html");
-    const tag = match[2]!.toLowerCase(),
-      attrs = entities(match[3]!);
+    const tag = match[1]!.toLowerCase(),
+      attrs = entities(match[2]!);
     // Stop at a quotation/signature marker. Following unmarked text may still
     // be part of a wrapped quoted reply, rather than newly authored evidence.
     if (
-      !match[1] &&
+      !closing &&
       (tag === "blockquote" ||
         /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature|divRplyFwdMsg)/i.test(
           attrs,
@@ -390,7 +414,7 @@ function htmlText(html: string): string {
     )
       return text;
     const parentBlocked = stack.some((s) => s.suppressed);
-    if (match[1]) {
+    if (closing) {
       let index = stack.length - 1;
       while (index >= 0 && stack[index]?.tag !== tag) index--;
       if (index < 0) {

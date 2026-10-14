@@ -366,6 +366,69 @@ describe("conservative attribution edge cases", () => {
       ).toBe(false);
     }
   });
+  it.each(["gmail", "calendar"])(
+    "rejects an unterminated HTML comment in %s before treating its contents as evidence",
+    (source) => {
+      const description = "<!--<p>I will send confidential notes.";
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result).toMatchObject({
+        kind: "quarantined",
+        reason: "malformed_html",
+      });
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "bounds malformed HTML processing in %s without accepting incomplete tags or comments",
+    (source) => {
+      for (const description of [
+        "<".repeat(64000),
+        "<" + " ".repeat(96000) + ">",
+        '<a title="' + "<".repeat(64000),
+        "<!--<p>".repeat(10000),
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThan(
+          exampleLivePolicy.limits.max_body_bytes,
+        );
+        const started = performance.now();
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "malformed_html",
+        });
+        expect(performance.now() - started).toBeLessThan(1000);
+      }
+    },
+  );
+  it("preserves comments, declarations, quoted angle brackets and hidden text in valid HTML", () => {
+    const input = mail();
+    input.payload.mimeType = "text/html";
+    input.payload.body.data = encoded(
+      `<!DOCTYPE html><!--<p>Ignore me.</p>--><div><p title="1 < 2 > 0" data-note='a "quote" and < angle'>I will review the demo.</p><span hidden>Never expose this.</span><br>Thanks.</div>`,
+    );
+    const result = normalizeGmailMessage(input, context);
+    expect(result.kind).toBe("accepted");
+    expect(result.kind === "accepted" && result.record.authored_text).toBe(
+      "I will review the demo.\n\nThanks.",
+    );
+  });
   it("does not infer owner authorship from a received From header", () => {
     const input = mail();
     input.payload.headers[0]!.value = "owner@example.invalid";
