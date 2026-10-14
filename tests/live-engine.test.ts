@@ -401,6 +401,189 @@ describe("private live owner store", () => {
     store.close();
   });
 
+  it("retains exact offset and millisecond boundaries using JavaScript timestamp semantics", () => {
+    const store = makeStore();
+    try {
+      store.seed(
+        [],
+        [],
+        [
+          {
+            owner_id: principal.owner_id,
+            source: "calendar",
+            account_id: "primary",
+            mode: "live",
+            last_success: null,
+            status: "partial",
+            coverage_start: now().toISOString(),
+            coverage_end: "2026-10-21T12:00:00Z",
+            cursor: null,
+          },
+        ],
+      );
+      for (const [id, occurred_at] of [
+        ["mail-before", "2026-09-14T13:59:59.999+02:00"],
+        ["mail-equal", "2026-09-14T14:00:00.000+02:00"],
+        ["mail-after", "2026-09-14T14:00:00.001+02:00"],
+      ])
+        store.ingest({ ...raw(id), occurred_at: occurred_at! });
+      for (const [id, occurred_at, end_at] of [
+        [
+          "ended-equal",
+          "2026-10-14T13:00:00+02:00",
+          "2026-10-14T14:00:00.000+02:00",
+        ],
+        [
+          "ongoing-millisecond",
+          "2026-10-14T13:00:00+02:00",
+          "2026-10-14T14:00:00.001+02:00",
+        ],
+        [
+          "future-equal",
+          "2026-10-21T14:00:00.000+02:00",
+          "2026-10-21T15:00:00+02:00",
+        ],
+        [
+          "future-before",
+          "2026-10-21T13:59:59.999+02:00",
+          "2026-10-21T15:00:00+02:00",
+        ],
+        ["missing-end-equal", "2026-10-14T14:00:00.000+02:00", undefined],
+        ["missing-end-after", "2026-10-14T14:00:00.001+02:00", undefined],
+      ])
+        store.ingest({
+          ...raw(id),
+          source: "calendar",
+          account_id: "primary",
+          kind: "meeting",
+          direction: "event",
+          occurred_at: occurred_at!,
+          ...(end_at ? { end_at } : {}),
+          authored_text: "",
+          authored_spans: [],
+          eligible_for_extraction: false,
+        });
+      expect(() =>
+        store.expireLiveEvidence(
+          "another-owner",
+          "2026-09-14T12:00:00Z",
+          now().toISOString(),
+          "2026-10-21T12:00:00Z",
+        ),
+      ).toThrow("unauthorized owner");
+      store.expireLiveEvidence(
+        principal.owner_id,
+        "2026-09-14T12:00:00Z",
+        now().toISOString(),
+        "2026-10-21T12:00:00Z",
+      );
+      expect(
+        store
+          .interactions(principal.owner_id)
+          .map((r) => r.source_record_id)
+          .sort(),
+      ).toEqual([
+        "future-before",
+        "mail-after",
+        "mail-equal",
+        "missing-end-after",
+        "ongoing-millisecond",
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+  it("removes a provider id only from its source account and retains shared contacts while scrubbing cached replies", () => {
+    const store = makeStore();
+    try {
+      store.seed(
+        [{ owner_id: principal.owner_id, contact_id: "OWNER", name: "Me" }],
+        [],
+        ["primary", "secondary"].map((account_id) => ({
+          owner_id: principal.owner_id,
+          source: "calendar" as const,
+          account_id,
+          mode: "live" as const,
+          last_success: null,
+          status: "partial",
+          coverage_start: now().toISOString(),
+          coverage_end: "2026-10-21T12:00:00Z",
+          cursor: null,
+        })),
+      );
+      const mail = raw("same-provider-id");
+      store.ingest(mail);
+      store.addCandidate(mail, {
+        quote: mail.authored_spans[0]!.text,
+        action: "send the notes",
+        suggested_due: "2026-10-15",
+      });
+      for (const account_id of ["primary", "secondary"])
+        store.ingest({
+          ...raw("same-provider-id"),
+          source: "calendar",
+          account_id,
+          kind: "meeting",
+          direction: "event",
+          occurred_at: "2026-10-15T12:00:00Z",
+          end_at: "2026-10-15T13:00:00Z",
+          authored_text: "",
+          authored_spans: [],
+          eligible_for_extraction: false,
+        });
+      store.telegramCommand(
+        { ...auth, text: "/prep a@example.invalid" },
+        "test-live-channel",
+        300,
+      );
+      expect(store.cachedReplyText(principal.owner_id)).toContain(
+        "send the notes",
+      );
+      store.commitLiveBatch({
+        owner_id: principal.owner_id,
+        source: "calendar",
+        account_id: "primary",
+        records: [],
+        cursor: null,
+        expected_cursor: null,
+        complete: false,
+        reconcile: false,
+        coverage_start: now().toISOString(),
+        coverage_end: "2026-10-21T12:00:00Z",
+        seen_record_ids: ["same-provider-id"],
+        removed_record_ids: ["same-provider-id"],
+      });
+      expect(
+        store
+          .interactions(principal.owner_id)
+          .map((r) => [r.source, r.account_id]),
+      ).toEqual([
+        ["calendar", "secondary"],
+        ["gmail", "owner@example.invalid"],
+      ]);
+      expect(store.commitments(principal.owner_id)[0]?.status).toBe("pending");
+      expect(store.cachedReplyText(principal.owner_id)).toBe("{}");
+      expect(
+        store
+          .contacts(principal.owner_id)
+          .map((c) => c.contact_id)
+          .sort(),
+      ).toEqual(["A1", "OWNER"]);
+      store.revokeSource(principal.owner_id, "gmail");
+      expect(
+        store.resolveContact(principal.owner_id, "a@example.invalid")
+          .contact_id,
+      ).toBe("A1");
+      expect(
+        store
+          .contacts(principal.owner_id)
+          .map((c) => c.contact_id)
+          .sort(),
+      ).toEqual(["A1", "OWNER"]);
+    } finally {
+      store.close();
+    }
+  });
   it("binds owner queries and resolves email without merging same-name contacts", () => {
     const store = makeStore();
     store.ingest(raw());

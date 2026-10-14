@@ -571,9 +571,11 @@ export class TendStore {
     )
       throw new Error("unregistered account/mode");
     if (state.status === "revoked") throw new Error("source revoked");
-    const previous = this.interactions(raw.owner_id).find(
-      (record) => record.record_key === r.record_key,
-    );
+    const previous = this.db
+      .prepare(
+        "SELECT json_extract(data,'$.content_hash') AS content_hash FROM interactions WHERE owner_id=? AND record_key=?",
+      )
+      .get(raw.owner_id, r.record_key);
     if (previous && previous.content_hash !== r.content_hash) {
       for (const candidate of this.commitments(raw.owner_id).filter(
         (candidate) => candidate.record_key === r.record_key,
@@ -894,12 +896,13 @@ export class TendStore {
     accountId: string,
     providerId: string,
   ): void {
-    const record = this.interactions(owner).find(
-      (x) =>
-        x.source === source &&
-        x.account_id === accountId &&
-        x.source_record_id === providerId,
-    );
+    this.assertOwner(owner);
+    const record = this.db
+      .prepare(
+        "SELECT record_key FROM interactions WHERE owner_id=? AND source=? AND account_id=? AND source_record_id=?",
+      )
+      .get(owner, source, accountId, providerId) as
+      { record_key: string } | undefined;
     if (!record) return;
     for (const c of this.commitments(owner).filter(
       (x) => x.record_key === record.record_key,
@@ -935,7 +938,15 @@ export class TendStore {
     if (this.mode !== "live") throw new Error("live mode required");
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const record of this.interactions(owner))
+      const records = this.db
+        .prepare(
+          "SELECT source,account_id,source_record_id,json_extract(data,'$.occurred_at') AS occurred_at,json_extract(data,'$.end_at') AS end_at FROM interactions WHERE owner_id=?",
+        )
+        .all(owner) as unknown as (Pick<
+        NormalizedRecord,
+        "source" | "account_id" | "source_record_id" | "occurred_at"
+      > & { end_at: string | null })[];
+      for (const record of records)
         if (
           (record.source === "gmail" &&
             Date.parse(record.occurred_at) < Date.parse(gmailStart)) ||
@@ -964,11 +975,20 @@ export class TendStore {
   }
   private pruneLiveContacts(owner: string): void {
     if (this.mode !== "live") return;
+    this.assertOwner(owner);
     const used = new Set(
-      this.interactions(owner).flatMap((r) => r.contact_ids ?? []),
+      this.db
+        .prepare(
+          "SELECT DISTINCT value AS contact_id FROM interactions,json_each(interactions.data,'$.contact_ids') WHERE owner_id=?",
+        )
+        .all(owner)
+        .map((row) => row.contact_id),
     );
     let changed = false;
-    for (const contact of this.contacts(owner)) {
+    const contacts = this.db
+      .prepare("SELECT contact_id FROM contacts WHERE owner_id=?")
+      .all(owner) as unknown as Pick<Contact, "contact_id">[];
+    for (const contact of contacts) {
       if (contact.contact_id === "OWNER" || used.has(contact.contact_id))
         continue;
       changed = true;
