@@ -782,3 +782,187 @@ describe("trusted Unipile WhatsApp source", () => {
     },
   );
 });
+
+describe("provider-attested outgoing WhatsApp LIDs", () => {
+  it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+    "recovers %s outgoing opaque LIDs without inferring a counterparty",
+    (source) => {
+      for (const is_sender of [true, 1]) {
+        const raw = {
+          ...msg(),
+          sender_id: "12345678901234@lid",
+          is_sender,
+          attendees: undefined,
+        };
+        const result = accepted(normalizeUnipileMessage(raw, ctx, source));
+        expect(result.record).toMatchObject({
+          source,
+          direction: "sent",
+          actor_identity: "unipile:account-one:owner-user",
+          attribution: "unknown",
+          eligible_for_extraction: false,
+          contact_ids: [],
+        });
+        expect(result.contacts).toEqual([]);
+      }
+      expect(
+        normalizeUnipileMessage(
+          {
+            ...msg(),
+            sender_id: "123@lid",
+            is_sender: true,
+            attendees: undefined,
+          },
+          { ...ctx, max_body_bytes: 1 },
+          source,
+        ),
+      ).toMatchObject({ kind: "quarantined", reason: "body_size_limit" });
+      const incoming = accepted(
+        normalizeUnipileMessage(
+          { ...msg(), sender_id: "12345678901234@lid", attendees: undefined },
+          ctx,
+          source,
+        ),
+      );
+      expect(incoming.record).toMatchObject({
+        direction: "received",
+        attribution: "unknown",
+        eligible_for_extraction: false,
+      });
+      expect(incoming.record.actor_identity).toBe(
+        "unipile:account-one:12345678901234@lid",
+      );
+      for (const sender_id of [
+        "33111111111",
+        "33111111111@s.whatsapp.net",
+        "named@lid",
+        "123@lid.evil",
+        "123@lid\n",
+      ])
+        expect(
+          normalizeUnipileMessage(
+            { ...msg(), sender_id, is_sender: true },
+            ctx,
+            source,
+          ).kind,
+        ).toBe("quarantined");
+      for (const is_sender of [2, "1", "true"])
+        expect(
+          normalizeUnipileMessage(
+            { ...msg(), sender_id: "123@lid", is_sender },
+            ctx,
+            source,
+          ).kind,
+        ).toBe("quarantined");
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), sender_id: "123@lid", is_sender: 1 },
+          { ...ctx, authenticated: null },
+          source,
+        ).kind,
+      ).toBe("quarantined");
+      expect(
+        normalizeUnipileMessage(
+          {
+            ...msg(),
+            account_id: "foreign",
+            sender_id: "123@lid",
+            is_sender: 1,
+          },
+          ctx,
+          source,
+        ).kind,
+      ).toBe("quarantined");
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), sender_id: "123@lid", is_sender: 1, edited: true },
+          {
+            ...ctx,
+            original_message_times: { "message-one": "2020-01-01T00:00:00Z" },
+          },
+          source,
+        ),
+      ).toMatchObject({ source, kind: "expired" });
+    },
+  );
+  it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+    "quarantines %s null text without masking stronger validation failures",
+    (source) => {
+      expect(
+        normalizeUnipileMessage({ ...msg(), text: null }, ctx, source),
+      ).toMatchObject({
+        source,
+        kind: "quarantined",
+        reason: "provider_text_unavailable",
+      });
+      expect(
+        normalizeUnipileMessage(
+          {
+            ...msg(),
+            sender_id: "123@lid",
+            is_sender: 1,
+            attendees: undefined,
+            text: null,
+          },
+          ctx,
+          source,
+        ),
+      ).toMatchObject({
+        source,
+        kind: "quarantined",
+        reason: "provider_text_unavailable",
+      });
+      expect(
+        normalizeUnipileMessage(
+          {
+            ...msg(),
+            text: null,
+            sender_id: "123@lid",
+            is_sender: 1,
+            edited: true,
+            attendees: undefined,
+          },
+          {
+            ...ctx,
+            original_message_times: { "message-one": "2020-01-01T00:00:00Z" },
+          },
+          source,
+        ),
+      ).toMatchObject({ kind: "expired" });
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), text: null, timestamp: "2020-01-01T00:00:00Z" },
+          ctx,
+          source,
+        ),
+      ).toMatchObject({ kind: "expired" });
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), text: null, timestamp: "not-a-date" },
+          ctx,
+          source,
+        ),
+      ).toMatchObject({ kind: "quarantined", reason: "invalid_timestamp" });
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), text: null, sender_id: "foreign-phone", is_sender: 1 },
+          ctx,
+          source,
+        ),
+      ).toMatchObject({
+        kind: "quarantined",
+        reason: "sender_direction_mismatch",
+      });
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), text: null, attendees: [] },
+          ctx,
+          source,
+        ),
+      ).toMatchObject({
+        kind: "quarantined",
+        reason: "unverified_participants",
+      });
+    },
+  );
+});

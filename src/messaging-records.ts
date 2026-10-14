@@ -215,7 +215,7 @@ interface MessageFields {
   actor: string;
   participants: string[];
   when: Date;
-  text: string;
+  text: string | null;
   group?: boolean;
   membershipKnown: boolean;
   mode: "snapshot" | "live";
@@ -242,7 +242,7 @@ function message(
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
     maxBytes > 262144 ||
-    Buffer.byteLength(fields.text) > maxBytes
+    (fields.text !== null && Buffer.byteLength(fields.text) > maxBytes)
   )
     throw new Error("body_size_limit");
   const members = [...new Set(fields.participants)];
@@ -251,6 +251,8 @@ function message(
     (!members.includes(actor) || !members.includes(context.owner_identity))
   )
     throw new Error("unverified_participants");
+  if (fields.text === null)
+    return reject(source, context, recordId, "provider_text_unavailable");
   const others = members.filter((p) => p !== context.owner_identity);
   const attribution =
     fields.group || others.length > 1
@@ -367,13 +369,18 @@ export function normalizeUnipileMessage(
         "provider_hidden",
         "invalidated",
       );
-    const actor = id(raw.sender_id);
+    const providerActor = id(raw.sender_id);
     if (
       typeof raw.is_sender !== "boolean" &&
       raw.is_sender !== 0 &&
       raw.is_sender !== 1
     )
       throw new Error("invalid_direction");
+    // Authenticated is_sender identifies the account user; an opaque LID is not a phone.
+    const actor =
+      Boolean(raw.is_sender) && /^\d+@lid$/.test(providerActor)
+        ? context.owner_identity
+        : providerActor;
     if (Boolean(raw.is_sender) !== (actor === context.owner_identity))
       throw new Error("sender_direction_mismatch");
     const members = unipileMembers(raw);
@@ -391,7 +398,7 @@ export function normalizeUnipileMessage(
           context.original_message_times?.[stableId]
             ? originalTime(context, stableId)
             : instant(raw.timestamp),
-        text: str(raw.text, 262144),
+        text: raw.text === null ? null : str(raw.text, 262144),
         ...members,
         mode: "snapshot",
       },
