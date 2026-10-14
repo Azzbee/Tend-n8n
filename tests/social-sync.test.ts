@@ -1,3 +1,4 @@
+import { TendStore } from "../src/engine.ts";
 import { describe, expect, it } from "vitest";
 import {
   normalizeSocialBatch,
@@ -233,3 +234,104 @@ describe("approved Unipile Business synchronization", () => {
     ).toThrow();
   });
 });
+
+it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+  "invalidates retained %s evidence and pending AI when an edited snapshot loses its text",
+  (source) => {
+    const selected = parseSocialPolicy({
+      window_days: 30,
+      accounts: [{ ...policy.accounts[0], source }],
+    })!;
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: { owner_id: "owner", user_id: "u", chat_id: "c" },
+      clock: () => context.now,
+    });
+    try {
+      store.seed(
+        [],
+        [],
+        [
+          {
+            owner_id: "owner",
+            source,
+            account_id: "personal-one",
+            mode: "live",
+            last_success: null,
+            status: "partial",
+            coverage_start: request().coverage_start,
+            coverage_end: request().coverage_end,
+            cursor: null,
+          },
+        ],
+      );
+      const initial = normalizeSocialBatch(
+        selected,
+        { ...request(), source },
+        context,
+      );
+      const record = store.commitLiveBatch(initial.batch)[0]!;
+      const oldHash = record.content_hash;
+      expect(oldHash).toMatch(/^[a-f0-9]{64}$/);
+      const candidate = {
+        quote: record.body_text,
+        action: "send",
+        suggested_due: null,
+      };
+      expect(store.addCandidate(record, candidate).status).toBe("pending");
+      const currentContext = {
+        ...context,
+        original_message_times: store.originalMessageTimes(
+          "owner",
+          source,
+          "personal-one",
+        ),
+      };
+      const changed = normalizeSocialBatch(
+        selected,
+        {
+          ...request(),
+          source,
+          expected_cursor: "page-two",
+          cursor: "page-three",
+          items: [
+            {
+              ...message(),
+              edited: 1,
+              text: null,
+              timestamp: context.now.toISOString(),
+            },
+          ],
+        },
+        currentContext,
+      );
+      expect(changed.invalidated_record_ids).toEqual(["message-one"]);
+      expect(changed.batch.removed_record_ids).toEqual(["message-one"]);
+      expect(changed.batch.records).toEqual([]);
+      store.commitLiveBatch(changed.batch);
+      expect(store.interactions("owner")).toEqual([]);
+      expect(store.commitments("owner")[0]).toMatchObject({
+        status: "invalidated",
+        evidence_valid: false,
+        quote: "",
+        action: "",
+        suggested_due: null,
+      });
+      expect(() => store.addCandidate(record, candidate)).toThrow(
+        /unresolved identity|evidence not persisted\/current/,
+      );
+      const unavailable = normalizeSocialBatch(
+        selected,
+        { ...request(), source, items: [{ ...message(), text: null }] },
+        context,
+      );
+      expect(unavailable.invalidated_record_ids).toEqual([]);
+      expect(unavailable.batch.evidence_incomplete).toBe(true);
+      expect(unavailable.batch.quarantines?.[0]?.reason).toBe(
+        "provider_text_unavailable",
+      );
+    } finally {
+      store.close();
+    }
+  },
+);

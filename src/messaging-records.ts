@@ -386,7 +386,7 @@ export function normalizeUnipileMessage(
     const members = unipileMembers(raw);
     if (!members.membershipKnown)
       members.participants = [...new Set([context.owner_identity, actor])];
-    return message(
+    const normalized = message(
       {
         source,
         provider: "unipile",
@@ -404,6 +404,19 @@ export function normalizeUnipileMessage(
       },
       context,
     );
+    if (
+      (raw.edited === true || raw.edited === 1) &&
+      normalized.kind === "quarantined" &&
+      normalized.reason === "provider_text_unavailable"
+    )
+      return reject(
+        source,
+        context,
+        stableId,
+        "edited_content_unavailable",
+        "invalidated",
+      );
+    return normalized;
   });
 }
 export function normalizeUnipileWebhook(

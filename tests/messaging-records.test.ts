@@ -785,6 +785,57 @@ describe("trusted Unipile WhatsApp source", () => {
 
 describe("provider-attested outgoing WhatsApp LIDs", () => {
   it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+    "invalidates a retained %s null-text edit after identity and time checks",
+    (source) => {
+      const edited = { ...msg(), edited: 1, text: null };
+      const knownOriginal = {
+        ...ctx,
+        original_message_times: { "message-one": "2026-10-13T12:00:00Z" },
+      };
+      expect(
+        normalizeUnipileMessage(edited, knownOriginal, source),
+      ).toMatchObject({
+        source,
+        kind: "invalidated",
+        reason: "edited_content_unavailable",
+      });
+      expect(
+        normalizeUnipileMessage(
+          {
+            ...edited,
+            sender_id: "123@lid",
+            is_sender: 1,
+            attendees: undefined,
+          },
+          knownOriginal,
+          source,
+        ),
+      ).toMatchObject({
+        source,
+        kind: "invalidated",
+        reason: "edited_content_unavailable",
+      });
+      expect(
+        normalizeUnipileMessage(
+          { ...edited, account_id: "foreign" },
+          knownOriginal,
+          source,
+        ),
+      ).toMatchObject({ kind: "quarantined", reason: "foreign_account" });
+      expect(
+        normalizeUnipileMessage(
+          { ...edited, attendees: [] },
+          knownOriginal,
+          source,
+        ),
+      ).toMatchObject({
+        kind: "quarantined",
+        reason: "unverified_participants",
+      });
+    },
+  );
+
+  it.each(["whatsapp_personal", "whatsapp_business"] as const)(
     "recovers %s outgoing opaque LIDs without inferring a counterparty",
     (source) => {
       for (const is_sender of [true, 1]) {
