@@ -558,6 +558,14 @@ for (const [file, source, host, credential] of [
           ]).body.items[0]?.attendees,
         ).toHaveLength(2);
       });
+      it("keeps outgoing opaque self chats unknown instead of inventing a peer", () => {
+        const out = enriched({ statusCode: 200, body: chat }, [
+          { ...message, sender_id: peer, is_sender: 1 },
+          { ...message, sender_id: peer, is_sender: true },
+        ]);
+        for (const item of out.body.items)
+          expect(item).not.toHaveProperty("attendees");
+      });
       it("keeps groups, missing or conflicting proof and failed chat reads ineligible", () => {
         for (const replacement of [
           { type: 1 },
@@ -600,8 +608,50 @@ for (const [file, source, host, credential] of [
         ])
           expect(enriched(response)).toMatchObject({
             statusCode: 599,
-            body: { error: "chat_membership_unavailable" },
+            body: { error: expect.stringMatching(/^whatsapp_chat_[a-z_]+$/) },
           });
+      });
+      it("reports fixed private-data-free reasons for every blocked membership branch", () => {
+        for (const [response, reason] of [
+          [
+            { error: "private provider details" },
+            "whatsapp_chat_transport_failed",
+          ],
+          [{ statusCode: 429, body: {} }, "whatsapp_chat_rate_limited"],
+          [{ statusCode: 503, body: {} }, "whatsapp_chat_http_failed"],
+          [
+            { statusCode: 200, body: { ...chat, account_id: "foreign" } },
+            "whatsapp_chat_identity_mismatch",
+          ],
+          [
+            {
+              statusCode: 200,
+              body: { ...chat, attendee_provider_id: "bad\npeer" },
+            },
+            "whatsapp_chat_peer_invalid",
+          ],
+          [
+            { statusCode: 200, body: { ...chat, provider_id: "foreign" } },
+            "whatsapp_chat_provider_mismatch",
+          ],
+          [
+            { statusCode: 200, body: { ...chat, ignored: "x".repeat(262144) } },
+            "whatsapp_chat_response_budget",
+          ],
+        ] as const) {
+          expect(enriched(response)).toEqual({
+            statusCode: 599,
+            body: { error: reason },
+          });
+        }
+        expect(run("Verify exact WhatsApp membership", [], linked())).toEqual([
+          {
+            json: {
+              statusCode: 599,
+              body: { error: "whatsapp_chat_response_count" },
+            },
+          },
+        ]);
       });
       it("promotes only verified direct chats through the shared normalizer", () => {
         const context = {
