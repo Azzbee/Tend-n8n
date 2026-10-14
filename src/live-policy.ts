@@ -224,6 +224,21 @@ function parseContactGroups(
         source = token(m.source, 32) as Source,
         account_id = token(m.account_id),
         identity = token(m.identity);
+      const socialAccount = policy.social?.accounts.find(
+        (a) => a.source === source && a.account_id === account_id,
+      );
+      const canonicalPrefix = socialAccount
+        ? `${socialAccount.provider}:${account_id}:`
+        : undefined;
+      if (
+        canonicalPrefix &&
+        (!identity.startsWith(canonicalPrefix) ||
+          identity.length === canonicalPrefix.length)
+      )
+        throw new Error("canonical verified contact identity required");
+      const rawIdentity = canonicalPrefix
+        ? identity.slice(canonicalPrefix.length)
+        : identity;
       const enabled =
         source === "gmail"
           ? account_id === policy.account_email
@@ -237,7 +252,7 @@ function parseContactGroups(
         !enabled ||
         contact_id === "OWNER" ||
         contact_id.startsWith("group:") ||
-        owners.some((o) => ownerKey(o) === ownerKey(identity)) ||
+        owners.some((o) => ownerKey(o) === ownerKey(rawIdentity)) ||
         assignedContacts.has(contact_id) ||
         assignedIdentities.has(key) ||
         localIdentities.has(key)

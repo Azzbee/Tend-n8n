@@ -259,7 +259,7 @@ const group = {
       contact_id: "M17",
       source: "whatsapp_personal" as const,
       account_id: "wa-one",
-      identity: "peer@lid",
+      identity: "unipile:wa-one:peer@lid",
     },
   ],
 };
@@ -278,7 +278,7 @@ const waRecord = () =>
     account_id: "wa-one",
     contact_id: "M17",
     contact_ids: ["M17"],
-    actor_identity: "peer@lid",
+    actor_identity: "unipile:wa-one:peer@lid",
     record_key: "c".repeat(64),
     content_hash: "d".repeat(64),
     evidence_reference: "tend-source:whatsapp_personal/wa-one/message",

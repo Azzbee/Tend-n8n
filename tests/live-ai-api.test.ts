@@ -8,6 +8,7 @@ import {
   type LivePolicy,
 } from "../src/live-policy.ts";
 import type { LiveRecord } from "../src/google-records.ts";
+import { normalizeUnipileMessage } from "../src/messaging-records.ts";
 
 const key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
 const clock = () => new Date("2026-10-14T12:00:00Z");
@@ -254,7 +255,7 @@ function groupPolicy() {
             contact_id: "M1",
             source: "whatsapp_personal",
             account_id: "wa-one",
-            identity: "999999999@lid",
+            identity: "unipile:wa-one:999999999@lid",
           },
         ],
       },
@@ -262,25 +263,40 @@ function groupPolicy() {
   });
 }
 async function setupGroup(p: LivePolicy) {
-  const x = await setup(p);
-  x.store.seed(
-    [{ owner_id: p.principal_id, contact_id: "M1", name: "Fictional Person" }],
-    [{ owner_id: p.principal_id, contact_id: "M1", identity: "999999999@lid" }],
-    [],
+  const normalized = normalizeUnipileMessage(
+    {
+      id: "wa-message",
+      account_id: "wa-one",
+      chat_id: "fictional-chat",
+      sender_id: "999999999@lid",
+      is_sender: 0,
+      attendees: [
+        { attendee_provider_id: "15550000001" },
+        {
+          attendee_provider_id: "999999999@lid",
+          attendee_name: "Fictional Person",
+        },
+      ],
+      timestamp: "2026-10-14T08:00:00Z",
+      text: "The WhatsApp notes are ready.",
+    },
+    {
+      principal_id: p.principal_id,
+      account_id: "wa-one",
+      owner_identity: "15550000001",
+      now: clock(),
+      authenticated: { provider: "unipile", account_id: "wa-one" },
+    },
+    "whatsapp_personal",
   );
-  const text = "The WhatsApp notes are ready.";
-  const wa = x.store.ingest({
-    ...x.record,
-    source: "whatsapp_personal",
-    account_id: "wa-one",
-    source_record_id: "wa-message",
-    actor_identity: "999999999@lid",
-    contact_ids: ["M1"],
-    body_text: text,
-    authored_text: text,
-    authored_spans: [{ start: 0, end: text.length, text }],
-    evidence_reference: "tend-source:whatsapp_personal/wa-one/wa-message",
-  });
+  if (normalized.kind !== "accepted")
+    throw new Error("Fictional normalization failed");
+  const member = p.verified_contact_groups![0]!.members[1]!;
+  if (member.contact_id === "M1")
+    member.contact_id = normalized.contacts[0]!.contact_id;
+  const x = await setup(p);
+  x.store.seed(normalized.contacts, normalized.identities, []);
+  const wa = x.store.ingest(normalized.record);
   return { ...x, wa };
 }
 describe("protected verified group AI API", () => {
@@ -288,6 +304,12 @@ describe("protected verified group AI API", () => {
     const p = groupPolicy(),
       x = await setupGroup(p);
     try {
+      expect(x.wa.actor_identity).toBe("unipile:wa-one:999999999@lid");
+      expect(x.wa.contact_ids?.[0]).toMatch(/^M[a-f0-9]{64}$/);
+      expect(p.verified_contact_groups?.[0]?.members[1]).toMatchObject({
+        identity: x.wa.actor_identity,
+        contact_id: x.wa.contact_ids?.[0],
+      });
       const before = {
         records: x.store.interactions(p.principal_id),
         contacts: x.store.contacts(p.principal_id),
@@ -336,7 +358,7 @@ describe("protected verified group AI API", () => {
       await x.close();
     }
   });
-  it.each(["proof", "withdraw", "revoke", "identity", "future"])(
+  it.each(["proof", "withdraw", "revoke", "identity", "future", "principal"])(
     "withdraws pending excerpts after %s changes",
     async (change) => {
       const p = groupPolicy(),
@@ -351,6 +373,7 @@ describe("protected verified group AI API", () => {
           p.verified_contact_groups![0]!.proof_reference =
             "owner-confirmation:replacement";
         if (change === "withdraw") delete p.verified_contact_groups;
+        if (change === "principal") p.principal_id = "changed-owner";
         if (change === "revoke")
           x.store.revokeSource(p.principal_id, "whatsapp_personal");
         if (change === "future")
@@ -360,7 +383,7 @@ describe("protected verified group AI API", () => {
           const contacts = x.store.contacts.bind(x.store);
           x.store.contacts = (owner, query) =>
             contacts(owner, query).map((contact) =>
-              contact.contact_id === "M1"
+              contact.contact_id === x.wa.contact_ids?.[0]
                 ? { ...contact, emails: [] }
                 : contact,
             );

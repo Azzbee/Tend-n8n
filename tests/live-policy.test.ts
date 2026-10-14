@@ -216,7 +216,7 @@ it("binds social group members to approved accounts and rejects verified owner v
     contact_id: "M1",
     source: "whatsapp_personal",
     account_id: "wa-one",
-    identity: "999999999@lid",
+    identity: "unipile:wa-one:999999999@lid",
   };
   expect(
     parseLivePolicy({
@@ -238,6 +238,11 @@ it("binds social group members to approved accounts and rejects verified owner v
     { identity: "15550000001@s.whatsapp.net" },
     { source: "whatsapp_business" },
     { identity: "Owner@Example.Invalid" },
+    { identity: "999999999@lid" },
+    { identity: "unipile:wrong:999999999@lid" },
+    { identity: "meta:wa-one:999999999@lid" },
+    { identity: "unipile:wa-one:+15550000001" },
+    { identity: "unipile:wa-one:15550000001@s.whatsapp.net" },
   ])
     expect(() =>
       parseLivePolicy({
@@ -251,4 +256,47 @@ it("binds social group members to approved accounts and rejects verified owner v
         ],
       }),
     ).toThrow();
+});
+
+it("preserves colon-containing LinkedIn account namespaces and rejects canonical owners", () => {
+  const social = {
+    window_days: 30,
+    accounts: [
+      {
+        source: "linkedin",
+        provider: "linkedin",
+        account_id: "urn:li:person:owner",
+        owner_identity: "urn:li:person:owner",
+        owner_verified: true,
+        profile_bindings: [],
+      },
+    ],
+  };
+  const member = {
+    contact_id: "Mli",
+    source: "linkedin",
+    account_id: "urn:li:person:owner",
+    identity: "linkedin:urn:li:person:owner:urn:li:person:peer",
+  };
+  const parse = (identity: string) =>
+    parseLivePolicy({
+      ...exampleLivePolicy,
+      social,
+      verified_contact_groups: [
+        {
+          ...contactGroup,
+          members: [contactGroup.members[0], { ...member, identity }],
+        },
+      ],
+    });
+  expect(
+    parse(member.identity).verified_contact_groups?.[0]?.members[1]?.identity,
+  ).toBe(member.identity);
+  for (const identity of [
+    "urn:li:person:peer",
+    "linkedin:urn:li:person:foreign:urn:li:person:peer",
+    "linkedin:urn:li:person:owner:urn:li:person:owner",
+    "linkedin:urn:li:person:owner:",
+  ])
+    expect(() => parse(identity)).toThrow();
 });
