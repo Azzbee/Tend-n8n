@@ -36,6 +36,53 @@ const accepted = (result: ReturnType<typeof normalizeUnipileMessage>) => {
   return result;
 };
 describe("Unipile personal messages", () => {
+  it("excludes authenticated system events without accepting them as evidence", () => {
+    for (const is_event of [true, 1]) {
+      const result = normalizeUnipileMessage({ ...msg(), is_event }, ctx);
+      expect(result).toMatchObject({
+        kind: "excluded",
+        source_record_id: "message-one",
+      });
+      expect(result).not.toHaveProperty("record");
+      expect(
+        normalizeUnipileMessage(
+          { ...msg(), is_event, account_id: "foreign" },
+          ctx,
+        ).kind,
+      ).toBe("quarantined");
+    }
+  });
+  it("keeps distinct stable quarantine identities without retaining invalid bodies", () => {
+    const a = normalizeUnipileMessage(
+      { ...msg(), id: "bad-one", is_sender: "bad" },
+      ctx,
+    );
+    const b = normalizeUnipileMessage(
+      { ...msg(), id: "bad-two", is_sender: "bad" },
+      ctx,
+    );
+    expect(a).toMatchObject({
+      kind: "quarantined",
+      source_record_id: "bad-one",
+    });
+    expect(b).toMatchObject({
+      kind: "quarantined",
+      source_record_id: "bad-two",
+    });
+    const unknownA = normalizeUnipileMessage(
+      { account_id: "account-one", text: "PRIVATE BAD A" },
+      ctx,
+    );
+    const unknownB = normalizeUnipileMessage(
+      { account_id: "account-one", text: "PRIVATE BAD B" },
+      ctx,
+    );
+    if (unknownA.kind === "accepted" || unknownB.kind === "accepted")
+      throw new Error("Invalid fixture accepted");
+    expect(unknownA.source_record_id).toMatch(/^invalid-record:[a-f0-9]{64}$/);
+    expect(unknownB.source_record_id).not.toBe(unknownA.source_record_id);
+    expect(JSON.stringify([unknownA, unknownB])).not.toContain("PRIVATE BAD");
+  });
   it("honors documented numeric deleted/hidden/event flags", () => {
     expect(
       normalizeUnipileMessage({ ...msg(), deleted: 1 }, ctx),
@@ -43,9 +90,13 @@ describe("Unipile personal messages", () => {
     expect(normalizeUnipileMessage({ ...msg(), hidden: 1 }, ctx)).toMatchObject(
       { kind: "invalidated", source_record_id: "message-one" },
     );
-    expect(normalizeUnipileMessage({ ...msg(), is_event: 1 }, ctx).kind).toBe(
-      "quarantined",
-    );
+    expect(
+      normalizeUnipileMessage({ ...msg(), is_event: 1 }, ctx),
+    ).toMatchObject({
+      kind: "excluded",
+      source_record_id: "message-one",
+      reason: "provider_system_event",
+    });
     expect(normalizeUnipileMessage({ ...msg(), deleted: "1" }, ctx).kind).toBe(
       "quarantined",
     );
@@ -102,7 +153,7 @@ describe("Unipile personal messages", () => {
     { timestamp: "2026-02-30T00:00:00Z" },
     { text: "x".repeat(262145) },
     { timestamp: Number.POSITIVE_INFINITY },
-    { is_event: true },
+    { is_event: "true" },
     { is_hidden: true },
   ])("quarantines malformed or foreign messages", (patch) =>
     expect(normalizeUnipileMessage({ ...msg(), ...patch }, ctx).kind).toBe(

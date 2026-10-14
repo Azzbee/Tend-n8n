@@ -79,8 +79,29 @@ describe("bounded social page normalization", () => {
     );
     expect(r.batch.records).toHaveLength(0);
     expect(r.batch.quarantines).toHaveLength(1);
-    expect(r.batch.complete).toBe(false);
+    expect(r.batch.complete).toBe(true);
+    expect(r.batch.evidence_incomplete).toBe(true);
     expect(r.batch.reconcile).toBe(false);
+  });
+  it("completes system-event pagination and removes reclassified message evidence", () => {
+    const r = normalizeSocialBatch(
+      policy,
+      {
+        ...request(),
+        items: [{ ...message(), is_event: true }],
+        complete: true,
+        reconcile: true,
+        cursor: null,
+      },
+      context,
+    );
+    expect(r.batch.records).toEqual([]);
+    expect(r.batch.quarantines).toEqual([]);
+    expect(r.batch.evidence_incomplete).toBe(false);
+    expect(r.batch.complete).toBe(true);
+    expect(r.batch.reconcile).toBe(true);
+    expect(r.batch.seen_record_ids).toEqual(["message-one"]);
+    expect(r.batch.removed_record_ids).toEqual(["message-one"]);
   });
   it("preserves verified deletion targets and invalidations", () => {
     const r = normalizeSocialBatch(

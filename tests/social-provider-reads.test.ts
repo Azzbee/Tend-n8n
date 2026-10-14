@@ -96,6 +96,40 @@ const page = (start = 0, next: string | undefined = undefined) => ({
   ],
 });
 describe("official read-only social plans", () => {
+  it.each(["current", "partial"])(
+    "allows identity verification after an idle %s window expires",
+    (status) => {
+      const old = {
+        ...state(),
+        status,
+        coverage_start: "2026-08-13T12:00:00.000Z",
+        coverage_end: "2026-09-12T12:00:00.000Z",
+      };
+      expect(
+        planSocialProviderRead(
+          policy,
+          "whatsapp_personal",
+          old.account_id,
+          old,
+          "identity",
+          now,
+        ),
+      ).toMatchObject({
+        kind: "request",
+        response_kind: "unipile_account",
+      });
+      expect(() =>
+        planSocialProviderRead(
+          policy,
+          "whatsapp_personal",
+          old.account_id,
+          old,
+          "snapshot",
+          now,
+        ),
+      ).toThrow("unapproved_provider_window");
+    },
+  );
   it("plans CONNECTIONS using a separate session cursor, never INBOX persistent state", () => {
     const sourceState = state("linkedin", "li-snapshot:7");
     const p = planSocialProviderRead(

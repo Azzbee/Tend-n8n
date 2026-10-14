@@ -325,6 +325,369 @@ describe("canonical PostgreSQL live parity", () => {
       ),
     ).toEqual({});
   });
+
+  it.each(["done", "cancelled"] as const)(
+    "rejects a re-proposed %s obligation after evidence invalidation with identical parity",
+    async (terminal) => {
+      const ownerPrincipal = {
+        owner_id: `closed-${terminal}`,
+        user_id: "closed-user",
+        chat_id: "closed-chat",
+      };
+      const postgres = await PostgresStore.open({
+          connectionString: runtime.connectionString,
+          principal: ownerPrincipal,
+          clock,
+        }),
+        memory = new TendStore(":memory:", {
+          mode: "live",
+          principal: ownerPrincipal,
+          clock,
+        });
+      const raw = { ...record, owner_id: ownerPrincipal.owner_id },
+        input = {
+          quote: raw.body_text,
+          action: "send the report",
+          suggested_due: "2026-10-15",
+        },
+        results: string[] = [];
+      try {
+        for (const store of [postgres, memory]) {
+          await store.seed(
+            [
+              {
+                owner_id: ownerPrincipal.owner_id,
+                contact_id: "friend",
+                name: "Friend",
+              },
+            ],
+            [
+              {
+                owner_id: ownerPrincipal.owner_id,
+                identity: "owner@example.com",
+                contact_id: "OWNER",
+              },
+              {
+                owner_id: ownerPrincipal.owner_id,
+                identity: "friend@example.com",
+                contact_id: "friend",
+              },
+            ],
+            [{ ...state, owner_id: ownerPrincipal.owner_id }],
+          );
+          await store.ingest(raw);
+          const candidate = await store.addCandidate(raw, input),
+            auth = {
+              ...ownerPrincipal,
+              chat_type: "private",
+              text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+            };
+          await store.command(auth);
+          await store.command({
+            ...auth,
+            text: `/${terminal === "done" ? "done" : "cancel"} ${candidate.commitment_id}`,
+          });
+          await store.ingest({
+            ...raw,
+            body_text: "Changed closed evidence",
+            authored_text: "Changed closed evidence",
+            authored_spans: [],
+            eligible_for_extraction: false,
+          });
+          await store.ingest(raw);
+          const before = await store.commitments(ownerPrincipal.owner_id);
+          expect(before[0]).toMatchObject({
+            status: terminal,
+            evidence_valid: false,
+          });
+          let result = "unexpected_success";
+          try {
+            await store.addCandidate(raw, input);
+          } catch (error) {
+            result =
+              error instanceof Error ? error.message : "unexpected_error";
+          }
+          results.push(result);
+          expect(await store.commitments(ownerPrincipal.owner_id)).toEqual(
+            before,
+          );
+        }
+        expect(results).toEqual([
+          "invalidated candidate requires external owner review; automatic reinstatement unsupported",
+          "invalidated candidate requires external owner review; automatic reinstatement unsupported",
+        ]);
+      } finally {
+        await postgres.close();
+        memory.close();
+      }
+    },
+  );
+
+  it("carries evidence gaps across pages without false pruning and restarts completed partial snapshots", async () => {
+    const ownerPrincipal = {
+        owner_id: "gap-parity",
+        user_id: "gap-user",
+        chat_id: "gap-chat",
+      },
+      historical = "2026-10-13T08:00:00Z";
+    const postgres = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: ownerPrincipal,
+        clock,
+      }),
+      memory = new TendStore(":memory:", {
+        mode: "live",
+        principal: ownerPrincipal,
+        clock,
+      });
+    const raw = { ...record, owner_id: ownerPrincipal.owner_id },
+      states = [];
+    try {
+      for (const store of [postgres, memory]) {
+        await store.seed(
+          [
+            {
+              owner_id: ownerPrincipal.owner_id,
+              contact_id: "friend",
+              name: "Friend",
+            },
+          ],
+          [
+            {
+              owner_id: ownerPrincipal.owner_id,
+              identity: "owner@example.com",
+              contact_id: "OWNER",
+            },
+            {
+              owner_id: ownerPrincipal.owner_id,
+              identity: "friend@example.com",
+              contact_id: "friend",
+            },
+          ],
+          [
+            {
+              ...state,
+              owner_id: ownerPrincipal.owner_id,
+              last_success: historical,
+            },
+          ],
+        );
+        await store.ingest(raw);
+        const bad: LiveBatch = {
+          owner_id: ownerPrincipal.owner_id,
+          source: "gmail",
+          account_id: state.account_id,
+          records: [],
+          cursor: "next-gap",
+          expected_cursor: null,
+          complete: false,
+          reconcile: false,
+          coverage_start: state.coverage_start,
+          coverage_end: state.coverage_end,
+          seen_record_ids: ["ambiguous"],
+          evidence_incomplete: true,
+          quarantines: [
+            {
+              source_record_id: "ambiguous",
+              reason: "unresolved_identity",
+              observed_at: now,
+            },
+          ],
+        };
+        await store.commitLiveBatch(bad);
+        const partial = (await store.sourceStatus(ownerPrincipal.owner_id))[0]!;
+        expect(partial).toMatchObject({
+          status: "partial",
+          cursor: "next-gap",
+          evidence_incomplete: true,
+          pagination_complete: false,
+          last_success: historical,
+        });
+        expect(
+          await store.prepareLiveSnapshot(
+            ownerPrincipal.owner_id,
+            "gmail",
+            state.account_id,
+            state.coverage_start,
+            state.coverage_end,
+          ),
+        ).toEqual(partial);
+        await store.commitLiveBatch({
+          ...bad,
+          records: [],
+          quarantines: [],
+          seen_record_ids: [],
+          cursor: null,
+          expected_cursor: "next-gap",
+          complete: true,
+          reconcile: true,
+          evidence_incomplete: false,
+        });
+        const finished = (
+          await store.sourceStatus(ownerPrincipal.owner_id)
+        )[0]!;
+        expect(finished).toMatchObject({
+          status: "partial",
+          cursor: null,
+          evidence_incomplete: true,
+          pagination_complete: true,
+          last_success: historical,
+        });
+        expect((await store.counts(ownerPrincipal.owner_id)).interactions).toBe(
+          1,
+        );
+        await store.markLiveSyncError(
+          ownerPrincipal.owner_id,
+          "gmail",
+          state.account_id,
+          false,
+          null,
+          429,
+        );
+        expect(
+          (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+        ).toMatchObject({
+          status: "stale",
+          pagination_complete: true,
+          evidence_incomplete: true,
+          last_success: historical,
+        });
+        const restarted = await store.prepareLiveSnapshot(
+          ownerPrincipal.owner_id,
+          "gmail",
+          state.account_id,
+          state.coverage_start,
+          state.coverage_end,
+        );
+        expect(restarted).toMatchObject({
+          status: "partial",
+          cursor: null,
+          evidence_incomplete: false,
+          pagination_complete: false,
+          last_batch_hash: "",
+        });
+        await store.commitLiveBatch({
+          ...bad,
+          records: [raw],
+          quarantines: [],
+          seen_record_ids: [raw.source_record_id],
+          cursor: null,
+          expected_cursor: null,
+          complete: true,
+          reconcile: true,
+          evidence_incomplete: false,
+        });
+        expect(
+          (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+        ).toMatchObject({
+          status: "current",
+          pagination_complete: true,
+          evidence_incomplete: false,
+          last_success: new Date(now).toISOString(),
+        });
+        await store.prepareLiveSnapshot(
+          ownerPrincipal.owner_id,
+          "gmail",
+          state.account_id,
+          state.coverage_start,
+          state.coverage_end,
+        );
+        await store.commitLiveBatch({
+          ...bad,
+          cursor: null,
+          complete: true,
+          reconcile: true,
+        });
+        await store.reconnectLiveSource(
+          ownerPrincipal.owner_id,
+          "gmail",
+          state.account_id,
+          state.coverage_start,
+          state.coverage_end,
+        );
+        states.push((await store.sourceStatus(ownerPrincipal.owner_id))[0]);
+        expect(states.at(-1)).toMatchObject({
+          status: "partial",
+          pagination_complete: false,
+          evidence_incomplete: false,
+          cursor: null,
+          last_success: null,
+        });
+        expect((await store.counts(ownerPrincipal.owner_id)).interactions).toBe(
+          1,
+        );
+      }
+      expect(states[0]).toEqual(states[1]);
+    } finally {
+      await postgres.close();
+      memory.close();
+    }
+  });
+
+  it("blocks conditional refresh after revocation without changing explicit manual reconnect", async () => {
+    const ownerPrincipal = {
+      owner_id: "reconnect-race",
+      user_id: "race-user",
+      chat_id: "race-chat",
+    };
+    const postgres = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: ownerPrincipal,
+        clock,
+      }),
+      memory = new TendStore(":memory:", {
+        mode: "live",
+        principal: ownerPrincipal,
+        clock,
+      });
+    try {
+      for (const store of [postgres, memory]) {
+        await store.seed(
+          [],
+          [],
+          [{ ...state, owner_id: ownerPrincipal.owner_id }],
+        );
+        const observed = (
+          await store.sourceStatus(ownerPrincipal.owner_id)
+        )[0]!;
+        expect(observed.status).not.toBe("revoked");
+        await store.revokeSource(ownerPrincipal.owner_id, "gmail");
+        const revoked = await store.sourceStatus(ownerPrincipal.owner_id);
+        await expect(
+          Promise.resolve().then(() =>
+            store.reconnectLiveSource(
+              ownerPrincipal.owner_id,
+              "gmail",
+              state.account_id,
+              state.coverage_start,
+              state.coverage_end,
+              true,
+            ),
+          ),
+        ).rejects.toThrow("source revoked; active connection required");
+        expect(await store.sourceStatus(ownerPrincipal.owner_id)).toEqual(
+          revoked,
+        );
+        await store.reconnectLiveSource(
+          ownerPrincipal.owner_id,
+          "gmail",
+          state.account_id,
+          state.coverage_start,
+          state.coverage_end,
+        );
+        expect(
+          (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+        ).toMatchObject({
+          status: "partial",
+          cursor: null,
+          last_success: null,
+        });
+      }
+    } finally {
+      await postgres.close();
+      memory.close();
+    }
+  });
   it("stores multi-contact context with nullable scalar attribution and no personal candidate", async () => {
     const context = {
       ...record,

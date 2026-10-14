@@ -39,6 +39,8 @@ export interface SourceState {
   attempt_count?: number;
   last_error?: number | null;
   last_batch_hash?: string;
+  evidence_incomplete?: boolean;
+  pagination_complete?: boolean;
 }
 export interface RawRecord {
   owner_id: string;
@@ -77,6 +79,7 @@ export interface StoreOptions {
   clock?: () => Date;
 }
 export interface LiveBatch {
+  evidence_incomplete?: boolean;
   operation_hash?: string;
   owner_id: string;
   source: Source;
@@ -97,6 +100,39 @@ export interface LiveBatch {
     reason: string;
     observed_at: string;
   }[];
+}
+export function liveBatchCompletion(
+  state: SourceState,
+  batch: LiveBatch,
+): {
+  complete: boolean;
+  flags: Pick<SourceState, "evidence_incomplete" | "pagination_complete">;
+} {
+  if (
+    batch.evidence_incomplete !== undefined &&
+    typeof batch.evidence_incomplete !== "boolean"
+  )
+    throw new Error("invalid evidence completeness flag");
+  const tracked =
+    batch.evidence_incomplete !== undefined ||
+    state.evidence_incomplete !== undefined ||
+    state.pagination_complete !== undefined;
+  const incomplete =
+    state.evidence_incomplete === true || batch.evidence_incomplete === true;
+  return {
+    complete: batch.complete && !incomplete,
+    flags: tracked
+      ? { evidence_incomplete: incomplete, pagination_complete: batch.complete }
+      : {},
+  };
+}
+export function resetLiveCompleteness(
+  state: SourceState,
+): Pick<SourceState, "evidence_incomplete" | "pagination_complete"> {
+  return state.evidence_incomplete !== undefined ||
+    state.pagination_complete !== undefined
+    ? { evidence_incomplete: false, pagination_complete: false }
+    : {};
 }
 export interface Candidate {
   quote: string;
@@ -694,6 +730,7 @@ export class TendStore {
     const batchHash =
       batch.operation_hash ??
       createHash("sha256").update(JSON.stringify(batch)).digest("hex");
+    const completion = liveBatchCompletion(state, batch);
     if (state.last_batch_hash === batchHash) return [];
     if (
       batch.expected_cursor !== undefined &&
@@ -761,7 +798,7 @@ export class TendStore {
           batch.account_id,
           id,
         );
-      if (batch.complete && batch.reconcile) {
+      if (completion.complete && batch.reconcile) {
         const seen = new Set(
           this.db
             .prepare(
@@ -795,8 +832,9 @@ export class TendStore {
           JSON.stringify({
             ...state,
             cursor: batch.cursor,
-            status: batch.complete ? "current" : "partial",
-            last_success: batch.complete
+            status: completion.complete ? "current" : "partial",
+            ...completion.flags,
+            last_success: completion.complete
               ? this.clock().toISOString()
               : state.last_success,
             coverage_start: batch.coverage_start,
@@ -834,33 +872,41 @@ export class TendStore {
         !/^li-change:(0|[1-9]\d*)$/.test(resumeCursor))
     )
       throw new Error("invalid live resume cursor");
-    const state = this.sourceStatus(owner).find(
-      (x) => x.source === source && x.account_id === accountId,
-    );
-    if (!state) throw new Error("unknown source");
-    if (resumeCursor !== undefined) {
-      const watermark = Number(resumeCursor.slice("li-change:".length));
-      if (
-        !Number.isSafeInteger(watermark) ||
-        (state.cursor?.startsWith("li-change:")
-          ? state.cursor !== resumeCursor
-          : state.cursor !== null || state.status !== "current")
-      )
-        throw new Error("stale or unproven live resume cursor");
-    }
-
-    if (state.status !== "current" && resumeCursor === undefined) return state;
-    if (state.status === "revoked") throw new Error("source revoked");
-    const next = {
-      ...state,
-      cursor: resumeCursor ?? null,
-      status: "partial",
-      coverage_start: start,
-      coverage_end: end,
-      last_batch_hash: "",
-    };
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const state = this.sourceStatus(owner).find(
+        (x) => x.source === source && x.account_id === accountId,
+      );
+      if (!state) throw new Error("unknown source");
+      if (resumeCursor !== undefined) {
+        const watermark = Number(resumeCursor.slice("li-change:".length));
+        if (
+          !Number.isSafeInteger(watermark) ||
+          (state.cursor?.startsWith("li-change:")
+            ? state.cursor !== resumeCursor
+            : state.cursor !== null || state.status !== "current")
+        )
+          throw new Error("stale or unproven live resume cursor");
+      }
+
+      if (
+        state.status !== "current" &&
+        !(state.status !== "revoked" && state.pagination_complete === true) &&
+        resumeCursor === undefined
+      ) {
+        this.db.exec("COMMIT");
+        return state;
+      }
+      if (state.status === "revoked") throw new Error("source revoked");
+      const next = {
+        ...state,
+        cursor: resumeCursor ?? null,
+        status: "partial",
+        coverage_start: start,
+        coverage_end: end,
+        last_batch_hash: "",
+        ...resetLiveCompleteness(state),
+      };
       this.db
         .prepare(
           "DELETE FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
@@ -884,21 +930,24 @@ export class TendStore {
     accountId: string,
     start: string,
     end: string,
+    requireActive = false,
   ): void {
     this.assertOwner(owner);
     if (this.mode !== "live") throw new Error("live mode required");
-    const state = this.sourceStatus(owner).find(
-      (x) => x.source === source && x.account_id === accountId,
-    );
-    if (!state) throw new Error("unknown source");
-    if (
-      !exactTimestamp(start) ||
-      !exactTimestamp(end) ||
-      Date.parse(start) >= Date.parse(end)
-    )
-      throw new Error("invalid reconnect window");
-    this.db.exec("SAVEPOINT reconnect_source");
+    this.db.exec("BEGIN IMMEDIATE");
     try {
+      const state = this.sourceStatus(owner).find(
+        (x) => x.source === source && x.account_id === accountId,
+      );
+      if (!state) throw new Error("unknown source");
+      if (requireActive && state.status === "revoked")
+        throw new Error("source revoked; active connection required");
+      if (
+        !exactTimestamp(start) ||
+        !exactTimestamp(end) ||
+        Date.parse(start) >= Date.parse(end)
+      )
+        throw new Error("invalid reconnect window");
       this.db
         .prepare(
           "DELETE FROM live_sync_seen WHERE owner_id=? AND source=? AND account_id=?",
@@ -917,6 +966,7 @@ export class TendStore {
             coverage_start: start,
             coverage_end: end,
             last_batch_hash: "",
+            ...resetLiveCompleteness(state),
             retry_after_until: null,
             attempt_count: 0,
             last_error: null,
@@ -926,9 +976,9 @@ export class TendStore {
           accountId,
         );
       this.scrubReplyCache(owner);
-      this.db.exec("RELEASE reconnect_source");
+      this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK TO reconnect_source; RELEASE reconnect_source");
+      this.db.exec("ROLLBACK");
       throw error;
     }
   }

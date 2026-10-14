@@ -26,7 +26,7 @@ export type MessagingResult =
       identities: Identity[];
     }
   | {
-      kind: "quarantined" | "expired" | "deleted" | "invalidated";
+      kind: "quarantined" | "expired" | "deleted" | "invalidated" | "excluded";
       source: MessagingSource;
       account_id: string;
       source_record_id: string;
@@ -119,7 +119,12 @@ function reject(
   context: MessagingContext,
   recordId: string,
   reason: string,
-  kind: "quarantined" | "expired" | "deleted" | "invalidated" = "quarantined",
+  kind:
+    | "quarantined"
+    | "expired"
+    | "deleted"
+    | "invalidated"
+    | "excluded" = "quarantined",
 ): MessagingResult {
   return {
     kind,
@@ -135,14 +140,25 @@ function safe(
   input: unknown,
   fn: () => MessagingResult,
 ): MessagingResult {
+  let recordId: string | undefined;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const raw = input as Record<string, unknown>;
+    try {
+      recordId = id(raw.id ?? raw.message_id);
+    } catch {
+      // Malformed identifiers use a bounded payload digest below.
+    }
+  }
   try {
     bounded(input);
+    if (recordId === undefined)
+      recordId = `invalid-record:${hash([source, input])}`;
     return fn();
   } catch (error) {
     return reject(
       source,
       context,
-      "invalid-record",
+      recordId ?? "invalid-record",
       error instanceof Error && /^[a-z_]+$/.test(error.message)
         ? error.message
         : "invalid_provider_record",
@@ -316,12 +332,6 @@ export function normalizeUnipileMessage(
     const raw = obj(input);
     if (id(raw.account_id) !== context.account_id)
       throw new Error("foreign_account");
-    if (
-      raw.is_event === true ||
-      (typeof raw.event_type === "number" && raw.event_type !== 0) ||
-      raw.is_hidden === true
-    )
-      throw new Error("unsupported_message_event");
     for (const flag of ["hidden", "deleted", "edited", "is_event"]) {
       const value = raw[flag];
       if (
@@ -331,6 +341,19 @@ export function normalizeUnipileMessage(
         throw new Error("invalid_message_flag");
     }
     const stableId = id(raw.id ?? raw.message_id);
+    if (raw.is_event === true || raw.is_event === 1)
+      return reject(
+        "whatsapp_personal",
+        context,
+        stableId,
+        "provider_system_event",
+        "excluded",
+      );
+    if (
+      (typeof raw.event_type === "number" && raw.event_type !== 0) ||
+      raw.is_hidden === true
+    )
+      throw new Error("unsupported_message_event");
     if (raw.deleted === 1 || raw.deleted === true)
       return reject(
         "whatsapp_personal",
@@ -347,7 +370,6 @@ export function normalizeUnipileMessage(
         "provider_hidden",
         "invalidated",
       );
-    if (raw.is_event === 1) throw new Error("unsupported_message_event");
     const actor = id(raw.sender_id);
     if (
       typeof raw.is_sender !== "boolean" &&

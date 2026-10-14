@@ -21,6 +21,8 @@ import {
   isRecord,
   validateLiveCandidate,
   normalizeLiveRecord,
+  liveBatchCompletion,
+  resetLiveCompleteness,
 } from "./engine.ts";
 import type { LiveRecord } from "./google-records.ts";
 import { canonicalEmail } from "./google-records.ts";
@@ -428,6 +430,7 @@ export class PostgresStore implements LiveStore {
         throw new Error("invalid operation hash");
       if (state.mode !== "live" || state.status === "revoked")
         throw new Error("unregistered live account");
+      const completion = liveBatchCompletion(state, batch);
       if (state.last_batch_hash === hash) return [];
       if (
         batch.expected_cursor !== undefined &&
@@ -483,7 +486,7 @@ export class PostgresStore implements LiveStore {
         );
       for (const id of batch.removed_record_ids ?? [])
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
-      if (batch.complete && batch.reconcile) {
+      if (completion.complete && batch.reconcile) {
         const missing = await s.q<{ source_record_id: string }>(
           "SELECT source_record_id FROM live_records r WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND NOT EXISTS(SELECT 1 FROM live_seen v WHERE v.owner_id=r.owner_id AND v.source=r.source AND v.account_id=r.account_id AND v.record_id=r.source_record_id)",
           [batch.owner_id, batch.source, batch.account_id],
@@ -504,8 +507,9 @@ export class PostgresStore implements LiveStore {
       await s.putState({
         ...state,
         cursor: batch.cursor,
-        status: batch.complete ? "current" : "partial",
-        last_success: batch.complete
+        status: completion.complete ? "current" : "partial",
+        ...completion.flags,
+        last_success: completion.complete
           ? s.clock().toISOString()
           : state.last_success,
         last_batch_hash: hash,
@@ -549,7 +553,11 @@ export class PostgresStore implements LiveStore {
           Date.parse(start) >= Date.parse(end)
         )
           throw new Error("invalid changelog window");
-      } else if (state.status !== "current") return state;
+      } else if (
+        state.status !== "current" &&
+        !(state.status !== "revoked" && state.pagination_complete === true)
+      )
+        return state;
       const next = {
         ...state,
         cursor: resumeCursor ?? null,
@@ -557,6 +565,7 @@ export class PostgresStore implements LiveStore {
         coverage_start: start,
         coverage_end: end,
         last_batch_hash: "",
+        ...resetLiveCompleteness(state),
       };
       await s.q(
         "DELETE FROM live_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3",
@@ -572,10 +581,13 @@ export class PostgresStore implements LiveStore {
     account: string,
     start: string,
     end: string,
+    requireActive = false,
   ): Promise<void> {
     this.owner(owner);
     return this.run(async (s) => {
       const state = await s.state(owner, source, account);
+      if (requireActive && state.status === "revoked")
+        throw new Error("source revoked; active connection required");
       if (
         !exactTimestamp(start) ||
         !exactTimestamp(end) ||
@@ -594,6 +606,7 @@ export class PostgresStore implements LiveStore {
         coverage_start: start,
         coverage_end: end,
         last_batch_hash: "",
+        ...resetLiveCompleteness(state),
         retry_after_until: null,
         attempt_count: 0,
         last_error: null,
@@ -759,11 +772,12 @@ export class PostgresStore implements LiveStore {
           (c) => c.commitment_id === id,
         );
       if (current && current.status !== "invalidated") {
-        if (
-          !current.evidence_valid &&
-          !["confirmed", "done", "cancelled"].includes(current.status)
-        )
-          throw new Error("invalid evidence");
+        if (current.status === "confirmed" && current.evidence_valid === false)
+          return current;
+        if (current.evidence_valid === false)
+          throw new Error(
+            "invalidated candidate requires external owner review; automatic reinstatement unsupported",
+          );
         return current;
       }
       const c: Commitment = {

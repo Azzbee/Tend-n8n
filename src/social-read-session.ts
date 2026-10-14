@@ -227,7 +227,10 @@ export class SocialReadSessions {
             state.cursor?.startsWith("li-change:")
           )
             throw new Error("changelog_cannot_reset_to_snapshot");
-          if (state.status === "current") {
+          if (
+            state.status === "current" ||
+            state.pagination_complete === true
+          ) {
             const window = socialWindow(now);
             state = await this.store.prepareLiveSnapshot(
               this.principal,
@@ -236,6 +239,20 @@ export class SocialReadSessions {
               window.start,
               window.end,
             );
+          } else if (
+            Date.parse(state.coverage_end) <
+            now.getTime() - 30 * 86400000
+          ) {
+            const window = socialWindow(now);
+            await this.store.reconnectLiveSource(
+              this.principal,
+              selected.source,
+              selected.account_id,
+              window.start,
+              window.end,
+              true,
+            );
+            state = await this.state(selected.source, selected.account_id);
           }
         }
       }

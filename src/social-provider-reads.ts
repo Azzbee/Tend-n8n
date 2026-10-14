@@ -3,6 +3,7 @@ import type { MessagingSource } from "./messaging-records.ts";
 import {
   assertSocialRead,
   socialAccount,
+  socialWindow,
   type SocialPolicy,
 } from "./social-policy.ts";
 import type { SocialSyncRequest } from "./social-sync.ts";
@@ -207,8 +208,15 @@ export function planSocialProviderRead(
       kind: "webhook_only",
       reason: "official_meta_history_requires_authenticated_webhooks",
     };
-  const start = exactTime(state.coverage_start),
-    end = exactTime(state.coverage_end);
+  const window =
+    phase === "identity"
+      ? socialWindow(now)
+      : {
+          start: state.coverage_start,
+          end: state.coverage_end,
+        };
+  const start = exactTime(window.start),
+    end = exactTime(window.end);
   if (
     start > end ||
     end > when ||
@@ -216,7 +224,7 @@ export function planSocialProviderRead(
     end < when - 30 * 86400000
   )
     throw new Error("unapproved_provider_window");
-  if (state.cursor !== null) token(state.cursor);
+  if (phase !== "identity" && state.cursor !== null) token(state.cursor);
   const base = {
     kind: "request" as const,
     method: "GET" as const,
@@ -226,8 +234,8 @@ export function planSocialProviderRead(
     account_id: accountId,
     expected_owner_identity: account.owner_identity,
     expected_cursor: phase === "connections" ? connectionsCursor : state.cursor,
-    coverage_start: state.coverage_start,
-    coverage_end: state.coverage_end,
+    coverage_start: window.start,
+    coverage_end: window.end,
     requested_at: now.toISOString(),
   };
   let operation: string,

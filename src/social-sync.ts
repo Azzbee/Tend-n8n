@@ -262,6 +262,9 @@ export function normalizeSocialBatch(
           throw new Error("inconsistent social identity");
         identities.set(identity.identity, identity);
       }
+    } else if (result.kind === "excluded") {
+      seen.add(result.source_record_id);
+      removed.add(result.source_record_id);
     } else if (
       result.kind === "deleted" ||
       result.kind === "expired" ||
@@ -280,7 +283,7 @@ export function normalizeSocialBatch(
   for (const record of records)
     if (removed.has(record.source_record_id))
       throw new Error("conflicting social page mutation");
-  const complete = request.complete && quarantines.length === 0;
+  const complete = request.complete;
   return {
     page_hash,
     invalidated_record_ids: [...invalidated].sort(),
@@ -292,9 +295,10 @@ export function normalizeSocialBatch(
       cursor: request.cursor,
       expected_cursor: request.expected_cursor,
       complete,
+      evidence_incomplete: quarantines.length > 0,
       coverage_start: request.coverage_start,
       coverage_end: request.coverage_end,
-      reconcile: request.reconcile && complete,
+      reconcile: request.reconcile && complete && quarantines.length === 0,
       seen_record_ids: [...seen].sort(),
       contacts: [...contacts.values()],
       identities: [...identities.values()],

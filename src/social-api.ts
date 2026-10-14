@@ -23,6 +23,8 @@ export async function handleSocialSync({
   quarantined: number;
   removed: number;
   complete: boolean;
+  pagination_complete: boolean;
+  evidence_partial: boolean;
   status: string;
   page_hash: string;
 }> {
@@ -83,6 +85,8 @@ export async function handleSocialSync({
     quarantined: normalized.batch.quarantines?.length ?? 0,
     removed: normalized.batch.removed_record_ids.length,
     complete: normalized.batch.complete && current?.status === "current",
+    pagination_complete: current?.pagination_complete === true,
+    evidence_partial: current?.evidence_incomplete === true,
     status: current?.status ?? "unavailable",
     page_hash: normalized.page_hash,
   };
