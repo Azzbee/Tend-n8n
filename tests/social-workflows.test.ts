@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
+import { normalizeUnipileMessage } from "../src/messaging-records.ts";
 interface Node {
   name: string;
   type: string;
@@ -49,8 +50,20 @@ for (const [file, source, host, credential] of [
     vm.runInNewContext(
       `(function(){${String(node(name).parameters.jsCode)}})()`,
       {
-        $input: { first: () => ({ json: input }) },
+        $input: {
+          first: () => ({ json: input }),
+          all: () =>
+            (Array.isArray(input) ? input : [input]).map((json: unknown) => ({
+              json,
+            })),
+        },
         $: (key: string) => ({
+          all: (branch = 0, index = 0) => {
+            if (branch !== 0) throw new Error("Unexpected workflow branch");
+            return (
+              Array.isArray(linked[key]) ? linked[key][index] : linked[key]
+            ).map((json: unknown) => ({ json }));
+          },
           first: (branch = 0, index = 0) => {
             if (branch !== 0) throw new Error("Unexpected workflow branch");
             return {
@@ -62,6 +75,7 @@ for (const [file, source, host, credential] of [
         }),
         $runIndex: runIndex,
         Buffer,
+        URL,
       },
     );
   describe(source + " native read-only boundary", () => {
@@ -432,6 +446,290 @@ for (const [file, source, host, credential] of [
         expect(rows.length).toBeLessThan(100);
         expect(result.omitted_row_count).toBe(100 - rows.length);
         expect(result.preview_truncated).toBe(true);
+      });
+    }
+    if (source !== "linkedin") {
+      const owner = "15550000001",
+        peer = "999999999@lid";
+      const message = {
+        id: "m1",
+        account_id: "fictional-account",
+        chat_id: "c1",
+        chat_provider_id: peer,
+        sender_id: "88888888@lid",
+        is_sender: 1,
+        attendees: [{ attendee_provider_id: "spoof" }],
+        timestamp: "2026-10-13T12:00:00Z",
+        text: "I will send the draft tomorrow.",
+      };
+      const ctx = {
+        plan: {
+          method: "GET",
+          source,
+          account_id: "fictional-account",
+          expected_owner_identity: owner,
+          url: "https://api38.unipile.com:16860/api/v1/messages?account_id=fictional-account",
+          limit: 20,
+        },
+        max_result_bytes: 262144,
+      };
+      const linked = (items: unknown[] = [message]) => ({
+        "Plan selected provider page": ctx,
+        "Read Selected provider page": {
+          statusCode: 200,
+          body: { object: "MessageList", items, cursor: "next" },
+        },
+        "Prepare exact WhatsApp chats": [
+          [{ _chat_lookup: true, chat_id: "c1" }],
+        ],
+      });
+      const chat = {
+        object: "Chat",
+        id: "c1",
+        account_id: "fictional-account",
+        account_type: "WHATSAPP",
+        type: 0,
+        provider_id: peer,
+        attendee_provider_id: peer,
+      };
+      it("uses bounded exact native chat GETs with the distinct source credential", () => {
+        const n = node("Read exact WhatsApp chats");
+        expect(n.parameters.method).toBe("GET");
+        expect(n.retryOnFail).toBe(false);
+        expect(n.credentials?.httpHeaderAuth?.id).toBe(credential);
+        expect(n.parameters.options).toMatchObject({
+          timeout: 5000,
+          redirect: { redirect: { followRedirects: false } },
+          batching: { batch: { batchSize: 4, batchInterval: 5000 } },
+        });
+        expect(
+          run(
+            "Prepare exact WhatsApp chats",
+            linked([message, { ...message, id: "m2" }])[
+              "Read Selected provider page"
+            ],
+            linked([message, { ...message, id: "m2" }]),
+          ),
+        ).toEqual([
+          {
+            json: {
+              _chat_lookup: true,
+              chat_id: "c1",
+              url: "https://api38.unipile.com:16860/api/v1/chats/c1",
+            },
+          },
+        ]);
+        expect(() =>
+          run(
+            "Prepare exact WhatsApp chats",
+            linked(
+              Array.from({ length: 21 }, (_, i) => ({
+                ...message,
+                id: String(i),
+                chat_id: String(i),
+              })),
+            )["Read Selected provider page"],
+            linked(),
+          ),
+        ).toThrow();
+      });
+      const enriched = (response: unknown, items: unknown[] = [message]) =>
+        (
+          run(
+            "Verify exact WhatsApp membership",
+            [response],
+            linked(items),
+          ) as {
+            json: {
+              body: { items: Record<string, unknown>[]; cursor: string };
+            };
+          }[]
+        )[0]!.json;
+      it("replaces spoofed attendees with authenticated direct owner and opaque peer", () => {
+        const out = enriched({ statusCode: 200, body: chat });
+        expect(out.body.cursor).toBe("next");
+        expect(out.body.items[0]?.attendees).toEqual([
+          { attendee_provider_id: owner },
+          { attendee_provider_id: peer },
+        ]);
+        expect(
+          enriched({ statusCode: 200, body: chat }, [
+            { ...message, sender_id: peer, is_sender: 0 },
+          ]).body.items[0]?.attendees,
+        ).toHaveLength(2);
+      });
+      it("keeps groups, missing or conflicting proof and failed chat reads ineligible", () => {
+        for (const replacement of [
+          { type: 1 },
+          { type: 2 },
+          { type: 99 },
+          { attendee_provider_id: owner },
+          { attendee_provider_id: null },
+        ])
+          expect(
+            enriched({ statusCode: 200, body: { ...chat, ...replacement } })
+              .body.items[0],
+          ).not.toHaveProperty("attendees");
+        for (const response of [{ statusCode: 404, body: {} }])
+          expect(enriched(response).body.items[0]).not.toHaveProperty(
+            "attendees",
+          );
+        expect(
+          enriched({ statusCode: 200, body: chat }, [
+            { ...message, is_sender: 0, sender_id: "foreign" },
+          ]).body.items[0],
+        ).not.toHaveProperty("attendees");
+        expect(
+          enriched({ statusCode: 200, body: chat }, [
+            { ...message, is_sender: 1, sender_id: "15550000099" },
+          ]).body.items[0],
+        ).not.toHaveProperty("attendees");
+      });
+      it("blocks transient failures and foreign chat proof before committing a cursor", () => {
+        for (const response of [
+          { error: "timeout" },
+          { statusCode: 429, body: {} },
+          { statusCode: 503, body: {} },
+          ...[
+            { id: "foreign" },
+            { account_id: "foreign" },
+            { account_type: "LINKEDIN" },
+            { provider_id: "foreign" },
+            { attendee_provider_id: "bad\npeer" },
+          ].map((v) => ({ statusCode: 200, body: { ...chat, ...v } })),
+        ])
+          expect(enriched(response)).toMatchObject({
+            statusCode: 599,
+            body: { error: "chat_membership_unavailable" },
+          });
+      });
+      it("promotes only verified direct chats through the shared normalizer", () => {
+        const context = {
+          principal_id: "fictional-owner",
+          account_id: "fictional-account",
+          owner_identity: owner,
+          now: new Date("2026-10-14T12:00:00Z"),
+          authenticated: {
+            provider: "unipile" as const,
+            account_id: "fictional-account",
+          },
+        };
+        expect(
+          normalizeUnipileMessage(
+            enriched({ statusCode: 200, body: chat }).body.items[0],
+            context,
+            source,
+          ),
+        ).toMatchObject({
+          kind: "accepted",
+          record: { attribution: "direct", eligible_for_extraction: true },
+        });
+        expect(
+          normalizeUnipileMessage(
+            enriched({ statusCode: 200, body: { ...chat, type: 1 } }).body
+              .items[0],
+            context,
+            source,
+          ),
+        ).toMatchObject({
+          kind: "accepted",
+          record: { attribution: "unknown", eligible_for_extraction: false },
+        });
+      });
+      it("retains outer page indexes, bounds aggregate bytes and validates chat origin", () => {
+        const selected = linked();
+        for (const port of [443, 13111, 16860]) {
+          const context = {
+            ...selected,
+            "Plan selected provider page": {
+              ...ctx,
+              plan: {
+                ...ctx.plan,
+                url: `https://api38.unipile.com:${port}/api/v1/messages?account_id=fictional-account`,
+              },
+            },
+          };
+          expect(
+            run(
+              "Prepare exact WhatsApp chats",
+              context["Read Selected provider page"],
+              context,
+            ),
+          ).toHaveLength(1);
+        }
+        for (const url of [
+          "https://api38.unipile.com:16861/api/v1/messages?a=1",
+          "https://attacker@api38.unipile.com:16860/api/v1/messages?a=1",
+          "https://api38.unipile.com:16860/api/v1/accounts/foreign",
+          "https://api38.unipile.com:16860/api/v1/messages?a=1#fragment",
+        ]) {
+          const context = {
+            ...selected,
+            "Plan selected provider page": {
+              ...ctx,
+              plan: { ...ctx.plan, url },
+            },
+          };
+          expect(() =>
+            run(
+              "Prepare exact WhatsApp chats",
+              context["Read Selected provider page"],
+              context,
+            ),
+          ).toThrow();
+        }
+        const later = Object.fromEntries(
+          Object.entries(selected).map(([key, value]) => [
+            key,
+            key === "Prepare exact WhatsApp chats"
+              ? [[], (value as unknown[])[0]]
+              : [{}, value],
+          ]),
+        );
+        expect(
+          run(
+            "Verify exact WhatsApp membership",
+            [{ statusCode: 200, body: chat }],
+            later,
+            1,
+          ),
+        ).toEqual([{ json: enriched({ statusCode: 200, body: chat }) }]);
+        expect(
+          enriched({
+            statusCode: 200,
+            body: { ...chat, ignored: "x".repeat(262144) },
+          }),
+        ).toMatchObject({ statusCode: 599 });
+        expect(() =>
+          run(
+            "Prepare exact WhatsApp chats",
+            selected["Read Selected provider page"],
+            {
+              ...selected,
+              "Plan selected provider page": { ...ctx, max_result_bytes: 10 },
+            },
+          ),
+        ).toThrow();
+      });
+      it("preserves failed provider page status without starting chat reads", () => {
+        const context = {
+          ...linked(),
+          "Read Selected provider page": {
+            statusCode: 429,
+            body: { error: "limited" },
+            headers: { "retry-after": "5" },
+          },
+        };
+        expect(
+          run(
+            "Prepare exact WhatsApp chats",
+            context["Read Selected provider page"],
+            context,
+          ),
+        ).toEqual([{ json: { _chat_lookup: false } }]);
+        expect(run("Verify exact WhatsApp membership", [{}], context)).toEqual([
+          { json: context["Read Selected provider page"] },
+        ]);
       });
     }
     it("cannot proceed from an unverified identity or return an invented delivery", () => {

@@ -1333,7 +1333,74 @@ for (const spec of [
     w.nodes.push(checked, provider, envelope, result);
     connect(w, stage.input, checked.name);
     connect(w, checked.name, provider.name);
-    connect(w, provider.name, envelope.name);
+    if (
+      spec.provider === "unipile" &&
+      stage.prefix === "Selected provider page"
+    ) {
+      const prepare = code(
+        "Prepare exact WhatsApp chats",
+        String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$input.first().json;
+if(Number(r.statusCode)!==200)return [{json:{_chat_lookup:false}}];
+const p=ctx.plan,b=r.body;const valid=v=>typeof v==='string'&&v.length>0&&v.length<=1024&&!/[\s\u0000-\u001f\u007f\\]/u.test(v);
+if(p.source!==${JSON.stringify(spec.source)}||p.method!=='GET'||!valid(p.account_id)||!valid(p.expected_owner_identity)||!Number.isSafeInteger(p.limit)||p.limit<1||p.limit>20||!b||b.object!=='MessageList'||!Array.isArray(b.items)||b.items.length>p.limit||!Object.hasOwn(b,'cursor'))throw new Error('Invalid WhatsApp membership page');
+if(!Number.isSafeInteger(ctx.max_result_bytes)||Buffer.byteLength(JSON.stringify(r),'utf8')>ctx.max_result_bytes)throw new Error('WhatsApp page exceeds budget');
+if(typeof p.url!=='string'||!${approvedOrigin}.test(p.url)||/[\s\u0000-\u001f\u007f\\#]/u.test(p.url))throw new Error('Invalid WhatsApp membership origin');const origin=p.url.slice(0,p.url.indexOf('/',8));if(!p.url.startsWith(origin+'/api/v1/messages?'))throw new Error('Invalid WhatsApp membership path');
+const ids=new Set();for(const m of b.items){if(!m||m.account_id!==p.account_id||!valid(m.chat_id))throw new Error('Unbound WhatsApp message');ids.add(m.chat_id);}
+return ids.size?[...ids].map(chat_id=>({json:{_chat_lookup:true,chat_id,url:origin+'/api/v1/chats/'+encodeURIComponent(chat_id)}})):[{json:{_chat_lookup:false}}];`,
+        stage.x + 360,
+      );
+      const needed = condition(
+        "Exact WhatsApp chats needed",
+        "_chat_lookup",
+        stage.x + 420,
+      );
+      const chats = node(
+        "Read exact WhatsApp chats",
+        "httpRequest",
+        {
+          method: "GET",
+          url: "={{ $json.url }}",
+          authentication: "genericCredentialType",
+          genericAuthType: "httpHeaderAuth",
+          options: {
+            timeout: 5000,
+            redirect: { redirect: { followRedirects: false } },
+            response: { response: { fullResponse: true, neverError: true } },
+            batching: { batch: { batchSize: 4, batchInterval: 5000 } },
+          },
+        },
+        stage.x + 480,
+        240,
+        4.2,
+      );
+      chats.credentials = {
+        httpHeaderAuth: { id: spec.credential, name: spec.credential },
+      };
+      chats.retryOnFail = false;
+      chats.continueOnFail = true;
+      const membership = code(
+        "Verify exact WhatsApp membership",
+        String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$('Read Selected provider page').first(0,$runIndex).json;
+if(Number(r.statusCode)!==200)return [{json:r}];
+const requests=$('Prepare exact WhatsApp chats').all(0,$runIndex).map(x=>x.json);const responses=$input.all().map(x=>x.json);const p=ctx.plan;
+const blocked=()=>[{json:{statusCode:599,body:{error:'chat_membership_unavailable'}}}];
+if(requests.length>20||responses.length!==requests.length)return blocked();
+const proofs=new Map();const valid=v=>typeof v==='string'&&v.length>0&&v.length<=1024&&!/[\s\u0000-\u001f\u007f\\]/u.test(v);
+let bytes=0;for(let i=0;i<requests.length;i++){const req=requests[i];if(req._chat_lookup!==true)continue;const response=responses[i];bytes+=Buffer.byteLength(JSON.stringify(response),'utf8');if(bytes>ctx.max_result_bytes)return blocked();const status=Number(response.statusCode)||599;if(status===404){proofs.set(req.chat_id,null);continue;}if(status!==200)return blocked();const c=response.body;if(!c||c.object!=='Chat'||c.id!==req.chat_id||c.account_id!==p.account_id||c.account_type!=='WHATSAPP'||!valid(c.provider_id))return blocked();
+if(c.attendee_provider_id!==undefined&&c.attendee_provider_id!==null&&!valid(c.attendee_provider_id))return blocked();proofs.set(req.chat_id,c);}
+const items=[];for(const raw of r.body.items){const {attendees,...m}=raw;const c=proofs.get(m.chat_id);if(c&&c.provider_id!==m.chat_provider_id)return blocked();
+if(c&&c.type===0&&valid(c.attendee_provider_id)&&c.attendee_provider_id!==p.expected_owner_identity){const peer=c.attendee_provider_id;const sent=m.is_sender===1||m.is_sender===true;const received=m.is_sender===0||m.is_sender===false;const actorIsOwner=m.sender_id===p.expected_owner_identity||(typeof m.sender_id==='string'&&/^\d+@lid$/.test(m.sender_id));if((sent&&actorIsOwner)||(received&&m.sender_id===peer))m.attendees=[{attendee_provider_id:p.expected_owner_identity},{attendee_provider_id:peer}];}items.push(m);}
+return [{json:{...r,body:{...r.body,items}}}];`,
+        stage.x + 600,
+      );
+      w.nodes.push(prepare, needed, chats, membership);
+      connect(w, provider.name, prepare.name);
+      connect(w, prepare.name, needed.name);
+      connect(w, needed.name, chats.name);
+      connect(w, needed.name, membership.name, 1);
+      connect(w, chats.name, membership.name);
+      connect(w, membership.name, envelope.name);
+    } else connect(w, provider.name, envelope.name);
     connect(w, envelope.name, result.name);
   }
   const verified = code(
