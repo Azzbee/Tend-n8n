@@ -120,6 +120,24 @@ for (const [file, source, host] of [
             linked,
           ),
         ).not.toThrow();
+      if (source === "whatsapp_personal")
+        for (const name of [
+          "Check Owner identity plan",
+          "Check Selected provider page plan",
+        ])
+          expect(() =>
+            run(
+              name,
+              {
+                available: true,
+                plan: {
+                  ...plan,
+                  url: "https://api38.unipile.com:16860/api/v1/accounts/fictional-account",
+                },
+              },
+              linked,
+            ),
+          ).not.toThrow();
       for (const replacement of [
         { method: "POST" },
         { source: "calendar" },
@@ -129,6 +147,13 @@ for (const [file, source, host] of [
         { url: "https://attacker@" + host + "/read" },
         { url: "https://" + host + "@attacker.invalid/read" },
         { url: "https://" + host + ":444/read" },
+        { url: "https://" + host + ":16861/read" },
+        { url: "https://attacker.invalid:16860/read" },
+        { url: "https://api38.unipile.com.attacker.invalid:16860/read" },
+        { url: "https://attacker@api38.unipile.com:16860/read" },
+        { url: "https://api38.unipile.com:16860\\@attacker.invalid/read" }, // pragma: allowlist secret (fictional host-spoof fixture)
+        { url: "https://api38.unipile.com:16860/read\n" },
+        { url: "https://api38.unipile.com:16860/read#fragment" },
         { url: "https://" + host + "\\@attacker.invalid/read" },
         { url: "https://" + host + "/read\n" },
         { url: "https://" + host + "/read\u0000" },
@@ -136,7 +161,11 @@ for (const [file, source, host] of [
         { url: " https://" + host + "/read" },
         { url: "https://" + host },
         ...(source === "linkedin"
-          ? [{ url: "https://" + host + ":13111/read" }]
+          ? [
+              { url: "https://" + host + ":13111/read" },
+              { url: "https://" + host + ":16860/read" },
+              { url: "https://api38.unipile.com:16860/read" },
+            ]
           : []),
       ])
         expect(() =>

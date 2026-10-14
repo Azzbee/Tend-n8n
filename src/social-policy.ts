@@ -70,7 +70,7 @@ function providerBase(value: unknown): string {
     !/^(?:api[0-9]*|[a-z0-9-]+)\.unipile\.com$/.test(url.hostname) ||
     url.username ||
     url.password ||
-    !["", "443", "13111"].includes(url.port) ||
+    !["", "443", "13111", "16860"].includes(url.port) ||
     url.pathname !== "/" ||
     url.search ||
     url.hash

@@ -1278,7 +1278,7 @@ for (const spec of [
   const approvedOrigin =
     spec.provider === "linkedin"
       ? String.raw`/^https:\/\/api\.linkedin\.com(?::443)?\//`
-      : String.raw`/^https:\/\/(?:api[0-9]*|[a-z0-9-]+)\.unipile\.com(?::(?:443|13111))?\//`;
+      : String.raw`/^https:\/\/(?:api[0-9]*|[a-z0-9-]+)\.unipile\.com(?::(?:443|13111|16860))?\//`;
   for (const stage of stages) {
     const checked = code(
       `Check ${stage.prefix} plan`,

@@ -45,6 +45,15 @@ describe("approved social read policy", () => {
     expect(parseSocialPolicy(undefined)).toBeUndefined();
     expect(parseSocialPolicy(example)?.accounts).toHaveLength(3);
   });
+  it("accepts the authorized Unipile dashboard DSN port", () => {
+    const api_base_url = "https://api38.unipile.com:16860";
+    expect(
+      parseSocialPolicy({
+        ...example,
+        accounts: [{ ...example.accounts[0], api_base_url }],
+      })?.accounts[0],
+    ).toMatchObject({ api_base_url });
+  });
   it.each([
     "http://api1.unipile.com",
     "https://localhost",
@@ -52,6 +61,15 @@ describe("approved social read policy", () => {
     "https://api1.unipile.com.evil.invalid",
     "https://api1.unipile.com/path",
     "https://api1.unipile.com?x=1",
+    "https://api38.unipile.com:16861",
+    "https://api38.unipile.com:444",
+    "https://api.linkedin.com:16860",
+    "https://attacker.invalid:16860",
+    "https://api38.unipile.com.attacker.invalid:16860",
+    "https://attacker@api38.unipile.com:16860",
+    "https://api38.unipile.com:16860/path",
+    "https://api38.unipile.com:16860?key=fixture",
+    "https://api38.unipile.com:16860#fragment",
   ])("denies unsafe provider bases: %s", (api_base_url) =>
     expect(() =>
       parseSocialPolicy({
