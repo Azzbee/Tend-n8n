@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T19:55:27.145Z",
+  "checked_at": "2026-10-14T21:40:19.132Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -17,15 +17,16 @@
     "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
     "15-google-extract-commitments.json": "098318be83ce2b26c0687b47494f8e6b35e20308b93d8bd8855296b91cb95909",
     "16-live-ai-review.json": "6a00fde27b266ce57f976fd09bbc3147cf291033b3a8b891596d948eae53d02f",
-    "17-personal-whatsapp-readonly.json": "06e128230cce92b28778724932dfc85fccdb47ec937dc84f203b164f2955d2f5",
-    "18-linkedin-portability-readonly.json": "afab0c2596c0d54248ddce53511f2fc35650c191463b59c7df0a91f59ea236c4"
+    "17-personal-whatsapp-readonly.json": "161d56f9228176ab3fbad9140f9c3e072f48e73697057060388be7e81b828c2c",
+    "18-linkedin-portability-readonly.json": "afab0c2596c0d54248ddce53511f2fc35650c191463b59c7df0a91f59ea236c4",
+    "19-business-whatsapp-readonly.json": "0a1d669117481945c7bf5d993dbf97c8575e7175ab6fb7ff9f801f1b649daca0"
   },
   "source_sha256": {
     "engine.ts": "7900718dd979e11c8ea715163f5df7a0228561cd087e57b42312e16dfc121214",
-    "server.ts": "fc1b673550720aa36bbc52c9684201e6ff599d098bd3ea22c8bf67be0febe303",
-    "build-workflows.ts": "796bd094cc80b84f79baf88b22fdc3853c5ff612d4df6306469777c40e2db678",
+    "server.ts": "931fe5270f0206d118081c47d0febeda2aa07fe59d8fa886b730f4e07af79c94",
+    "build-workflows.ts": "a626fa4fb5ac7d72f984bbb60be5a7d585208aef76eea801b8c47d6e94e55778",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "b909afef563ef081e6d47099b677139e991f7058f44933cfabdfeb21358084e9"
+    "integration.ts": "6e1545d11faa5274ff00cbf3c74f1e6d2ae70eab675edeb9a4a107264c6b756f"
   },
   "runtime": {
     "node": "v24.5.0",
@@ -45,7 +46,7 @@
       "name": "Review artifact links and private path isolation",
       "pass": true,
       "detail": {
-        "working_local_links": 31,
+        "working_local_links": 32,
         "private_paths_denied": 3
       }
     },
@@ -57,7 +58,7 @@
     {
       "name": "Clean n8n import",
       "pass": true,
-      "detail": "18 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive"
+      "detail": "19 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive"
     },
     {
       "name": "n8n TendReview01",
