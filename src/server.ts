@@ -61,7 +61,7 @@ function startFixtureServer(): void {
       }
       if (
         req.method === "GET" &&
-        /^(\/Specification\.txt|\/Demo-guide\.txt|\/Architecture\.mmd|\/schema\/(001-tend|002-live-runtime|003-social-inbox)\.sql|\/src\/(engine|server|fixtures|build-workflows|integration|check-schema|google-records|live-api|internal-auth|live-policy|telegram|prepare-telegram|webhook-proxy)\.ts|\/tests\/(engine|workflows|google-records|google-workflows|live-api|internal-auth|live-engine|live-policy|telegram|webhook-proxy)\.test\.ts|\/evidence\/(runtime-checks|google-runtime-checks|schema-checks|visual-checks)\.json|\/fixtures\/(demo|local-ollama)\.json|\/workflows\/(0[1-9]|1[0-5])-[a-z-]+\.json)$/.test(
+        /^(\/Specification\.txt|\/Demo-guide\.txt|\/Architecture\.mmd|\/schema\/(001-tend|002-live-runtime|003-social-inbox)\.sql|\/src\/(engine|server|fixtures|build-workflows|integration|check-schema|google-records|live-api|internal-auth|live-policy|telegram|prepare-telegram|webhook-proxy)\.ts|\/tests\/(engine|workflows|google-records|google-workflows|live-api|internal-auth|live-engine|live-policy|telegram|webhook-proxy)\.test\.ts|\/evidence\/(runtime-checks|google-runtime-checks|schema-checks|visual-checks)\.json|\/fixtures\/(demo|local-ollama)\.json|\/workflows\/(0[1-9]|1[0-9])-[a-z-]+\.json)$/.test(
           url.pathname,
         )
       ) {
