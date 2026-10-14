@@ -200,6 +200,25 @@ describe("explicit Unipile Business binding", () => {
       }),
     ).toThrow();
   });
+  it.each(["unipile", "meta"] as const)(
+    "rejects one WhatsApp owner across Personal and %s Business account IDs",
+    (provider) => {
+      const owner_identity = "33123456789";
+      const selectedBusiness =
+        provider === "unipile"
+          ? { ...business, owner_identity }
+          : { ...example.accounts[1], owner_identity };
+      expect(() =>
+        parseSocialPolicy({
+          window_days: 30,
+          accounts: [
+            { ...example.accounts[0], owner_identity },
+            selectedBusiness,
+          ],
+        }),
+      ).toThrow("duplicate WhatsApp owner identity");
+    },
+  );
   it("rejects one Unipile account bound to both sources", () => {
     expect(() =>
       parseSocialPolicy({

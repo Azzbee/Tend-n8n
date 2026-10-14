@@ -198,6 +198,15 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
       .size !== accounts.length
   )
     throw new Error("duplicate social provider account");
+  const whatsappOwners = accounts
+    .filter(
+      (account) =>
+        account.source === "whatsapp_personal" ||
+        account.source === "whatsapp_business",
+    )
+    .map((account) => account.owner_identity);
+  if (new Set(whatsappOwners).size !== whatsappOwners.length)
+    throw new Error("duplicate WhatsApp owner identity");
   return { window_days: 30, accounts };
 }
 export function socialAccount(

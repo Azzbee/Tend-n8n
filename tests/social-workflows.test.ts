@@ -14,17 +14,24 @@ interface Workflow {
   nodes: Node[];
   connections: Record<string, Record<string, { node: string }[][]>>;
 }
-for (const [file, source, host] of [
+for (const [file, source, host, credential] of [
   [
     "17-personal-whatsapp-readonly.json",
     "whatsapp_personal",
     "api1.unipile.com",
+    "CONFIGURE_UNIPILE_READ_HEADER",
   ],
-  ["18-linkedin-portability-readonly.json", "linkedin", "api.linkedin.com"],
+  [
+    "18-linkedin-portability-readonly.json",
+    "linkedin",
+    "api.linkedin.com",
+    "CONFIGURE_LINKEDIN_PORTABILITY_HEADER",
+  ],
   [
     "19-business-whatsapp-readonly.json",
     "whatsapp_business",
     "api1.unipile.com",
+    "CONFIGURE_UNIPILE_BUSINESS_READ_HEADER",
   ],
 ] as const) {
   const w = JSON.parse(readFileSync("workflows/" + file, "utf8")) as Workflow;
@@ -100,7 +107,7 @@ for (const [file, source, host] of [
           redirect: { redirect: { followRedirects: false } },
           response: { response: { fullResponse: true, neverError: true } },
         });
-        expect(n.credentials?.httpHeaderAuth?.id).toMatch(/^CONFIGURE_/);
+        expect(n.credentials?.httpHeaderAuth?.id).toBe(credential);
       }
     });
     it("rejects wrong account, host, method and caller-mutated plans", () => {
