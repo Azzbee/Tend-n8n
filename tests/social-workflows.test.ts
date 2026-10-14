@@ -21,6 +21,11 @@ for (const [file, source, host] of [
     "api1.unipile.com",
   ],
   ["18-linkedin-portability-readonly.json", "linkedin", "api.linkedin.com"],
+  [
+    "19-business-whatsapp-readonly.json",
+    "whatsapp_business",
+    "api1.unipile.com",
+  ],
 ] as const) {
   const w = JSON.parse(readFileSync("workflows/" + file, "utf8")) as Workflow;
   const node = (name: string): Node => {
@@ -53,6 +58,15 @@ for (const [file, source, host] of [
       },
     );
   describe(source + " native read-only boundary", () => {
+    it("pins both server-issued read plans to its distinct source", () => {
+      for (const name of [
+        "Plan owner identity read",
+        "Plan selected provider page",
+      ])
+        expect(String(node(name).parameters.url)).toContain(
+          `?source=${source}&`,
+        );
+    });
     it("remains inactive, manual, private and unconfigured", () => {
       expect(w.active).toBe(false);
       expect(w.settings).toMatchObject({
@@ -102,32 +116,31 @@ for (const [file, source, host] of [
         account_id: "fictional-account",
         url: "https://" + host + "/read",
       };
-      expect(() =>
-        run(
-          "Check Owner identity plan",
-          { available: true, request_id: "fixture", plan },
-          linked,
-        ),
-      ).not.toThrow();
-      for (const port of source === "whatsapp_personal" ? [443, 13111] : [443])
+      for (const stage of [
+        "Check Owner identity plan",
+        "Check Selected provider page plan",
+      ]) {
         expect(() =>
-          run(
-            "Check Owner identity plan",
-            {
-              available: true,
-              plan: { ...plan, url: "https://" + host + ":" + port + "/read" },
-            },
-            linked,
-          ),
+          run(stage, { available: true, request_id: "fixture", plan }, linked),
         ).not.toThrow();
-      if (source === "whatsapp_personal")
-        for (const name of [
-          "Check Owner identity plan",
-          "Check Selected provider page plan",
-        ])
+        for (const port of source !== "linkedin" ? [443, 13111] : [443])
           expect(() =>
             run(
-              name,
+              stage,
+              {
+                available: true,
+                plan: {
+                  ...plan,
+                  url: "https://" + host + ":" + port + "/read",
+                },
+              },
+              linked,
+            ),
+          ).not.toThrow();
+        if (source !== "linkedin")
+          expect(() =>
+            run(
+              stage,
               {
                 available: true,
                 plan: {
@@ -138,43 +151,50 @@ for (const [file, source, host] of [
               linked,
             ),
           ).not.toThrow();
-      for (const replacement of [
-        { method: "POST" },
-        { source: "calendar" },
-        { account_id: "foreign" },
-        { url: "https://attacker.invalid/read" },
-        { url: "https://" + host + ".attacker.invalid/read" },
-        { url: "https://attacker@" + host + "/read" },
-        { url: "https://" + host + "@attacker.invalid/read" },
-        { url: "https://" + host + ":444/read" },
-        { url: "https://" + host + ":16861/read" },
-        { url: "https://attacker.invalid:16860/read" },
-        { url: "https://api38.unipile.com.attacker.invalid:16860/read" },
-        { url: "https://attacker@api38.unipile.com:16860/read" },
-        { url: "https://api38.unipile.com:16860\\@attacker.invalid/read" }, // pragma: allowlist secret (fictional host-spoof fixture)
-        { url: "https://api38.unipile.com:16860/read\n" },
-        { url: "https://api38.unipile.com:16860/read#fragment" },
-        { url: "https://" + host + "\\@attacker.invalid/read" },
-        { url: "https://" + host + "/read\n" },
-        { url: "https://" + host + "/read\u0000" },
-        { url: "https://" + host + "/read#fragment" },
-        { url: " https://" + host + "/read" },
-        { url: "https://" + host },
-        ...(source === "linkedin"
-          ? [
-              { url: "https://" + host + ":13111/read" },
-              { url: "https://" + host + ":16860/read" },
-              { url: "https://api38.unipile.com:16860/read" },
-            ]
-          : []),
-      ])
-        expect(() =>
-          run(
-            "Check Owner identity plan",
-            { available: true, plan: { ...plan, ...replacement } },
-            linked,
-          ),
-        ).toThrow();
+        for (const replacement of [
+          { method: "POST" },
+          { source: "calendar" },
+          {
+            source:
+              source === "whatsapp_business"
+                ? "whatsapp_personal"
+                : "whatsapp_business",
+          },
+          { account_id: "foreign" },
+          { url: "https://attacker.invalid/read" },
+          { url: "https://" + host + ".attacker.invalid/read" },
+          { url: "https://attacker@" + host + "/read" },
+          { url: "https://" + host + "@attacker.invalid/read" },
+          { url: "https://" + host + ":444/read" },
+          { url: "https://" + host + ":16861/read" },
+          { url: "https://attacker.invalid:16860/read" },
+          { url: "https://api38.unipile.com.attacker.invalid:16860/read" },
+          { url: "https://attacker@api38.unipile.com:16860/read" },
+          { url: "https://api38.unipile.com:16860\\@attacker.invalid/read" }, // pragma: allowlist secret (fictional host-spoof fixture)
+          { url: "https://api38.unipile.com:16860/read\n" },
+          { url: "https://api38.unipile.com:16860/read#fragment" },
+          { url: "https://" + host + "\\@attacker.invalid/read" },
+          { url: "https://" + host + "/read\n" },
+          { url: "https://" + host + "/read\u0000" },
+          { url: "https://" + host + "/read#fragment" },
+          { url: " https://" + host + "/read" },
+          { url: "https://" + host },
+          ...(source === "linkedin"
+            ? [
+                { url: "https://" + host + ":13111/read" },
+                { url: "https://" + host + ":16860/read" },
+                { url: "https://api38.unipile.com:16860/read" },
+              ]
+            : []),
+        ])
+          expect(() =>
+            run(
+              stage,
+              { available: true, plan: { ...plan, ...replacement } },
+              linked,
+            ),
+          ).toThrow();
+      }
     });
     it("forwards only Retry-After and the server-issued request ID", () => {
       const result = run(

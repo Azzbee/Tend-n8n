@@ -805,14 +805,14 @@ try {
       "import",
     );
     assert(
-      imported.includes("Successfully imported 18 workflows"),
-      "eighteen-workflow import failed",
+      imported.includes("Successfully imported 19 workflows"),
+      "nineteen-workflow import failed",
     );
     checks.push({
       name: "Clean n8n import",
       pass: true,
       detail:
-        "18 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive",
+        "19 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive",
     });
     if (process.env.TEND_GOOGLE_CHECK_ONLY !== "1") {
       for (const wid of [

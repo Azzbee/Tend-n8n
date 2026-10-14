@@ -1218,6 +1218,13 @@ for (const spec of [
     provider: "linkedin",
     credential: "CONFIGURE_LINKEDIN_PORTABILITY_HEADER",
   },
+  {
+    number: 19,
+    id: "TendSocial19",
+    source: "whatsapp_business",
+    provider: "unipile",
+    credential: "CONFIGURE_UNIPILE_BUSINESS_READ_HEADER",
+  },
 ] as const) {
   const w = privateWorkflow(
     spec.id,
@@ -1384,7 +1391,7 @@ return [{json:{...x,rows,omitted_row_count:omitted,unknown_field_count:count(pre
 await mkdir("workflows", { recursive: true });
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
-    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly"][i]}.json`,
+    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly", "business-whatsapp-readonly"][i]}.json`,
     workflows[i],
   );
 await mkdir("fixtures", { recursive: true });

@@ -46,9 +46,9 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships eighteen inactive exports without private account credentials or external recipients", () => {
+  it("ships nineteen inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(18);
+    expect(files).toHaveLength(19);
     for (const f of files) {
       const raw = readFileSync(`workflows/${f}`, "utf8");
       expect(load(f).active).toBe(false);
