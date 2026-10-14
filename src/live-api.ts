@@ -189,6 +189,34 @@ export function createLiveServer(options: LiveServerOptions): Server {
         });
         return;
       }
+      if (
+        req.method === "GET" &&
+        url.pathname === "/api/live/telegram/pending-reply"
+      ) {
+        const channel = url.searchParams.get("channel_id"),
+          update = url.searchParams.get("update_id");
+        if (
+          [...url.searchParams.keys()].some(
+            (key) => !["channel_id", "update_id"].includes(key),
+          ) ||
+          url.searchParams.getAll("channel_id").length !== 1 ||
+          url.searchParams.getAll("update_id").length !== 1 ||
+          !channel ||
+          !update ||
+          !/^\d{1,16}$/.test(update)
+        )
+          throw new Error("invalid pending reply selector");
+        const pending = store.pendingTelegramReply(
+          owner,
+          channel,
+          Number(update),
+        );
+        respond(
+          200,
+          pending ? { available: true, ...pending } : { available: false },
+        );
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/live/sync-state") {
         const source = url.searchParams.get("source");
         if (source !== "gmail" && source !== "calendar")

@@ -716,3 +716,85 @@ describe("private live API", () => {
     }
   });
 });
+
+it("reads one owner-bound pending reply without changing delivery state and excludes sent or revoked caches", async () => {
+  const policy = exampleLivePolicy,
+    clock = () => new Date("2026-10-14T12:00:00Z");
+  const principal = {
+    owner_id: policy.principal_id,
+    user_id: "live-owner",
+    chat_id: "live-private",
+  };
+  const store = new TendStore(":memory:", { mode: "live", principal, clock });
+  const server = createLiveServer({
+    policy,
+    store,
+    auth: new InternalAuth(undefined, verificationHash(key)),
+    clock,
+  });
+  const base = `http://127.0.0.1:${await listen(server)}`;
+  const headers = { Authorization: "Bearer " + key };
+  const command = { ...principal, chat_type: "private", text: "/status" };
+  try {
+    store.telegramCommand(command, "recovery-control", 100);
+    const route =
+      base +
+      "/api/live/telegram/pending-reply?channel_id=recovery-control&update_id=100";
+    expect((await fetch(route)).status).toBe(401);
+    const before = store.telegramDeliveryCounts();
+    const response = await fetch(route, { headers });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      available: true,
+      channel_id: "recovery-control",
+      update_id: 100,
+      reply: { outbound_sent: false },
+    });
+    expect(store.telegramDeliveryCounts()).toEqual(before);
+    expect(() =>
+      store.pendingTelegramReply("another-owner", "recovery-control", 100),
+    ).toThrow();
+    for (const query of [
+      "channel_id=../bad&update_id=100",
+      "channel_id=recovery-control&update_id=1e2",
+      "channel_id=recovery-control&update_id=9007199254740992",
+      "channel_id=recovery-control&update_id=100&owner_id=another-owner",
+    ]) {
+      expect(
+        (
+          await fetch(base + "/api/live/telegram/pending-reply?" + query, {
+            headers,
+          })
+        ).status,
+      ).toBe(400);
+    }
+    store.acknowledgeTelegramReply(command, "recovery-control", 100, 77);
+    expect(await (await fetch(route, { headers })).json()).toEqual({
+      available: false,
+    });
+    store.telegramCommand(command, "recovery-control", 101);
+    store.markLiveSyncError(
+      policy.principal_id,
+      "gmail",
+      policy.account_email,
+      true,
+      null,
+      401,
+    );
+    expect(
+      await (
+        await fetch(route.replace("update_id=100", "update_id=101"), {
+          headers,
+        })
+      ).json(),
+    ).toEqual({ available: false });
+    expect(store.telegramDeliveryCounts()).toEqual({
+      reply_pending: 1,
+      sent: 1,
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
+});

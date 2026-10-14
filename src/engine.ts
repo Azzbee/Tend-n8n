@@ -1325,6 +1325,28 @@ export class TendStore {
       throw error;
     }
   }
+  pendingTelegramReply(
+    owner: string,
+    channelId: string,
+    updateId: number,
+  ): { channel_id: string; update_id: number; reply: Reply } | null {
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.assertOwner(owner);
+    this.validateTelegramKey(channelId, updateId);
+    const row = this.db
+      .prepare(
+        "SELECT status,reply_data FROM live_telegram_updates WHERE owner_id=? AND channel_id=? AND update_id=?",
+      )
+      .get(owner, channelId, updateId);
+    if (!row || row.status !== "reply_pending") return null;
+    const reply: unknown = JSON.parse(String(row.reply_data));
+    if (!isRecord(reply) || reply.outbound_sent !== false) return null;
+    return {
+      channel_id: channelId,
+      update_id: updateId,
+      reply: { ...reply, outbound_sent: false },
+    };
+  }
   acknowledgeTelegramReply(
     auth: AuthCommand,
     channelId: string,
