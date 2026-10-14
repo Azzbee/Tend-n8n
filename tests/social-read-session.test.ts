@@ -551,6 +551,32 @@ describe.each(["sqlite", "postgres"] as const)(
           .status,
       ).toBe("revoked");
     });
+    it("preserves chat rate-limit reasons, bounded backoff and the page cursor", async () => {
+      const proof_id = await identity();
+      const p = request(
+        await sessions.plan({ ...personal, phase: "snapshot", proof_id }),
+      );
+      expect(
+        await sessions.result({
+          request_id: p.request_id,
+          status: 429,
+          body: { error: "whatsapp_chat_rate_limited" },
+          headers: { "Retry-After": "999999" },
+        }),
+      ).toEqual({ kind: "blocked", reason: "whatsapp_chat_rate_limited" });
+      expect(
+        (await store.sourceStatus(owner)).find(
+          (s) => s.source === personal.source,
+        ),
+      ).toMatchObject({
+        cursor: null,
+        last_error: 429,
+        retry_after_until: new Date(now.getTime() + 86400000).toISOString(),
+      });
+      expect(
+        await sessions.plan({ ...personal, phase: "snapshot", proof_id }),
+      ).toEqual({ available: false, reason: "provider_retry_not_due" });
+    });
     it("records bounded provider backoff and malformed200 without changing cursor", async () => {
       const proof_id = await identity();
       let p = request(

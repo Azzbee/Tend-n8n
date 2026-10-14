@@ -96,6 +96,41 @@ const page = (start = 0, next: string | undefined = undefined) => ({
   ],
 });
 describe("official read-only social plans", () => {
+  it("propagates only exact chat failures for the Unipile message operation", () => {
+    const reasons = [
+      "whatsapp_chat_response_count",
+      "whatsapp_chat_response_budget",
+      "whatsapp_chat_transport_failed",
+      "whatsapp_chat_http_failed",
+      "whatsapp_chat_identity_mismatch",
+      "whatsapp_chat_peer_invalid",
+      "whatsapp_chat_provider_mismatch",
+    ];
+    for (const reason of reasons)
+      expect(mapSocialProviderResponse(plan(), 599, { error: reason })).toEqual(
+        { kind: "quarantined", reason },
+      );
+    expect(
+      mapSocialProviderResponse(plan(), 429, {
+        error: "whatsapp_chat_rate_limited",
+      }),
+    ).toEqual({ kind: "quarantined", reason: "whatsapp_chat_rate_limited" });
+    for (const [p, status, error] of [
+      [plan(), 599, "whatsapp_chat_unknown"],
+      [plan(), 599, "whatsapp_chat_rate_limited"],
+      [plan(), 429, "whatsapp_chat_transport_failed"],
+      [plan(), 503, "whatsapp_chat_transport_failed"],
+      [plan("whatsapp_personal", "identity"), 599, reasons[0]],
+      [plan("linkedin"), 599, reasons[0]],
+      [{ ...plan(), source: "linkedin" }, 599, reasons[0]],
+      [{ ...plan(), operation: "unipile.accounts.get" }, 599, reasons[0]],
+    ] as const)
+      expect(mapSocialProviderResponse(p, status, { error })).toEqual({
+        kind: "quarantined",
+        reason: "provider_read_failed",
+      });
+  });
+
   it.each(["current", "partial"])(
     "allows identity verification after an idle %s window expires",
     (status) => {

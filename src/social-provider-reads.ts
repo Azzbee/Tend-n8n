@@ -460,6 +460,28 @@ export function mapSocialProviderResponse(
         ? connectionPreview(plan, [], null, true)
         : { kind: "page", request: pageRequest(plan, [], null, true) };
     }
+    if (
+      plan.response_kind === "unipile_messages" &&
+      plan.operation === "unipile.messages.list" &&
+      ["whatsapp_personal", "whatsapp_business"].includes(plan.source) &&
+      (status === 599 || status === 429)
+    ) {
+      const reason = object(body).error;
+      const allowed =
+        status === 429
+          ? ["whatsapp_chat_rate_limited"]
+          : [
+              "whatsapp_chat_response_count",
+              "whatsapp_chat_response_budget",
+              "whatsapp_chat_transport_failed",
+              "whatsapp_chat_http_failed",
+              "whatsapp_chat_identity_mismatch",
+              "whatsapp_chat_peer_invalid",
+              "whatsapp_chat_provider_mismatch",
+            ];
+      if (typeof reason === "string" && allowed.includes(reason))
+        throw new Error(reason);
+    }
     if (status !== 200) throw new Error("provider_read_failed");
     const raw = object(body);
     if (plan.response_kind === "unipile_account") {

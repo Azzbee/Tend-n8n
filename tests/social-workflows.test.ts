@@ -606,7 +606,6 @@ for (const [file, source, host, credential] of [
       it("blocks transient failures and foreign chat proof before committing a cursor", () => {
         for (const response of [
           { error: "timeout" },
-          { statusCode: 429, body: {} },
           { statusCode: 503, body: {} },
           ...[
             { id: "foreign" },
@@ -620,6 +619,25 @@ for (const [file, source, host, credential] of [
             statusCode: 599,
             body: { error: expect.stringMatching(/^whatsapp_chat_[a-z_]+$/) },
           });
+      });
+      it("preserves only bounded Retry-After on a rate-limited chat lookup", () => {
+        for (const key of ["retry-after", "Retry-After"])
+          for (const value of ["60", "x".repeat(128), "x".repeat(129), 60]) {
+            const out = enriched({
+              statusCode: 429,
+              headers: { [key]: value, secret: "private" },
+              body: { error: "private" },
+            });
+            const headers =
+              typeof value === "string" && value.length <= 128
+                ? { headers: { "Retry-After": value } }
+                : {};
+            expect(out).toEqual({
+              statusCode: 429,
+              body: { error: "whatsapp_chat_rate_limited" },
+              ...headers,
+            });
+          }
       });
       it("reports fixed private-data-free reasons for every blocked membership branch", () => {
         for (const [response, reason] of [
@@ -650,7 +668,7 @@ for (const [file, source, host, credential] of [
           ],
         ] as const) {
           expect(enriched(response)).toEqual({
-            statusCode: 599,
+            statusCode: reason === "whatsapp_chat_rate_limited" ? 429 : 599,
             body: { error: reason },
           });
         }
