@@ -1,0 +1,473 @@
+{
+  "id": "TendSocial17",
+  "name": "Tend 17: Private unipile verified read page",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-one-verified-private-provider-page",
+      "name": "Run one verified private provider page",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "select-approved-provider-account-and-phase",
+      "name": "Select approved provider account and phase",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [240, 0],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "account",
+              "name": "account_id",
+              "value": "CONFIGURE_ACCOUNT_ID",
+              "type": "string"
+            },
+            {
+              "id": "phase",
+              "name": "phase",
+              "value": "snapshot",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "validate-configured-read-selection",
+      "name": "Validate configured read selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(typeof x.account_id!=='string'||!x.account_id.trim()||x.account_id.length>1024||x.account_id.startsWith('CONFIGURE_')||![\"snapshot\"].includes(x.phase))throw new Error('Configure the approved provider account before retrieval');return [{json:{account_id:x.account_id,phase:x.phase,started_at:Date.now()}}];"
+      }
+    },
+    {
+      "id": "plan-owner-identity-read",
+      "name": "Plan owner identity read",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 0],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:18768/api/live/social/read-input?source=whatsapp_personal&account_id='+encodeURIComponent($json.account_id)+'&phase=identity' }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "check-owner-identity-plan",
+      "name": "Check Owner identity plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||!u.hostname.endsWith('.unipile.com'))throw new Error('Unapproved provider request');return [{json:x}];"
+      }
+    },
+    {
+      "id": "read-owner-identity",
+      "name": "Read Owner identity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.plan.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.plan.headers) }}",
+        "options": {
+          "timeout": 5000,
+          "redirect": { "redirect": { "followRedirects": false } },
+          "response": {
+            "response": { "fullResponse": true, "neverError": true }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_UNIPILE_READ_HEADER",
+          "name": "CONFIGURE_UNIPILE_READ_HEADER"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "bound-owner-identity-response",
+      "name": "Bound Owner identity response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 0],
+      "parameters": {
+        "jsCode": "const ctx=$(\"Plan owner identity read\").first(0,0).json;const r=$input.first().json;let status=Number(r.statusCode)||599;let body=r.body??{};const raw=r.headers||{};const retry=raw['retry-after']??raw['Retry-After'];const out={request_id:ctx.request_id,status,body,...(typeof retry==='string'&&retry.length<=128?{headers:{'Retry-After':retry}}:{})};if(!Number.isSafeInteger(ctx.max_result_bytes)||ctx.max_result_bytes<1024)throw new Error('Invalid server response budget');if(Buffer.byteLength(JSON.stringify(out),'utf8')>ctx.max_result_bytes)return [{json:{request_id:ctx.request_id,status:599,body:{error:'provider_envelope_exceeds_budget'}}}];return [{json:out}];"
+      }
+    },
+    {
+      "id": "validate-owner-identity-response",
+      "name": "Validate Owner identity response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/social/read-result",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "check-selected-provider-page-plan",
+      "name": "Check Selected provider page plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||!u.hostname.endsWith('.unipile.com'))throw new Error('Unapproved provider request');return [{json:x}];"
+      }
+    },
+    {
+      "id": "read-selected-provider-page",
+      "name": "Read Selected provider page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.plan.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify($json.plan.headers) }}",
+        "options": {
+          "timeout": 5000,
+          "redirect": { "redirect": { "followRedirects": false } },
+          "response": {
+            "response": { "fullResponse": true, "neverError": true }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_UNIPILE_READ_HEADER",
+          "name": "CONFIGURE_UNIPILE_READ_HEADER"
+        }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "bound-selected-provider-page-response",
+      "name": "Bound Selected provider page response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, 0],
+      "parameters": {
+        "jsCode": "const ctx=$(\"Plan selected provider page\").first(0,$runIndex).json;const r=$input.first().json;let status=Number(r.statusCode)||599;let body=r.body??{};const raw=r.headers||{};const retry=raw['retry-after']??raw['Retry-After'];const out={request_id:ctx.request_id,status,body,...(typeof retry==='string'&&retry.length<=128?{headers:{'Retry-After':retry}}:{})};if(!Number.isSafeInteger(ctx.max_result_bytes)||ctx.max_result_bytes<1024)throw new Error('Invalid server response budget');if(Buffer.byteLength(JSON.stringify(out),'utf8')>ctx.max_result_bytes)return [{json:{request_id:ctx.request_id,status:599,body:{error:'provider_envelope_exceeds_budget'}}}];return [{json:out}];"
+      }
+    },
+    {
+      "id": "validate-selected-provider-page-response",
+      "name": "Validate Selected provider page response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3360, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/social/read-result",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "require-verified-owner-proof",
+      "name": "Require verified owner proof",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.kind!=='identity'||typeof x.proof_id!=='string')throw new Error('Provider owner verification unavailable: '+String(x.reason||'unavailable'));return [{json:x}];"
+      }
+    },
+    {
+      "id": "plan-selected-provider-page",
+      "name": "Plan selected provider page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2160, 0],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:18768/api/live/social/read-input?source=whatsapp_personal&account_id='+encodeURIComponent($('Validate configured read selection').first().json.account_id)+'&phase='+encodeURIComponent($('Validate configured read selection').first().json.phase)+'&proof_id='+encodeURIComponent($('Require verified owner proof').first().json.proof_id) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "bound-connections-preview-pagination",
+      "name": "Bound connections preview pagination",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3450, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const selection=$('Validate configured read selection').first().json;const pageIndex=$runIndex;\nif(!false||selection.phase!=='connections')return [{json:{...x,_continue_connections:false}}];\nif(!Number.isSafeInteger(pageIndex)||pageIndex<0||pageIndex>4)throw new Error('Invalid preview page index');\nconst previous=pageIndex>0?$('Bound connections preview pagination').first(0,pageIndex-1).json??{}:{};\nif(x.kind==='blocked')return [{json:{...x,_continue_connections:false,more_available:true,preview_budget_exhausted:false,preview_interrupted:true}}];\nif(x.kind!=='connections')throw new Error('Invalid connections preview');\nconst count=v=>Number.isSafeInteger(v)&&v>=0?v:0;\nconst rows=Array.isArray(previous.rows)?[...previous.rows]:[];let dropped=0;\nfor(const row of Array.isArray(x.rows)?x.rows:[]){if(rows.length<100&&Buffer.byteLength(JSON.stringify([...rows,row]),'utf8')<=65536)rows.push(row);else dropped++;}\nconst omitted=count(previous.omitted_row_count)+count(x.omitted_row_count)+dropped;\nconst hasMore=x.complete!==true;const next=hasMore&&pageIndex<4&&Number.isFinite(selection.started_at)&&Date.now()-selection.started_at<90000;\nreturn [{json:{...x,rows,omitted_row_count:omitted,unknown_field_count:count(previous.unknown_field_count)+count(x.unknown_field_count),truncated_value_count:count(previous.truncated_value_count)+count(x.truncated_value_count),preview_truncated:omitted>0,preview_pages_read:pageIndex+1,more_available:hasMore,preview_budget_exhausted:hasMore&&!next,_continue_connections:next}}];"
+      }
+    },
+    {
+      "id": "another-preview-page-fits-this-run",
+      "name": "Another preview page fits this run",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3600, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json._continue_connections }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "return-private-provider-receipt",
+      "name": "Return private provider receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3850, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!['page','connections','blocked'].includes(x.kind))throw new Error('Unknown provider receipt');const {_continue_connections,...receipt}=x;return [{json:{...receipt,outbound_sent:false,submission_sent:false}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Run one verified private provider page": {
+      "main": [
+        [
+          {
+            "node": "Select approved provider account and phase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select approved provider account and phase": {
+      "main": [
+        [
+          {
+            "node": "Validate configured read selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate configured read selection": {
+      "main": [
+        [{ "node": "Plan owner identity read", "type": "main", "index": 0 }]
+      ]
+    },
+    "Plan owner identity read": {
+      "main": [
+        [{ "node": "Check Owner identity plan", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Owner identity plan": {
+      "main": [[{ "node": "Read Owner identity", "type": "main", "index": 0 }]]
+    },
+    "Read Owner identity": {
+      "main": [
+        [
+          {
+            "node": "Bound Owner identity response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound Owner identity response": {
+      "main": [
+        [
+          {
+            "node": "Validate Owner identity response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan selected provider page": {
+      "main": [
+        [
+          {
+            "node": "Check Selected provider page plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Selected provider page plan": {
+      "main": [
+        [{ "node": "Read Selected provider page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Read Selected provider page": {
+      "main": [
+        [
+          {
+            "node": "Bound Selected provider page response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound Selected provider page response": {
+      "main": [
+        [
+          {
+            "node": "Validate Selected provider page response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Owner identity response": {
+      "main": [
+        [{ "node": "Require verified owner proof", "type": "main", "index": 0 }]
+      ]
+    },
+    "Require verified owner proof": {
+      "main": [
+        [{ "node": "Plan selected provider page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate Selected provider page response": {
+      "main": [
+        [
+          {
+            "node": "Bound connections preview pagination",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound connections preview pagination": {
+      "main": [
+        [
+          {
+            "node": "Another preview page fits this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Another preview page fits this run": {
+      "main": [
+        [{ "node": "Plan selected provider page", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Return private provider receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris",
+    "saveManualExecutions": false,
+    "executionTimeout": 120
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000017",
+  "meta": { "templateCredsSetupCompleted": false }
+}

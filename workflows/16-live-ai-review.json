@@ -1,0 +1,362 @@
+{
+  "id": "TendLive16",
+  "name": "Tend 16: Local AI cited contact briefing or review draft",
+  "active": false,
+  "nodes": [
+    {
+      "id": "run-selected-private-ai-review",
+      "name": "Run selected private AI review",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "set-explicit-contact-and-review-purpose",
+      "name": "Set explicit contact and review purpose",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [250, 0],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "contact",
+              "name": "contact_id",
+              "value": "CONFIGURE_CONTACT_ID",
+              "type": "string"
+            },
+            {
+              "id": "purpose",
+              "name": "purpose",
+              "value": "CONFIGURE_PURPOSE",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "validate-explicit-private-ai-selection",
+      "name": "Validate explicit private AI selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(typeof x.contact_id!=='string'||!x.contact_id.trim()||x.contact_id.length>128||x.contact_id==='OWNER'||x.contact_id.startsWith('CONFIGURE_')||!['briefing','draft'].includes(x.purpose))throw new Error('Configure an explicit contact ID and briefing or draft purpose before retrieval');return [{json:{contact_id:x.contact_id,purpose:x.purpose,started_at:Date.now()}}];"
+      }
+    },
+    {
+      "id": "read-selected-current-ai-evidence",
+      "name": "Read selected current AI evidence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 0],
+      "parameters": {
+        "url": "={{ 'http://host.docker.internal:18768/api/live/ai/input?contact_id=' + encodeURIComponent($json.contact_id) + '&purpose=' + encodeURIComponent($json.purpose) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "check-bounded-current-ai-request",
+      "name": "Check bounded current AI request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.eligible!==true)return [{json:{eligible:false}}];if(typeof x.request_id!=='string'||x.request_id.length<16||x.request_id.length>256||!x.request||!Array.isArray(x.request.messages)||x.request.messages.length!==2||x.request.messages[0].role!=='system'||x.request.messages[1].role!=='user'||x.request.messages.some(m=>typeof m.content!=='string')||Buffer.byteLength(JSON.stringify(x.request),'utf8')>32768)throw new Error('Invalid or oversized private AI request');return [{json:{...x,eligible:true}}];"
+      }
+    },
+    {
+      "id": "selected-current-ai-evidence-available",
+      "name": "Selected current AI evidence available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1250, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.eligible }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "local-cited-review-basic-llm-chain",
+      "name": "Local cited review (Basic LLM Chain)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [1500, 0],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.request.messages[1].content }}",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "={{ $json.request.messages[0].content }}"
+            }
+          ]
+        },
+        "batching": { "batchSize": 1 }
+      },
+      "retryOnFail": false,
+      "continueOnFail": true
+    },
+    {
+      "id": "local-review-ollama-chat-model",
+      "name": "Local review Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [1500, 260],
+      "parameters": {
+        "model": "qwen3:0.6b",
+        "options": {
+          "temperature": 0,
+          "format": "json",
+          "think": false,
+          "numCtx": 8192,
+          "numPredict": 1024
+        }
+      },
+      "credentials": {
+        "ollamaApi": {
+          "id": "TendReviewLocalOllama",
+          "name": "Tend review local Ollama (no key)"
+        }
+      }
+    },
+    {
+      "id": "bound-cited-review-output-before-validation",
+      "name": "Bound cited review output before validation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1750, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;const input=$('Check bounded current AI request').first().json;const clock=$('Validate explicit private AI selection').first().json.started_at;if(!Number.isFinite(clock)||Date.now()-clock>110000)throw new Error('Private AI review exceeded its deadline');const candidate=typeof x.text==='string'?x.text:Object.keys(x).length===1&&Array.isArray(x.items)?JSON.stringify(x):null;const output=typeof candidate==='string'&&Buffer.byteLength(candidate,'utf8')<=8192?candidate:null;return [{json:{request_id:input.request_id,output}}];"
+      }
+    },
+    {
+      "id": "validate-current-cited-ai-review",
+      "name": "Validate current cited AI review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/ai/validate",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "no-eligible-selected-ai-evidence",
+      "name": "No eligible selected AI evidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 500],
+      "parameters": {
+        "jsCode": "return [{json:{status:'unavailable',outbound_sent:false,draft:null,items:[],warning:'No eligible selected real evidence. No model call or draft was produced.'}}];"
+      }
+    },
+    {
+      "id": "return-review-only-without-delivery",
+      "name": "Return review only without delivery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.outbound_sent!==false||!['validated','fallback','unavailable'].includes(x.status)||(x.draft!==null&&(!x.draft||x.draft.pending_review!==true))||Object.keys(x).some(k=>['recipients','actions','send','tools'].includes(k)))throw new Error('Private AI result must remain review only');return [{json:x}];"
+      }
+    }
+  ],
+  "connections": {
+    "Run selected private AI review": {
+      "main": [
+        [
+          {
+            "node": "Set explicit contact and review purpose",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set explicit contact and review purpose": {
+      "main": [
+        [
+          {
+            "node": "Validate explicit private AI selection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate explicit private AI selection": {
+      "main": [
+        [
+          {
+            "node": "Read selected current AI evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read selected current AI evidence": {
+      "main": [
+        [
+          {
+            "node": "Check bounded current AI request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check bounded current AI request": {
+      "main": [
+        [
+          {
+            "node": "Selected current AI evidence available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Selected current AI evidence available": {
+      "main": [
+        [
+          {
+            "node": "Local cited review (Basic LLM Chain)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No eligible selected AI evidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local cited review (Basic LLM Chain)": {
+      "main": [
+        [
+          {
+            "node": "Bound cited review output before validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound cited review output before validation": {
+      "main": [
+        [
+          {
+            "node": "Validate current cited AI review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate current cited AI review": {
+      "main": [
+        [
+          {
+            "node": "Return review only without delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No eligible selected AI evidence": {
+      "main": [
+        [
+          {
+            "node": "Return review only without delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local review Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Local cited review (Basic LLM Chain)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris",
+    "saveManualExecutions": false,
+    "executionTimeout": 120
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000016",
+  "meta": { "templateCredsSetupCompleted": false }
+}

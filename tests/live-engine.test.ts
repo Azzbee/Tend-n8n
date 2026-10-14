@@ -83,7 +83,71 @@ function makeStore(path = ":memory:"): TendStore {
   return store;
 }
 describe("private live owner store", () => {
-  it("proposes reverified promises as pending after reconnect without restoring confirmation", () => {
+  it.each([
+    "I'll send the notes by 2026-10-15.",
+    "Je vais envoyer les notes le 2026-10-15.",
+  ])("accepts a directly authored promise: %s", (text) => {
+    const store = makeStore();
+    const record = {
+      ...raw(),
+      body_text: text,
+      authored_text: text,
+      authored_spans: [{ start: 0, end: text.length, text }],
+    };
+    try {
+      const stored = store.ingest(record);
+      store.markExtractionAttempt(
+        principal.owner_id,
+        stored.record_key,
+        stored.content_hash,
+      );
+      expect(
+        store.addCandidate(record, {
+          quote: text,
+          action: text.includes("envoyer")
+            ? "envoyer les notes"
+            : "send the notes",
+          suggested_due: "2026-10-15",
+        }).status,
+      ).toBe("pending");
+    } finally {
+      store.close();
+    }
+  });
+  it.each([
+    "I will not send the notes.",
+    "I will send the notes if approved.",
+    "I'll send the notes?",
+  ])("rejects unsupported promise semantics: %s", (text) => {
+    const store = makeStore();
+    const record = {
+      ...raw(),
+      body_text: text,
+      authored_text: text,
+      authored_spans: [{ start: 0, end: text.length, text }],
+    };
+    try {
+      const stored = store.ingest(record);
+      expect(() =>
+        store.markExtractionAttempt(
+          principal.owner_id,
+          stored.record_key,
+          stored.content_hash,
+        ),
+      ).toThrow();
+      expect(() =>
+        store.addCandidate(record, {
+          quote: text,
+          action: "send the notes",
+          suggested_due: null,
+        }),
+      ).toThrow();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("preserves confirmed review obligations across reconnect until explicit owner closure", () => {
     const store = makeStore(),
       record = raw();
     try {
@@ -114,15 +178,20 @@ describe("private live owner store", () => {
       });
       expect(proposed).toMatchObject({
         commitment_id: candidate.commitment_id,
-        status: "pending",
-        due_date: null,
-        evidence_valid: true,
+        status: "confirmed",
+        due_date: "2026-10-15",
+        evidence_valid: false,
       });
       expect(store.commitments(principal.owner_id)).toHaveLength(1);
-      store.command({
-        ...auth,
-        text: `/confirm ${candidate.commitment_id} 2026-10-15`,
-      });
+      expect(() =>
+        store.command({
+          ...auth,
+          text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+        }),
+      ).toThrow();
+      expect(() =>
+        store.command({ ...auth, text: `/draft ${candidate.commitment_id}` }),
+      ).toThrow();
       store.command({ ...auth, text: `/done ${candidate.commitment_id}` });
       store.revokeSource(principal.owner_id, "gmail");
       store.reconnectLiveSource(

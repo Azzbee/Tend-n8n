@@ -1,5 +1,7 @@
+import { parseSocialPolicy, type SocialPolicy } from "./social-policy.ts";
 /** Private operator input only. This tracked example has fictional identities. */
 export interface LivePolicy {
+  social?: SocialPolicy;
   principal_id: string;
   account_email: string;
   verified_owner_emails: string[];
@@ -61,6 +63,7 @@ function list(value: unknown): string[] {
 export function parseLivePolicy(input: unknown): LivePolicy {
   const value = object(input);
   const keys = [
+    "social",
     "principal_id",
     "account_email",
     "verified_owner_emails",
@@ -112,7 +115,9 @@ export function parseLivePolicy(input: unknown): LivePolicy {
     !aliases.includes(account)
   )
     throw new Error("invalid verified account/aliases");
+  const social = parseSocialPolicy(value.social);
   return {
+    ...(social ? { social } : {}),
     principal_id: nonempty(value.principal_id),
     account_email: account,
     verified_owner_emails: aliases,

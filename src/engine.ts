@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { canonicalEmail, type LiveRecord } from "./google-records.ts";
 import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
 import { chmodSync } from "node:fs";
+import {
+  eligiblePromiseSpans,
+  isExplicitCommitment,
+} from "./authored-promises.ts";
 export const sources = [
   "gmail",
   "calendar",
@@ -73,6 +77,7 @@ export interface StoreOptions {
   clock?: () => Date;
 }
 export interface LiveBatch {
+  operation_hash?: string;
   owner_id: string;
   source: Source;
   account_id: string;
@@ -240,6 +245,15 @@ export function normalizeRecord(
   };
 }
 export function validateCandidate(raw: RawRecord, input: unknown): Candidate {
+  return validateEvidenceCandidate(raw, input, (text) =>
+    /^I (?:will|promise to)\b/i.test(text),
+  );
+}
+function validateEvidenceCandidate(
+  raw: RawRecord,
+  input: unknown,
+  explicit: (text: string) => boolean,
+): Candidate {
   if (
     !isRecord(input) ||
     Object.keys(input).some(
@@ -264,8 +278,7 @@ export function validateCandidate(raw: RawRecord, input: unknown): Candidate {
     throw new Error(
       "single direct utterance required; quoted reply needs review",
     );
-  if (!/^I (?:will|promise to)\b/i.test(input.quote))
-    throw new Error("not explicit promise");
+  if (!explicit(input.quote)) throw new Error("not explicit promise");
   if (raw.kind !== "message") throw new Error("not conversation");
   if (
     input.suggested_due !== null &&
@@ -289,6 +302,130 @@ export function retryDelay(attempt: number, retryAfter: string | null): number {
   const delay = seconds !== null ? seconds * 1000 : 500 * 2 ** attempt;
   if (delay > 10000) throw new Error("retry budget: defer run");
   return delay;
+}
+export function normalizeLiveRecord(
+  raw: RawRecord,
+  identities: Identity[],
+): NormalizedRecord {
+  if (typeof raw.body_text !== "string") throw new Error("invalid body_text");
+  parseRaw({ ...raw, body_text: raw.body_text || "(no authored text)" });
+  if (
+    !["live", "snapshot"].includes(raw.ingestion_mode) ||
+    !sources.includes(raw.source) ||
+    (raw.source === "calendar" && raw.ingestion_mode !== "live")
+  )
+    throw new Error("live source required");
+  const record = raw as LiveRecord;
+  if (
+    !Array.isArray(record.contact_ids) ||
+    !Array.isArray(record.authored_spans) ||
+    typeof record.authored_text !== "string" ||
+    typeof record.eligible_for_extraction !== "boolean" ||
+    !["direct", "group", "unknown"].includes(record.attribution)
+  )
+    throw new Error("invalid live record");
+  for (const time of [
+    raw.occurred_at,
+    raw.observed_at,
+    raw.coverage_start,
+    raw.coverage_end,
+  ])
+    if (!exactTimestamp(time)) throw new Error("invalid timestamp");
+  if (Date.parse(raw.coverage_start) > Date.parse(raw.coverage_end))
+    throw new Error("reversed coverage");
+  const actor = identities.find((x) => x.identity === raw.actor_identity);
+  const participants = raw.participant_identities.map((email) =>
+    identities.find((x) => x.identity === email),
+  );
+  if (!actor || participants.some((x) => !x))
+    throw new Error("unresolved identity");
+  if (
+    raw.source !== "calendar" &&
+    ((raw.direction === "sent") !== (actor.contact_id === "OWNER") ||
+      raw.kind !== "message")
+  )
+    throw new Error("inconsistent actor direction");
+  if (
+    raw.source === "calendar" &&
+    (raw.direction !== "event" || raw.kind !== "meeting")
+  )
+    throw new Error("invalid calendar direction");
+  const contacts = [
+    ...new Set(
+      [actor, ...participants.filter((x): x is Identity => !!x)]
+        .map((x) => x.contact_id)
+        .filter((x) => x !== "OWNER"),
+    ),
+  ].sort();
+  if (
+    JSON.stringify(contacts) !==
+    JSON.stringify([...new Set(record.contact_ids)].sort())
+  )
+    throw new Error("contact binding mismatch");
+  if (
+    record.authored_spans.some(
+      (span) =>
+        !Number.isInteger(span.start) ||
+        !Number.isInteger(span.end) ||
+        span.start < 0 ||
+        span.end < span.start ||
+        record.authored_text.slice(span.start, span.end) !== span.text ||
+        !raw.body_text.includes(span.text),
+    )
+  )
+    throw new Error("invalid authored span");
+  const record_key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        raw.owner_id,
+        raw.source,
+        raw.account_id,
+        raw.source_record_id,
+      ]),
+    )
+    .digest("hex");
+  const content_hash = createHash("sha256")
+    .update(
+      JSON.stringify([
+        raw.body_text,
+        raw.occurred_at,
+        raw.cancelled,
+        raw.direction,
+        raw.actor_identity,
+        raw.participant_identities,
+        record.contact_ids,
+        record.authored_spans,
+        record.attribution,
+        record.end_at,
+        record.all_day,
+      ]),
+    )
+    .digest("hex");
+  return {
+    ...record,
+    contact_id: contacts.length === 1 ? contacts[0]! : "",
+    record_key,
+    content_hash,
+  };
+}
+export function validateLiveCandidate(
+  record: LiveRecord,
+  input: unknown,
+): Candidate {
+  if (
+    !record.eligible_for_extraction ||
+    record.attribution !== "direct" ||
+    record.contact_ids.length !== 1 ||
+    !isRecord(input) ||
+    typeof input.quote !== "string" ||
+    !record.authored_spans.some((span) => span.text === input.quote)
+  )
+    throw new Error("direct authored evidence required");
+  return validateEvidenceCandidate(
+    { ...record, body_text: input.quote },
+    input,
+    isExplicitCommitment,
+  );
 }
 export class TendStore {
   private db: DatabaseSync;
@@ -399,106 +536,7 @@ export class TendStore {
     if (this.mode === "fixture")
       return normalizeRecord(raw, this.identities(raw.owner_id));
     this.assertOwner(raw.owner_id);
-    if (typeof raw.body_text !== "string") throw new Error("invalid body_text");
-    parseRaw({ ...raw, body_text: raw.body_text || "(no authored text)" });
-    if (
-      raw.ingestion_mode !== "live" ||
-      !["gmail", "calendar"].includes(raw.source)
-    )
-      throw new Error("live source required");
-    const record = raw as LiveRecord;
-    if (
-      !Array.isArray(record.contact_ids) ||
-      !Array.isArray(record.authored_spans) ||
-      typeof record.authored_text !== "string" ||
-      typeof record.eligible_for_extraction !== "boolean" ||
-      !["direct", "group", "unknown"].includes(record.attribution)
-    )
-      throw new Error("invalid live record");
-    for (const time of [
-      raw.occurred_at,
-      raw.observed_at,
-      raw.coverage_start,
-      raw.coverage_end,
-    ])
-      if (!exactTimestamp(time)) throw new Error("invalid timestamp");
-    if (Date.parse(raw.coverage_start) > Date.parse(raw.coverage_end))
-      throw new Error("reversed coverage");
-    const identities = this.identities(raw.owner_id);
-    const actor = identities.find((x) => x.identity === raw.actor_identity);
-    const participants = raw.participant_identities.map((email) =>
-      identities.find((x) => x.identity === email),
-    );
-    if (!actor || participants.some((x) => !x))
-      throw new Error("unresolved identity");
-    if (
-      raw.source !== "calendar" &&
-      ((raw.direction === "sent") !== (actor.contact_id === "OWNER") ||
-        raw.kind !== "message")
-    )
-      throw new Error("inconsistent actor direction");
-    if (
-      raw.source === "calendar" &&
-      (raw.direction !== "event" || raw.kind !== "meeting")
-    )
-      throw new Error("invalid calendar direction");
-    const contacts = [
-      ...new Set(
-        [actor, ...participants.filter((x): x is Identity => !!x)]
-          .map((x) => x.contact_id)
-          .filter((x) => x !== "OWNER"),
-      ),
-    ].sort();
-    if (
-      JSON.stringify(contacts) !==
-      JSON.stringify([...new Set(record.contact_ids)].sort())
-    )
-      throw new Error("contact binding mismatch");
-    if (
-      record.authored_spans.some(
-        (span) =>
-          !Number.isInteger(span.start) ||
-          !Number.isInteger(span.end) ||
-          span.start < 0 ||
-          span.end < span.start ||
-          record.authored_text.slice(span.start, span.end) !== span.text ||
-          !raw.body_text.includes(span.text),
-      )
-    )
-      throw new Error("invalid authored span");
-    const record_key = createHash("sha256")
-      .update(
-        JSON.stringify([
-          raw.owner_id,
-          raw.source,
-          raw.account_id,
-          raw.source_record_id,
-        ]),
-      )
-      .digest("hex");
-    const content_hash = createHash("sha256")
-      .update(
-        JSON.stringify([
-          raw.body_text,
-          raw.occurred_at,
-          raw.cancelled,
-          raw.direction,
-          raw.actor_identity,
-          raw.participant_identities,
-          record.contact_ids,
-          record.authored_spans,
-          record.attribution,
-          record.end_at,
-          record.all_day,
-        ]),
-      )
-      .digest("hex");
-    return {
-      ...record,
-      contact_id: contacts.length === 1 ? contacts[0]! : "",
-      record_key,
-      content_hash,
-    };
+    return normalizeLiveRecord(raw, this.identities(raw.owner_id));
   }
   counts(owner = this.principal.owner_id): {
     interactions: number;
@@ -567,7 +605,12 @@ export class TendStore {
     if (
       !state ||
       state.account_id !== raw.account_id ||
-      state.mode !== raw.ingestion_mode
+      (state.mode !== raw.ingestion_mode &&
+        !(
+          this.mode === "live" &&
+          state.mode === "live" &&
+          raw.ingestion_mode === "snapshot"
+        ))
     )
       throw new Error("unregistered account/mode");
     if (state.status === "revoked") throw new Error("source revoked");
@@ -582,12 +625,22 @@ export class TendStore {
       ))
         this.put({
           ...candidate,
-          status: ["done", "cancelled"].includes(candidate.status)
+          status: [
+            "done",
+            "cancelled",
+            ...(this.mode === "live" ? ["confirmed"] : []),
+          ].includes(candidate.status)
             ? candidate.status
             : "invalidated",
           evidence_valid: false,
           ...(this.mode === "live"
-            ? { quote: "", action: "", suggested_due: null, due_date: null }
+            ? {
+                quote: "",
+                action: "",
+                suggested_due: null,
+                due_date:
+                  candidate.status === "confirmed" ? candidate.due_date : null,
+              }
             : {}),
         });
       this.scrubReplyCache(raw.owner_id);
@@ -633,9 +686,14 @@ export class TendStore {
     );
     if (!state || state.mode !== "live" || state.status === "revoked")
       throw new Error("unregistered live account");
-    const batchHash = createHash("sha256")
-      .update(JSON.stringify(batch))
-      .digest("hex");
+    if (
+      batch.operation_hash !== undefined &&
+      !/^[a-f0-9]{64}$/.test(batch.operation_hash)
+    )
+      throw new Error("invalid operation hash");
+    const batchHash =
+      batch.operation_hash ??
+      createHash("sha256").update(JSON.stringify(batch)).digest("hex");
     if (state.last_batch_hash === batchHash) return [];
     if (
       batch.expected_cursor !== undefined &&
@@ -766,16 +824,36 @@ export class TendStore {
     accountId: string,
     start: string,
     end: string,
+    resumeCursor?: string,
   ): SourceState {
     this.assertOwner(owner);
+    if (
+      resumeCursor !== undefined &&
+      (source !== "linkedin" ||
+        resumeCursor.length > 8192 ||
+        !/^li-change:(0|[1-9]\d*)$/.test(resumeCursor))
+    )
+      throw new Error("invalid live resume cursor");
     const state = this.sourceStatus(owner).find(
       (x) => x.source === source && x.account_id === accountId,
     );
     if (!state) throw new Error("unknown source");
-    if (state.status !== "current") return state;
+    if (resumeCursor !== undefined) {
+      const watermark = Number(resumeCursor.slice("li-change:".length));
+      if (
+        !Number.isSafeInteger(watermark) ||
+        (state.cursor?.startsWith("li-change:")
+          ? state.cursor !== resumeCursor
+          : state.cursor !== null || state.status !== "current")
+      )
+        throw new Error("stale or unproven live resume cursor");
+    }
+
+    if (state.status !== "current" && resumeCursor === undefined) return state;
+    if (state.status === "revoked") throw new Error("source revoked");
     const next = {
       ...state,
-      cursor: null,
+      cursor: resumeCursor ?? null,
       status: "partial",
       coverage_start: start,
       coverage_end: end,
@@ -909,14 +987,18 @@ export class TendStore {
     ))
       this.put({
         ...c,
-        status: ["done", "cancelled"].includes(c.status)
+        status: [
+          "done",
+          "cancelled",
+          ...(this.mode === "live" ? ["confirmed"] : []),
+        ].includes(c.status)
           ? c.status
           : "invalidated",
         evidence_valid: false,
         quote: "",
         action: "",
         suggested_due: null,
-        due_date: null,
+        due_date: c.status === "confirmed" ? c.due_date : null,
       });
     this.db
       .prepare("DELETE FROM interactions WHERE owner_id=? AND record_key=?")
@@ -948,7 +1030,7 @@ export class TendStore {
       > & { end_at: string | null })[];
       for (const record of records)
         if (
-          (record.source === "gmail" &&
+          (record.source !== "calendar" &&
             Date.parse(record.occurred_at) < Date.parse(gmailStart)) ||
           (record.source === "calendar" &&
             (Date.parse(record.end_at ?? record.occurred_at) <=
@@ -1068,6 +1150,24 @@ export class TendStore {
       .all(owner)
       .map((r) => JSON.parse(String(r.data)) as NormalizedRecord);
   }
+  originalMessageTimes(
+    owner: string,
+    source: Source,
+    accountId: string,
+  ): Record<string, string> {
+    this.assertOwner(owner);
+    const rows = this.db
+      .prepare(
+        "SELECT source_record_id,json_extract(data,'$.occurred_at') AS occurred_at FROM interactions WHERE owner_id=? AND source=? AND account_id=?",
+      )
+      .all(owner, source, accountId);
+    return Object.fromEntries(
+      rows.map((row) => [
+        String(row.source_record_id),
+        String(row.occurred_at),
+      ]),
+    );
+  }
   extractionAttempted(record: NormalizedRecord): boolean {
     this.assertOwner(record.owner_id);
     const row = this.db
@@ -1090,12 +1190,7 @@ export class TendStore {
       this.mode !== "live" ||
       !record ||
       record.content_hash !== expectedHash ||
-      record.source !== "gmail" ||
-      record.attribution !== "direct" ||
-      !record.eligible_for_extraction ||
-      !record.authored_spans?.some((s) =>
-        /^I (?:will|promise to)\b/i.test(s.text),
-      )
+      eligiblePromiseSpans(record).length === 0
     )
       throw new Error("current eligible authored evidence required");
     this.db
@@ -1136,20 +1231,10 @@ export class TendStore {
   }
   addCandidate(raw: RawRecord, input: unknown): Commitment {
     const normalized = this.normalizeIncoming(raw);
-    let validated: Candidate;
-    if (this.mode === "live") {
-      const record = raw as LiveRecord;
-      if (
-        !record.eligible_for_extraction ||
-        record.attribution !== "direct" ||
-        record.contact_ids.length !== 1 ||
-        !isRecord(input) ||
-        typeof input.quote !== "string" ||
-        !record.authored_spans.some((span) => span.text === input.quote)
-      )
-        throw new Error("direct authored evidence required");
-      validated = validateCandidate({ ...raw, body_text: input.quote }, input);
-    } else validated = validateCandidate(raw, input);
+    const validated =
+      this.mode === "live"
+        ? validateLiveCandidate(raw as LiveRecord, input)
+        : validateCandidate(raw, input);
     const stored = this.interactions(raw.owner_id).find(
       (r) => r.record_key === normalized.record_key,
     );
@@ -1176,6 +1261,8 @@ export class TendStore {
         this.put(proposed);
         return proposed;
       }
+      if (current.status === "confirmed" && current.evidence_valid === false)
+        return current;
       if (current.evidence_valid === false || current.status === "invalidated")
         throw new Error(
           "invalidated candidate requires external owner review; automatic reinstatement unsupported",
@@ -1235,14 +1322,21 @@ export class TendStore {
       ))
         this.put({
           ...c,
-          status: ["done", "cancelled"].includes(c.status)
+          status: [
+            "done",
+            "cancelled",
+            ...(this.mode === "live" ? ["confirmed"] : []),
+          ].includes(c.status)
             ? c.status
             : "invalidated",
           evidence_valid: false,
           quote: "",
           action: "",
           suggested_due: null,
-          due_date: null,
+          due_date:
+            this.mode === "live" && c.status === "confirmed"
+              ? c.due_date
+              : null,
         });
       this.db
         .prepare(
@@ -1533,6 +1627,8 @@ export class TendStore {
     if (!c) throw new Error("unknown commitment");
     if (cmd === "/draft") {
       if (c.status !== "confirmed") throw new Error("unconfirmed draft");
+      if (c.evidence_valid === false)
+        throw new Error("Evidence review required");
       return {
         outbound_sent: false,
         preview:
@@ -1543,6 +1639,8 @@ export class TendStore {
       };
     }
     if (cmd === "/confirm") {
+      if (this.mode === "live" && c.evidence_valid === false)
+        throw new Error("invalid transition: evidence review required");
       if (!date || !exactTimestamp(`${date}T00:00:00Z`))
         throw new Error("explicit valid date required");
       if (c.status === "confirmed" && c.due_date === date)

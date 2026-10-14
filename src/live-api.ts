@@ -1,3 +1,11 @@
+import { SocialReadSessions } from "./social-read-session.ts";
+import { randomUUID } from "node:crypto";
+import { eligiblePromiseSpans } from "./authored-promises.ts";
+import {
+  prepareLiveAI,
+  validateLiveAI,
+  type PreparedLiveAI,
+} from "./live-ai.ts";
 import { createServer, type Server } from "node:http";
 import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
 import { InternalAuth } from "./internal-auth.ts";
@@ -14,10 +22,12 @@ import {
   type LiveRecord,
 } from "./google-records.ts";
 
+import type { LiveStore } from "./live-store.ts";
+
 export interface LiveServerOptions {
   policy: LivePolicy;
   auth: InternalAuth;
-  store: TendStore;
+  store: TendStore | LiveStore;
   clock?: () => Date;
 }
 const setupPage = (nonce: string) =>
@@ -34,42 +44,58 @@ export function createLiveServer(options: LiveServerOptions): Server {
     };
   const mail = gmailWindow(policy, clock()),
     cal = calendarWindow(policy, clock());
-  store.seed(
-    [],
-    policy.verified_owner_emails.map((identity) => ({
-      owner_id: owner,
-      contact_id: "OWNER",
-      identity,
-    })),
-    [
-      {
+  const ready = Promise.resolve(
+    store.seed(
+      [],
+      policy.verified_owner_emails.map((identity) => ({
         owner_id: owner,
-        source: "gmail",
-        account_id: policy.account_email,
-        mode: "live",
-        last_success: null,
-        status: "partial",
-        coverage_start: mail.start,
-        coverage_end: mail.end,
-        cursor: null,
-      },
-      ...policy.calendar_ids.map((account_id) => ({
-        owner_id: owner,
-        source: "calendar" as const,
-        account_id,
-        mode: "live" as const,
-        last_success: null,
-        status: "partial",
-        coverage_start: cal.start,
-        coverage_end: cal.end,
-        cursor: null,
+        contact_id: "OWNER",
+        identity,
       })),
-    ],
+      [
+        {
+          owner_id: owner,
+          source: "gmail",
+          account_id: policy.account_email,
+          mode: "live",
+          last_success: null,
+          status: "partial",
+          coverage_start: mail.start,
+          coverage_end: mail.end,
+          cursor: null,
+        },
+        ...policy.calendar_ids.map((account_id) => ({
+          owner_id: owner,
+          source: "calendar" as const,
+          account_id,
+          mode: "live" as const,
+          last_success: null,
+          status: "partial",
+          coverage_start: cal.start,
+          coverage_end: cal.end,
+          cursor: null,
+        })),
+        ...(policy.social?.accounts.map((account) => ({
+          owner_id: owner,
+          source: account.source,
+          account_id: account.account_id,
+          mode: "live" as const,
+          last_success: null,
+          status: "partial",
+          coverage_start: mail.start,
+          coverage_end: mail.end,
+          cursor: null,
+        })) ?? []),
+      ],
+    ),
+  ).then(
+    () => true,
+    () => false,
   );
-  const enforceRetention = () => {
+  const enforceRetention = async () => {
     const m = gmailWindow(policy, clock()),
       c = calendarWindow(policy, clock());
-    store.expireLiveEvidence(owner, m.start, c.start, c.end);
+    await store.expireLiveEvidence(owner, m.start, c.start, c.end);
   };
   const command = (input: Record<string, unknown>): AuthCommand => {
     if (
@@ -83,7 +109,19 @@ export function createLiveServer(options: LiveServerOptions): Server {
       throw new Error("unauthorized command principal");
     return { ...principal, chat_type: "private", text: input.text };
   };
+  const socialReads = policy.social
+    ? new SocialReadSessions({
+        policy: policy.social,
+        store,
+        principal_id: owner,
+        clock,
+      })
+    : null;
   let calendarTurn = 0;
+  const pendingAI = new Map<
+    string,
+    { prepared: PreparedLiveAI; expires: number }
+  >();
   return createServer(async (req, res) => {
     const respond = (status: number, data: unknown) => {
       res.writeHead(status, {
@@ -174,18 +212,22 @@ export function createLiveServer(options: LiveServerOptions): Server {
       return;
     }
     try {
-      enforceRetention();
+      if (!(await ready)) {
+        respond(503, { error: "Private storage is not ready; retry later." });
+        return;
+      }
+      await enforceRetention();
       if (req.method === "GET" && url.pathname === "/api/live/status") {
         respond(200, {
           mode: "PRIVATE LIVE GOOGLE",
-          counts: store.counts(owner),
-          sources: store.sourceStatus(owner),
-          telegram_delivery: store.telegramDeliveryCounts(),
-          unavailable_record_count: store.quarantineCount(owner),
-          extraction_review_count: store.extractionReviewCount(owner),
-          unverified_commitment_count: store
-            .commitments(owner)
-            .filter((c) => c.evidence_valid === false).length,
+          counts: await store.counts(owner),
+          sources: await store.sourceStatus(owner),
+          telegram_delivery: await store.telegramDeliveryCounts(),
+          unavailable_record_count: await store.quarantineCount(owner),
+          extraction_review_count: await store.extractionReviewCount(owner),
+          unverified_commitment_count: (await store.commitments(owner)).filter(
+            (c) => c.evidence_valid === false,
+          ).length,
         });
         return;
       }
@@ -206,7 +248,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           !/^\d{1,16}$/.test(update)
         )
           throw new Error("invalid pending reply selector");
-        const pending = store.pendingTelegramReply(
+        const pending = await store.pendingTelegramReply(
           owner,
           channel,
           Number(update),
@@ -221,9 +263,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const source = url.searchParams.get("source");
         if (source !== "gmail" && source !== "calendar")
           throw new Error("invalid source");
-        const states = store
-          .sourceStatus(owner)
-          .filter((x) => x.source === source);
+        const states = (await store.sourceStatus(owner)).filter(
+          (x) => x.source === source,
+        );
         const available = states.filter(
           (x) =>
             x.status !== "revoked" &&
@@ -239,7 +281,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           source === "gmail"
             ? gmailWindow(policy, clock())
             : calendarWindow(policy, clock());
-        const state = store.prepareLiveSnapshot(
+        const state = await store.prepareLiveSnapshot(
           owner,
           source,
           selected.account_id,
@@ -265,32 +307,92 @@ export function createLiveServer(options: LiveServerOptions): Server {
         });
         return;
       }
+      if (
+        req.method === "GET" &&
+        url.pathname === "/api/live/social/read-input"
+      ) {
+        if (
+          !socialReads ||
+          [...url.searchParams.keys()].some(
+            (k) =>
+              !["source", "account_id", "phase", "proof_id"].includes(k) ||
+              url.searchParams.getAll(k).length !== 1,
+          )
+        )
+          throw new Error("Configured explicit social read required");
+        respond(200, {
+          ...(await socialReads.plan(Object.fromEntries(url.searchParams))),
+          max_result_bytes: policy.limits.max_body_bytes,
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/live/ai/input") {
+        const contactId = url.searchParams.get("contact_id"),
+          purpose = url.searchParams.get("purpose");
+        if (
+          !contactId ||
+          !["briefing", "draft"].includes(purpose ?? "") ||
+          [...url.searchParams.keys()].some(
+            (k) => !["contact_id", "purpose"].includes(k),
+          ) ||
+          url.searchParams.getAll("contact_id").length !== 1 ||
+          url.searchParams.getAll("purpose").length !== 1
+        )
+          throw new Error("Explicit contact and purpose required");
+        const contact = await store.resolveContact(owner, contactId);
+        if (contact.contact_id !== contactId)
+          throw new Error("Use exact contact ID");
+        const prepared = prepareLiveAI({
+          owner_id: owner,
+          contact_id: contactId,
+          purpose: purpose as "briefing" | "draft",
+          records: (await store.interactions(owner)).sort((a, b) =>
+            b.occurred_at.localeCompare(a.occurred_at),
+          ),
+        });
+        for (const [key, entry] of pendingAI)
+          if (entry.expires <= clock().getTime()) pendingAI.delete(key);
+        if (!prepared.evidence.length) {
+          respond(200, { eligible: false });
+          return;
+        }
+        if (pendingAI.size >= 32) {
+          respond(429, { error: "Private AI run limit reached" });
+          return;
+        }
+        const request_id = randomUUID();
+        pendingAI.set(request_id, {
+          prepared,
+          expires: clock().getTime() + 120000,
+        });
+        respond(200, {
+          eligible: true,
+          request_id,
+          request: prepared.request,
+          evidence_count: prepared.evidence.length,
+          review_required: true,
+        });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/live/model-input") {
         const key = url.searchParams.get("record_key");
-        const records = store
-          .interactions(owner)
-          .filter(
-            (x) =>
-              x.source === "gmail" &&
-              x.eligible_for_extraction &&
-              x.attribution === "direct" &&
-              x.authored_spans?.some((s) =>
-                /^I (?:will|promise to)\b/i.test(s.text),
-              ) &&
-              (key !== null || !store.extractionAttempted(x)) &&
-              !store
-                .commitments(owner)
-                .some(
-                  (c) =>
-                    c.record_key === x.record_key && c.status !== "invalidated",
-                ),
-          );
+        const candidates = await store.commitments(owner);
+        const records = [];
+        for (const x of await store.interactions(owner)) {
+          if (
+            eligiblePromiseSpans(x).length > 0 &&
+            (key !== null || !(await store.extractionAttempted(x))) &&
+            !candidates.some(
+              (c) =>
+                c.record_key === x.record_key && c.status !== "invalidated",
+            )
+          )
+            records.push(x);
+        }
         const record = key
           ? records.find((x) => x.record_key === key)
           : records[0];
-        const span = record?.authored_spans?.find((x) =>
-          /^I (?:will|promise to)\b/i.test(x.text),
-        );
+        const span = record ? eligiblePromiseSpans(record)[0] : undefined;
         if (!record || !span) {
           respond(200, { eligible: false });
           return;
@@ -342,6 +444,32 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      if (url.pathname === "/api/live/social/read-result") {
+        if (!socialReads) throw new Error("Social source not configured");
+        respond(200, await socialReads.result(value));
+        return;
+      }
+      if (url.pathname === "/api/live/ai/validate") {
+        if (
+          typeof value.request_id !== "string" ||
+          !Object.hasOwn(value, "output") ||
+          Object.keys(value).some((k) => !["request_id", "output"].includes(k))
+        )
+          throw new Error("Invalid AI result envelope");
+        const entry = pendingAI.get(value.request_id);
+        pendingAI.delete(value.request_id);
+        if (!entry || entry.expires <= clock().getTime())
+          throw new Error("AI request expired or already consumed");
+        respond(
+          200,
+          validateLiveAI(
+            entry.prepared,
+            value.output,
+            await store.interactions(owner),
+          ),
+        );
+        return;
+      }
       if (url.pathname === "/api/live/extraction-attempt") {
         if (
           typeof value.record_key !== "string" ||
@@ -351,7 +479,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           )
         )
           throw new Error("invalid extraction attempt");
-        store.markExtractionAttempt(
+        await store.markExtractionAttempt(
           owner,
           value.record_key,
           value.content_hash,
@@ -401,7 +529,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           source === "gmail"
             ? gmailWindow(policy, clock())
             : calendarWindow(policy, clock());
-        store.reconnectLiveSource(
+        await store.reconnectLiveSource(
           owner,
           source,
           source === "gmail" ? policy.account_email : calendarId!,
@@ -458,7 +586,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
             value.retry_after_seconds >= 0
               ? Math.min(value.retry_after_seconds, 86400)
               : 0;
-          store.markLiveSyncError(
+          await store.markLiveSyncError(
             owner,
             source,
             accountId,
@@ -542,7 +670,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
             }
           }
         }
-        const stored = store.commitLiveBatch({
+        const stored = await store.commitLiveBatch({
           owner_id: owner,
           source,
           account_id: accountId,
@@ -559,25 +687,32 @@ export function createLiveServer(options: LiveServerOptions): Server {
           removed_record_ids: removed,
           quarantines: review,
         });
-        enforceRetention();
+        await enforceRetention();
         respond(200, {
           accepted: stored.length,
           record_keys: stored.map((x) => x.record_key),
           quarantined,
           complete: value.complete,
-          counts: store.counts(owner),
+          counts: await store.counts(owner),
         });
         return;
       }
       if (url.pathname === "/api/live/candidates") {
-        if (typeof value.record_key !== "string")
-          throw new Error("record key required");
-        const record = store
-          .interactions(owner)
-          .find((x) => x.record_key === value.record_key);
-        if (!record) throw new Error("evidence unavailable");
+        if (
+          typeof value.record_key !== "string" ||
+          typeof value.content_hash !== "string" ||
+          Object.keys(value).some(
+            (k) => !["record_key", "content_hash", "candidate"].includes(k),
+          )
+        )
+          throw new Error("record key and content hash required");
+        const record = (await store.interactions(owner)).find(
+          (x) => x.record_key === value.record_key,
+        );
+        if (!record || record.content_hash !== value.content_hash)
+          throw new Error("evidence unavailable or changed");
         respond(200, {
-          candidate: store.addCandidate(record, value.candidate),
+          candidate: await store.addCandidate(record, value.candidate),
         });
         return;
       }
@@ -594,7 +729,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         if (url.pathname.endsWith("/command"))
           respond(
             200,
-            store.telegramCommand(
+            await store.telegramCommand(
               envelope,
               value.telegram_channel_id,
               value.telegram_update_id,
@@ -603,7 +738,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         else {
           if (typeof value.telegram_message_id !== "number")
             throw new Error("native acknowledgement required");
-          store.acknowledgeTelegramReply(
+          await store.acknowledgeTelegramReply(
             envelope,
             value.telegram_channel_id,
             value.telegram_update_id,

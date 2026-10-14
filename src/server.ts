@@ -1,3 +1,4 @@
+import { PostgresStore } from "./postgres-store.ts";
 import { createServer } from "node:http";
 import { readFileSync, mkdirSync } from "node:fs";
 import {
@@ -333,23 +334,35 @@ function startFixtureServer(): void {
       }),
     );
 }
-function startLiveServer(): void {
+async function startLiveServer(): Promise<void> {
   const path = process.env.TEND_LIVE_POLICY_FILE;
   if (!path) throw new Error("Private live policy file required");
   const policy = parseLivePolicy(
     JSON.parse(readFileSync(path, "utf8")) as unknown,
   );
-  const store = new TendStore(
-    process.env.TEND_LIVE_DB ?? ".scratch/live-private/data.sqlite",
-    {
-      mode: "live",
-      principal: {
-        owner_id: policy.principal_id,
-        user_id: "live-owner",
-        chat_id: "live-private",
-      },
+  const socket = process.env.TEND_LIVE_PG_SOCKET;
+  const pgPort = Number(process.env.TEND_LIVE_PG_PORT ?? 18772);
+  if (
+    !socket?.startsWith("/") ||
+    !Number.isInteger(pgPort) ||
+    pgPort < 1 ||
+    pgPort > 65535
+  )
+    throw new Error(
+      "Private PostgreSQL socket and valid port required; no SQLite fallback",
+    );
+  const store = await PostgresStore.open({
+    host: socket,
+    port: pgPort,
+    database: "tend_coursework",
+    ...(process.env.USER ? { user: process.env.USER } : {}),
+    connectionTimeoutMillis: 5000,
+    principal: {
+      owner_id: policy.principal_id,
+      user_id: "live-owner",
+      chat_id: "live-private",
     },
-  );
+  });
   const auth = new InternalAuth(
     process.env.TEND_LIVE_AUTH_FILE ?? ".scratch/live-private/auth.json",
   );
@@ -362,12 +375,20 @@ function startLiveServer(): void {
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.on(signal, () =>
       server.close(() => {
-        store.close();
-        process.exit(0);
+        void store.close().then(
+          () => process.exit(0),
+          () => process.exit(1),
+        );
       }),
     );
 }
 if (process.argv[1]?.endsWith("server.ts")) {
-  if (process.env.TEND_SERVER_MODE === "live") startLiveServer();
+  if (process.env.TEND_SERVER_MODE === "live")
+    void startLiveServer().catch(() => {
+      console.error(
+        "Private live startup failed. Check PostgreSQL readiness and the private policy. No fallback was opened.",
+      );
+      process.exitCode = 1;
+    });
   else startFixtureServer();
 }

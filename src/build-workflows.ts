@@ -1,3 +1,4 @@
+import { isExplicitCommitment } from "./authored-promises.ts";
 import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
 import {
@@ -51,6 +52,7 @@ type Workflow = {
     saveDataErrorExecution: "all" | "none";
     timezone: "Europe/Paris";
     saveManualExecutions?: boolean;
+    executionTimeout?: number;
   };
   tags: never[];
   pinData: Record<string, unknown>;
@@ -1011,7 +1013,7 @@ const liveChain = structuredClone(ai);
 liveChain.position = [1450, 0];
 const validateLiveCandidate = code(
   "Validate exact authored quote",
-  "const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!/^I (?:will|promise to)\\b/i.test(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,candidate}}];",
+  `const isExplicitCommitment=${isExplicitCommitment.toString()};const x=$input.first().json;const input=$('Read eligible authored span').first().json;const candidate=typeof x.text==='string'?JSON.parse(x.text):x;const span=input.record.authored_span;const keys=Object.keys(candidate);if(keys.length!==3||keys.some(k=>!['quote','action','suggested_due'].includes(k))||typeof candidate.quote!=='string'||typeof candidate.action!=='string'||candidate.quote!==span||!isExplicitCommitment(candidate.quote)||!candidate.quote.toLowerCase().includes(candidate.action.toLowerCase())||(candidate.suggested_due!==null&&(typeof candidate.suggested_due!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(candidate.suggested_due)||!candidate.quote.includes(candidate.suggested_due))))throw new Error('unsupported or invented authored promise');return [{json:{record_key:input.record_key,content_hash:input.content_hash,candidate}}];`,
   1710,
 );
 const saveLiveCandidate = liveHttp(
@@ -1051,10 +1053,315 @@ liveAI.connections[liveModel.name] = {
 };
 workflows.push(liveGmail, liveCalendar, normalizeLive, googleTelegram, liveAI);
 
+const liveReviewAI = privateWorkflow(
+  "TendLive16",
+  "Tend 16: Local AI cited contact briefing or review draft",
+);
+liveReviewAI.settings.executionTimeout = 120;
+const reviewStart = node(
+  "Run selected private AI review",
+  "manualTrigger",
+  {},
+  0,
+);
+const reviewSelection = node(
+  "Set explicit contact and review purpose",
+  "set",
+  {
+    assignments: {
+      assignments: [
+        {
+          id: "contact",
+          name: "contact_id",
+          value: "CONFIGURE_CONTACT_ID",
+          type: "string",
+        },
+        {
+          id: "purpose",
+          name: "purpose",
+          value: "CONFIGURE_PURPOSE",
+          type: "string",
+        },
+      ],
+    },
+    includeOtherFields: false,
+    options: {},
+  },
+  250,
+  0,
+  3.4,
+);
+const reviewSelectionGuard = code(
+  "Validate explicit private AI selection",
+  "const x=$input.first().json;if(typeof x.contact_id!=='string'||!x.contact_id.trim()||x.contact_id.length>128||x.contact_id==='OWNER'||x.contact_id.startsWith('CONFIGURE_')||!['briefing','draft'].includes(x.purpose))throw new Error('Configure an explicit contact ID and briefing or draft purpose before retrieval');return [{json:{contact_id:x.contact_id,purpose:x.purpose,started_at:Date.now()}}];",
+  500,
+);
+const reviewInput = liveHttp(
+  "Read selected current AI evidence",
+  "/api/live/ai/input",
+  750,
+);
+reviewInput.parameters.url =
+  "={{ 'http://host.docker.internal:18768/api/live/ai/input?contact_id=' + encodeURIComponent($json.contact_id) + '&purpose=' + encodeURIComponent($json.purpose) }}";
+const reviewReady = code(
+  "Check bounded current AI request",
+  "const x=$input.first().json;if(x.eligible!==true)return [{json:{eligible:false}}];if(typeof x.request_id!=='string'||x.request_id.length<16||x.request_id.length>256||!x.request||!Array.isArray(x.request.messages)||x.request.messages.length!==2||x.request.messages[0].role!=='system'||x.request.messages[1].role!=='user'||x.request.messages.some(m=>typeof m.content!=='string')||Buffer.byteLength(JSON.stringify(x.request),'utf8')>32768)throw new Error('Invalid or oversized private AI request');return [{json:{...x,eligible:true}}];",
+  1000,
+);
+const reviewBranch = condition(
+  "Selected current AI evidence available",
+  "eligible",
+  1250,
+);
+const reviewChain = structuredClone(ai);
+reviewChain.name = "Local cited review (Basic LLM Chain)";
+reviewChain.id = "local-cited-review-basic-llm-chain";
+reviewChain.position = [1500, 0];
+reviewChain.retryOnFail = false;
+reviewChain.continueOnFail = true;
+const reviewModel = structuredClone(model);
+reviewModel.name = "Local review Ollama Chat Model";
+reviewModel.id = "local-review-ollama-chat-model";
+reviewModel.position = [1500, 260];
+reviewModel.parameters.options = {
+  temperature: 0,
+  format: "json",
+  think: false,
+  numCtx: 8192,
+  numPredict: 1024,
+};
+const reviewOutput = code(
+  "Bound cited review output before validation",
+  "const x=$input.first().json;const input=$('Check bounded current AI request').first().json;const clock=$('Validate explicit private AI selection').first().json.started_at;if(!Number.isFinite(clock)||Date.now()-clock>110000)throw new Error('Private AI review exceeded its deadline');const candidate=typeof x.text==='string'?x.text:Object.keys(x).length===1&&Array.isArray(x.items)?JSON.stringify(x):null;const output=typeof candidate==='string'&&Buffer.byteLength(candidate,'utf8')<=8192?candidate:null;return [{json:{request_id:input.request_id,output}}];",
+  1750,
+);
+const reviewValidate = liveHttp(
+  "Validate current cited AI review",
+  "/api/live/ai/validate",
+  2000,
+  "={{ JSON.stringify($json) }}",
+);
+const reviewUnavailable = code(
+  "No eligible selected AI evidence",
+  "return [{json:{status:'unavailable',outbound_sent:false,draft:null,items:[],warning:'No eligible selected real evidence. No model call or draft was produced.'}}];",
+  1500,
+);
+reviewUnavailable.position = [1500, 500];
+const reviewResult = code(
+  "Return review only without delivery",
+  "const x=$input.first().json;if(x.outbound_sent!==false||!['validated','fallback','unavailable'].includes(x.status)||(x.draft!==null&&(!x.draft||x.draft.pending_review!==true))||Object.keys(x).some(k=>['recipients','actions','send','tools'].includes(k)))throw new Error('Private AI result must remain review only');return [{json:x}];",
+  2250,
+);
+liveReviewAI.nodes.push(
+  reviewStart,
+  reviewSelection,
+  reviewSelectionGuard,
+  reviewInput,
+  reviewReady,
+  reviewBranch,
+  reviewChain,
+  reviewModel,
+  reviewOutput,
+  reviewValidate,
+  reviewUnavailable,
+  reviewResult,
+);
+connect(liveReviewAI, reviewStart.name, reviewSelection.name);
+connect(liveReviewAI, reviewSelection.name, reviewSelectionGuard.name);
+connect(liveReviewAI, reviewSelectionGuard.name, reviewInput.name);
+connect(liveReviewAI, reviewInput.name, reviewReady.name);
+connect(liveReviewAI, reviewReady.name, reviewBranch.name);
+connect(liveReviewAI, reviewBranch.name, reviewChain.name);
+connect(liveReviewAI, reviewBranch.name, reviewUnavailable.name, 1);
+connect(liveReviewAI, reviewChain.name, reviewOutput.name);
+connect(liveReviewAI, reviewOutput.name, reviewValidate.name);
+connect(liveReviewAI, reviewValidate.name, reviewResult.name);
+connect(liveReviewAI, reviewUnavailable.name, reviewResult.name);
+liveReviewAI.connections[reviewModel.name] = {
+  ai_languageModel: [
+    [{ node: reviewChain.name, type: "ai_languageModel", index: 0 }],
+  ],
+};
+workflows.push(liveReviewAI);
+
+for (const spec of [
+  {
+    number: 17,
+    id: "TendSocial17",
+    source: "whatsapp_personal",
+    provider: "unipile",
+    credential: "CONFIGURE_UNIPILE_READ_HEADER",
+  },
+  {
+    number: 18,
+    id: "TendSocial18",
+    source: "linkedin",
+    provider: "linkedin",
+    credential: "CONFIGURE_LINKEDIN_PORTABILITY_HEADER",
+  },
+] as const) {
+  const w = privateWorkflow(
+    spec.id,
+    `Tend ${spec.number}: Private ${spec.provider} verified read page`,
+  );
+  w.settings.executionTimeout = 120;
+  const start = node(
+    "Run one verified private provider page",
+    "manualTrigger",
+    {},
+    0,
+  );
+  const selection = node(
+    "Select approved provider account and phase",
+    "set",
+    {
+      assignments: {
+        assignments: [
+          {
+            id: "account",
+            name: "account_id",
+            value: "CONFIGURE_ACCOUNT_ID",
+            type: "string",
+          },
+          { id: "phase", name: "phase", value: "snapshot", type: "string" },
+        ],
+      },
+      includeOtherFields: false,
+      options: {},
+    },
+    240,
+    0,
+    3.4,
+  );
+  const guard = code(
+    "Validate configured read selection",
+    `const x=$input.first().json;if(typeof x.account_id!=='string'||!x.account_id.trim()||x.account_id.length>1024||x.account_id.startsWith('CONFIGURE_')||!${JSON.stringify(spec.source === "linkedin" ? ["snapshot", "changes", "connections"] : ["snapshot"])}.includes(x.phase))throw new Error('Configure the approved provider account before retrieval');return [{json:{account_id:x.account_id,phase:x.phase,started_at:Date.now()}}];`,
+    480,
+  );
+  const identity = liveHttp(
+    "Plan owner identity read",
+    "/api/live/social/read-input",
+    720,
+  );
+  identity.parameters.url = `={{ 'http://host.docker.internal:18768/api/live/social/read-input?source=${spec.source}&account_id='+encodeURIComponent($json.account_id)+'&phase=identity' }}`;
+  w.nodes.push(start, selection, guard, identity);
+  connect(w, start.name, selection.name);
+  connect(w, selection.name, guard.name);
+  connect(w, guard.name, identity.name);
+  const stages = [
+    { prefix: "Owner identity", input: identity.name, x: 960 },
+    {
+      prefix: "Selected provider page",
+      input: "Plan selected provider page",
+      x: 2640,
+    },
+  ];
+  for (const stage of stages) {
+    const checked = code(
+      `Check ${stage.prefix} plan`,
+      `const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==${JSON.stringify(spec.source)}||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||${spec.provider === "linkedin" ? "u.hostname!=='api.linkedin.com'" : "!u.hostname.endsWith('.unipile.com')"})throw new Error('Unapproved provider request');return [{json:x}];`,
+      stage.x,
+    );
+    const provider = node(
+      `Read ${stage.prefix}`,
+      "httpRequest",
+      {
+        method: "GET",
+        url: "={{ $json.plan.url }}",
+        authentication: "genericCredentialType",
+        genericAuthType: "httpHeaderAuth",
+        sendHeaders: true,
+        specifyHeaders: "json",
+        jsonHeaders: "={{ JSON.stringify($json.plan.headers) }}",
+        options: {
+          timeout: 5000,
+          redirect: { redirect: { followRedirects: false } },
+          response: { response: { fullResponse: true, neverError: true } },
+        },
+      },
+      stage.x + 240,
+      0,
+      4.2,
+    );
+    provider.credentials = {
+      httpHeaderAuth: { id: spec.credential, name: spec.credential },
+    };
+    provider.retryOnFail = false;
+    provider.continueOnFail = true;
+    const envelope = code(
+      `Bound ${stage.prefix} response`,
+      `const ctx=$(${JSON.stringify(stage.input)}).first(0,${stage.prefix === "Selected provider page" ? "$runIndex" : "0"}).json;const r=$input.first().json;let status=Number(r.statusCode)||599;let body=r.body??{};const raw=r.headers||{};const retry=raw['retry-after']??raw['Retry-After'];const out={request_id:ctx.request_id,status,body,...(typeof retry==='string'&&retry.length<=128?{headers:{'Retry-After':retry}}:{})};if(!Number.isSafeInteger(ctx.max_result_bytes)||ctx.max_result_bytes<1024)throw new Error('Invalid server response budget');if(Buffer.byteLength(JSON.stringify(out),'utf8')>ctx.max_result_bytes)return [{json:{request_id:ctx.request_id,status:599,body:{error:'provider_envelope_exceeds_budget'}}}];return [{json:out}];`,
+      stage.x + 480,
+    );
+    const result = liveHttp(
+      `Validate ${stage.prefix} response`,
+      "/api/live/social/read-result",
+      stage.x + 720,
+      "={{ JSON.stringify($json) }}",
+    );
+    result.retryOnFail = false;
+    w.nodes.push(checked, provider, envelope, result);
+    connect(w, stage.input, checked.name);
+    connect(w, checked.name, provider.name);
+    connect(w, provider.name, envelope.name);
+    connect(w, envelope.name, result.name);
+  }
+  const verified = code(
+    "Require verified owner proof",
+    "const x=$input.first().json;if(x.kind!=='identity'||typeof x.proof_id!=='string')throw new Error('Provider owner verification unavailable: '+String(x.reason||'unavailable'));return [{json:x}];",
+    1920,
+  );
+  const page = liveHttp(
+    "Plan selected provider page",
+    "/api/live/social/read-input",
+    2160,
+  );
+  page.parameters.url = `={{ 'http://host.docker.internal:18768/api/live/social/read-input?source=${spec.source}&account_id='+encodeURIComponent($('Validate configured read selection').first().json.account_id)+'&phase='+encodeURIComponent($('Validate configured read selection').first().json.phase)+'&proof_id='+encodeURIComponent($('Require verified owner proof').first().json.proof_id) }}`;
+  const final = code(
+    "Return private provider receipt",
+    "const x=$input.first().json;if(!['page','connections','blocked'].includes(x.kind))throw new Error('Unknown provider receipt');return [{json:{...x,outbound_sent:false,submission_sent:false}}];",
+    3600,
+  );
+  const paging = code(
+    "Bound connections preview pagination",
+    `const x=$input.first().json;const selection=$('Validate configured read selection').first().json;const pageIndex=$runIndex;
+if(!${JSON.stringify(spec.source === "linkedin")}||selection.phase!=='connections')return [{json:{...x,_continue_connections:false}}];
+if(!Number.isSafeInteger(pageIndex)||pageIndex<0||pageIndex>4)throw new Error('Invalid preview page index');
+const previous=pageIndex>0?$('Bound connections preview pagination').first(0,pageIndex-1).json??{}:{};
+if(x.kind==='blocked')return [{json:{...x,_continue_connections:false,more_available:true,preview_budget_exhausted:false,preview_interrupted:true}}];
+if(x.kind!=='connections')throw new Error('Invalid connections preview');
+const count=v=>Number.isSafeInteger(v)&&v>=0?v:0;
+const rows=Array.isArray(previous.rows)?[...previous.rows]:[];let dropped=0;
+for(const row of Array.isArray(x.rows)?x.rows:[]){if(rows.length<100&&Buffer.byteLength(JSON.stringify([...rows,row]),'utf8')<=65536)rows.push(row);else dropped++;}
+const omitted=count(previous.omitted_row_count)+count(x.omitted_row_count)+dropped;
+const hasMore=x.complete!==true;const next=hasMore&&pageIndex<4&&Number.isFinite(selection.started_at)&&Date.now()-selection.started_at<90000;
+return [{json:{...x,rows,omitted_row_count:omitted,unknown_field_count:count(previous.unknown_field_count)+count(x.unknown_field_count),truncated_value_count:count(previous.truncated_value_count)+count(x.truncated_value_count),preview_truncated:omitted>0,preview_pages_read:pageIndex+1,more_available:hasMore,preview_budget_exhausted:hasMore&&!next,_continue_connections:next}}];`,
+    3450,
+  );
+  const more = condition(
+    "Another preview page fits this run",
+    "_continue_connections",
+    3600,
+  );
+  final.position = [3850, 0];
+  final.parameters.jsCode = String(final.parameters.jsCode).replace(
+    "return [{json:{...x,",
+    "const {_continue_connections,...receipt}=x;return [{json:{...receipt,",
+  );
+  w.nodes.push(verified, page, paging, more, final);
+  connect(w, "Validate Owner identity response", verified.name);
+  connect(w, verified.name, page.name);
+  connect(w, "Validate Selected provider page response", paging.name);
+  connect(w, paging.name, more.name);
+  connect(w, more.name, page.name);
+  connect(w, more.name, final.name, 1);
+  workflows.push(w);
+}
+
 await mkdir("workflows", { recursive: true });
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
-    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments"][i]}.json`,
+    `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly"][i]}.json`,
     workflows[i],
   );
 await mkdir("fixtures", { recursive: true });
