@@ -215,6 +215,134 @@ describe("official read-only social plans", () => {
       expect(Buffer.byteLength(row["First Name"]!)).toBeLessThanOrEqual(512);
     }
   });
+  it("accepts a whole 2668-row offline CONNECTIONS page with a twenty-row preview", () => {
+    const p = plan("linkedin", "connections");
+    const snapshotData = Array.from({ length: 2668 }, (_, index) => ({
+      "First Name": `Fictional ${index}`,
+      "Last Name": "Example",
+      Company: "Example company",
+      Position: "Example role",
+      "Connected On": "01 Oct 2026",
+      URL: "https://example.invalid/profile",
+      "Email Address": "fictional@example.invalid",
+    }));
+    const body = {
+      paging: { start: 0, count: 10, total: 1, links: [] },
+      elements: [{ snapshotDomain: "CONNECTIONS", snapshotData }],
+    };
+    const result = mapSocialProviderResponse(p, 200, body);
+    expect(result).toMatchObject({
+      kind: "connections",
+      source: "linkedin",
+      account_id: p.account_id,
+      owner_identity: p.expected_owner_identity,
+      omitted_row_count: 2648,
+      unknown_field_count: 40,
+      schema_verified: false,
+      identity_bindings_verified: false,
+      requires_owner_review: true,
+      complete: false,
+      next_cursor: "li-connections:1",
+    });
+    if (result.kind !== "connections") throw new Error("expected preview");
+    expect(result.rows).toHaveLength(20);
+    expect(Object.keys(result.rows[0]!)).toEqual([
+      "First Name",
+      "Last Name",
+      "Company",
+      "Position",
+      "Connected On",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("fictional@example.invalid");
+    expect(result).not.toHaveProperty("request");
+    expect(
+      mapSocialProviderResponse(p, 200, {
+        ...body,
+        elements: [{ snapshotDomain: "INBOX", snapshotData }],
+      }),
+    ).toEqual({ kind: "quarantined", reason: "unexpected_snapshot_domain" });
+  });
+  it("bounds offline CONNECTIONS pages at ten thousand rows", () => {
+    const p = plan("linkedin", "connections");
+    const snapshotData = Array.from({ length: 10000 }, () => ({
+      "First Name": "Example",
+    }));
+    const response = (rows: unknown[]) => ({
+      paging: { start: 0, count: 10, total: 1, links: [] },
+      elements: [{ snapshotDomain: "CONNECTIONS", snapshotData: rows }],
+    });
+    expect(
+      mapSocialProviderResponse(p, 200, response(snapshotData)),
+    ).toMatchObject({
+      kind: "connections",
+      omitted_row_count: 9980,
+    });
+    expect(
+      mapSocialProviderResponse(p, 200, response([...snapshotData, {}])),
+    ).toEqual({
+      kind: "quarantined",
+      reason: "provider_page_limit",
+    });
+  });
+  it("retains the CONNECTIONS node, depth, byte and cycle limits", () => {
+    const p = plan("linkedin", "connections");
+    const body = {
+      paging: { start: 0, count: 10, total: 1, links: [] },
+      elements: [{ snapshotDomain: "CONNECTIONS", snapshotData: [] }],
+    };
+    let nested: unknown = null;
+    for (let i = 0; i < 22; i++) nested = { nested };
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const extra of [
+      Array.from({ length: 100001 }, () => 0),
+      nested,
+      "x".repeat(4 * 1024 * 1024 + 1),
+    ])
+      expect(mapSocialProviderResponse(p, 200, { ...body, extra })).toEqual({
+        kind: "quarantined",
+        reason: "provider_payload_limit",
+      });
+    expect(
+      mapSocialProviderResponse(p, 200, { ...body, extra: cyclic }),
+    ).toEqual({ kind: "quarantined", reason: "invalid_provider_cycle" });
+  });
+  it("keeps the INBOX thousand-row limit separate from CONNECTIONS", () => {
+    expect(
+      mapSocialProviderResponse(plan("linkedin"), 200, {
+        paging: { start: 0, count: 10, total: 1, links: [] },
+        elements: [
+          {
+            snapshotDomain: "INBOX",
+            snapshotData: Array.from({ length: 1001 }, () => ({})),
+          },
+        ],
+      }),
+    ).toEqual({ kind: "quarantined", reason: "provider_page_limit" });
+  });
+  it.each([
+    ["whatsapp_personal", "identity"],
+    ["whatsapp_personal", "snapshot"],
+    ["linkedin", "identity"],
+    ["linkedin", "snapshot"],
+    ["linkedin", "changes"],
+  ] as const)("retains twenty thousand nodes for %s %s", (source, phase) => {
+    expect(
+      mapSocialProviderResponse(
+        plan(
+          source,
+          phase,
+          phase === "changes"
+            ? linkedInChangeCursor(now.getTime() - 1000)
+            : null,
+        ),
+        200,
+        {
+          extra: Array.from({ length: 20001 }, () => 0),
+        },
+      ),
+    ).toEqual({ kind: "quarantined", reason: "provider_payload_limit" });
+  });
   it("terminates CONNECTIONS pagination separately and rejects foreign cursor formats", () => {
     const s = state("linkedin", "li-change:1");
     expect(() =>

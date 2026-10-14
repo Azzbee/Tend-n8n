@@ -113,11 +113,12 @@ function exactTime(value: string): number {
 }
 function bounded(
   value: unknown,
+  maxNodes = 20000,
   depth = 0,
   budget = { nodes: 0, bytes: 0 },
   seen = new Set<object>(),
 ): void {
-  if (++budget.nodes > 20000 || depth > 20)
+  if (++budget.nodes > maxNodes || depth > 20)
     throw new Error("provider_payload_limit");
   if (typeof value === "string") {
     budget.bytes += Buffer.byteLength(value);
@@ -132,7 +133,7 @@ function bounded(
       budget.bytes += Buffer.byteLength(key);
       if (budget.bytes > 4 * 1024 * 1024)
         throw new Error("provider_payload_limit");
-      bounded(item, depth + 1, budget, seen);
+      bounded(item, maxNodes, depth + 1, budget, seen);
     }
     seen.delete(value);
   } else if (value !== null && typeof value !== "boolean")
@@ -439,7 +440,10 @@ export function mapSocialProviderResponse(
   body: unknown,
 ): ProviderReadMapping {
   try {
-    bounded(body);
+    bounded(
+      body,
+      plan.response_kind === "linkedin_connections" ? 100000 : 20000,
+    );
     if (
       ["linkedin_snapshot", "linkedin_connections"].includes(
         plan.response_kind,
@@ -527,7 +531,10 @@ export function mapSocialProviderResponse(
             : "INBOX")
       )
         throw new Error("unexpected_snapshot_domain");
-      const items = array(object(elements[0]).snapshotData, 1000),
+      const items = array(
+          object(elements[0]).snapshotData,
+          plan.response_kind === "linkedin_connections" ? 10000 : 1000,
+        ),
         next = snapshotNext(plan, raw);
       return plan.response_kind === "linkedin_connections"
         ? connectionPreview(plan, items, `li-connections:${next}`, false)
