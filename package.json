@@ -7,7 +7,7 @@
     "lint": "eslint src tests",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism",
     "build": "bun run src/build-workflows.ts",
     "start": "node --experimental-strip-types src/server.ts",
     "verify": "bun run typecheck && bun run lint && bun run test && bun run build && bun run format:check",
