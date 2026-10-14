@@ -449,7 +449,11 @@ export function mapSocialProviderResponse(
         plan.response_kind,
       ) &&
       [400, 404].includes(status) &&
-      object(body).message === "No data found for this memberId"
+      (object(body).message === "No data found for this memberId" ||
+        (status === 404 &&
+          object(body).status === 404 &&
+          object(body).message ===
+            "No data found for this domain and memberId."))
     ) {
       if (!plan.page_start) throw new Error("snapshot_not_ready");
       return plan.response_kind === "linkedin_connections"

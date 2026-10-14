@@ -546,6 +546,100 @@ describe("official read-only social plans", () => {
         "quarantined",
       );
   });
+  it.each(["snapshot", "connections"] as const)(
+    "recognizes the exact observed %s terminal variant only after an initial page",
+    (phase) => {
+      const p = {
+        ...plan("linkedin", phase),
+        page_start: 1,
+        expected_cursor:
+          phase === "connections" ? "li-connections:1" : "li-snapshot:1",
+      };
+      const result = mapSocialProviderResponse(p, 404, {
+        status: 404,
+        message: "No data found for this domain and memberId.",
+      });
+      if (phase === "connections") {
+        expect(result).toMatchObject({
+          kind: "connections",
+          complete: true,
+          rows: [],
+          next_cursor: null,
+          source: "linkedin",
+          account_id: p.account_id,
+          owner_identity: p.expected_owner_identity,
+          identity_bindings_verified: false,
+          schema_verified: false,
+        });
+      } else {
+        expect(result).toMatchObject({
+          kind: "page",
+          request: {
+            complete: true,
+            cursor: null,
+            items: [],
+            source: "linkedin",
+            account_id: p.account_id,
+            expected_cursor: p.expected_cursor,
+          },
+        });
+      }
+      for (const status of [400, 404])
+        expect(
+          mapSocialProviderResponse(p, status, {
+            message: "No data found for this memberId",
+          }),
+        ).toMatchObject({
+          kind: phase === "connections" ? "connections" : "page",
+        });
+    },
+  );
+  it.each(["snapshot", "connections"] as const)(
+    "keeps an initial %s page unready on the new exact terminal variant",
+    (phase) => {
+      expect(
+        mapSocialProviderResponse(plan("linkedin", phase), 404, {
+          status: 404,
+          message: "No data found for this domain and memberId.",
+        }),
+      ).toEqual({ kind: "quarantined", reason: "snapshot_not_ready" });
+    },
+  );
+  it.each(["snapshot", "connections"] as const)(
+    "rejects near-match or wrong-status %s terminal errors",
+    (phase) => {
+      const p = { ...plan("linkedin", phase), page_start: 1 };
+      const exact = "No data found for this domain and memberId.";
+      for (const [status, body] of [
+        [400, { status: 404, message: exact }],
+        [404, { message: exact }],
+        [404, { status: "404", message: exact }],
+        [404, { status: 400, message: exact }],
+        [404, { status: 404, message: exact + " " }],
+        [404, { status: 404, message: exact.slice(0, -1) }],
+        [404, { status: 404, message: "Resource not found" }],
+      ] as const)
+        expect(mapSocialProviderResponse(p, status, body)).toEqual({
+          kind: "quarantined",
+          reason: "provider_read_failed",
+        });
+    },
+  );
+  it("does not reinterpret another provider or LinkedIn operation's 404 as terminal", () => {
+    for (const p of [
+      plan(),
+      plan("whatsapp_personal", "identity"),
+      plan("linkedin", "identity"),
+      plan("linkedin", "changes", linkedInChangeCursor(now.getTime() - 1000)),
+    ]) {
+      expect(
+        mapSocialProviderResponse({ ...p, page_start: 1 }, 404, {
+          status: 404,
+          message: "No data found for this domain and memberId.",
+        }),
+      ).toEqual({ kind: "quarantined", reason: "provider_read_failed" });
+    }
+  });
   it("recognizes only the exact no-data terminal response after a valid request", () => {
     const p = plan("linkedin", "snapshot", "li-snapshot:1");
     expect(
