@@ -257,6 +257,7 @@ export function planSocialProviderRead(
       account.api_base_url,
     );
     if (phase !== "identity") {
+      count = Math.min(count, 5);
       url.searchParams.set("account_id", accountId);
       url.searchParams.set("limit", String(count));
       url.searchParams.set("after", new Date(start - 1).toISOString());
