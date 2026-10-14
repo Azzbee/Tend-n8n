@@ -696,6 +696,110 @@ for (const [file, source, host, credential] of [
             });
           }
       });
+      it("prioritizes rate limits across a bounded mixed-failure chat batch", () => {
+        const context = {
+          ...linked([message, { ...message, chat_id: "c2" }]),
+          "Prepare exact WhatsApp chats": [
+            [
+              { _chat_lookup: true, chat_id: "c1" },
+              { _chat_lookup: true, chat_id: "c2" },
+            ],
+          ],
+        };
+        const limited = {
+          statusCode: 429,
+          headers: { "Retry-After": "60", secret: "private" },
+          body: { error: "private" },
+        };
+        for (const failed of [
+          { statusCode: 500, body: {} },
+          { error: { code: "ECONNABORTED", message: "private" } },
+        ])
+          for (const batch of [
+            [failed, limited],
+            [limited, failed],
+          ])
+            expect(
+              run("Verify exact WhatsApp membership", batch, context),
+            ).toEqual([
+              {
+                json: {
+                  statusCode: 429,
+                  body: { error: "whatsapp_chat_rate_limited" },
+                  headers: { "Retry-After": "60" },
+                },
+              },
+            ]);
+        expect(
+          run(
+            "Verify exact WhatsApp membership",
+            [
+              limited,
+              { statusCode: 200, body: { ignored: "x".repeat(262144) } },
+            ],
+            context,
+          ),
+        ).toEqual([
+          {
+            json: {
+              statusCode: 599,
+              body: { error: "whatsapp_chat_response_budget" },
+            },
+          },
+        ]);
+        expect(
+          run("Verify exact WhatsApp membership", [limited], context),
+        ).toEqual([
+          {
+            json: {
+              statusCode: 599,
+              body: { error: "whatsapp_chat_response_count" },
+            },
+          },
+        ]);
+      });
+      it("honors the longest bounded retry delay across every rate-limited chat", () => {
+        const context = {
+          ...linked([message, { ...message, chat_id: "c2" }]),
+          "Prepare exact WhatsApp chats": [
+            [
+              { _chat_lookup: true, chat_id: "c1" },
+              { _chat_lookup: true, chat_id: "c2" },
+            ],
+          ],
+        };
+        const date = new Date(Date.now() + 120000).toUTCString();
+        for (const [a, b, expected] of [
+          ["60", "120", "120"],
+          ["60", date, date],
+          ["invalid", "120", "120"],
+          ["x".repeat(129), "120", "120"],
+          ["60", "999999", "999999"],
+          ["0", "2", "2"],
+          ["1".repeat(128), "120", "1".repeat(128)],
+        ])
+          for (const pair of [
+            [a, b],
+            [b, a],
+          ]) {
+            const batch = pair.map((value) => ({
+              statusCode: 429,
+              headers: { "Retry-After": value, secret: "private" },
+              body: { error: "private" },
+            }));
+            expect(
+              run("Verify exact WhatsApp membership", batch, context),
+            ).toEqual([
+              {
+                json: {
+                  statusCode: 429,
+                  body: { error: "whatsapp_chat_rate_limited" },
+                  headers: { "Retry-After": expected },
+                },
+              },
+            ]);
+          }
+      });
       it("reports fixed private-data-free reasons for every blocked membership branch", () => {
         for (const [response, reason] of [
           [
