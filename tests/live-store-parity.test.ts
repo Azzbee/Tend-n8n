@@ -10,6 +10,7 @@ import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { exampleLivePolicy } from "../src/live-policy.ts";
 import { migrateLiveStore } from "../src/migrate-live-store.ts";
 import { postgresTestRuntime } from "./postgres-test-runtime.ts";
+import { normalizeUnipileMessage } from "../src/messaging-records.ts";
 const principal = {
     owner_id: "parity-owner",
     user_id: "parity-user",
@@ -824,6 +825,236 @@ describe("canonical PostgreSQL live parity", () => {
       memory.close();
     }
   });
+  it.each(["whatsapp_personal", "whatsapp_business"] as const)(
+    "restarts an active partial %s window without discarding evidence before complete reconciliation",
+    async (source) => {
+      const ownerPrincipal = {
+        owner_id: `same-window-${source}`,
+        user_id: "recovery-user",
+        chat_id: "recovery-chat",
+      };
+      const postgres = await PostgresStore.open({
+          connectionString: runtime.connectionString,
+          principal: ownerPrincipal,
+          clock,
+        }),
+        memory = new TendStore(":memory:", {
+          mode: "live",
+          principal: ownerPrincipal,
+          clock,
+        });
+      const account = `recovery-${source}`;
+      const normalized = Array.from({ length: 6 }, (_, i) => {
+        const result = normalizeUnipileMessage(
+          {
+            id: `retained-${i}`,
+            account_id: account,
+            chat_id: "recovery-thread",
+            sender_id: "15550000001",
+            is_sender: 1,
+            timestamp: "2026-10-13T10:00:00Z",
+            text: record.body_text,
+            attendees: [
+              { attendee_provider_id: "15550000001" },
+              { attendee_provider_id: "999999999@lid" },
+            ],
+          },
+          {
+            principal_id: ownerPrincipal.owner_id,
+            account_id: account,
+            owner_identity: "15550000001",
+            now: clock(),
+            authenticated: { provider: "unipile", account_id: account },
+          },
+          source,
+        );
+        if (result.kind !== "accepted")
+          throw new Error("Fictional WhatsApp normalization failed");
+        return result;
+      });
+      const snapshot: SourceState = {
+        ...state,
+        owner_id: ownerPrincipal.owner_id,
+        source,
+        account_id: account,
+        coverage_start: normalized[0]!.record.coverage_start,
+        coverage_end: normalized[0]!.record.coverage_end,
+        evidence_incomplete: false,
+        pagination_complete: false,
+      };
+      const records = normalized.map((r) => r.record);
+      const legacy: LiveBatch = {
+        ...batch(),
+        owner_id: ownerPrincipal.owner_id,
+        source,
+        account_id: account,
+        coverage_start: snapshot.coverage_start,
+        coverage_end: snapshot.coverage_end,
+        records,
+        seen_record_ids: records.map((r) => r.source_record_id),
+        contacts: normalized[0]!.contacts,
+        identities: normalized[0]!.identities,
+        cursor: "legacy-twenty-item-cursor",
+        evidence_incomplete: false,
+      };
+      try {
+        for (const store of [postgres, memory]) {
+          await store.seed([], [], [snapshot]);
+          const retained = await store.commitLiveBatch(legacy);
+          const candidate = await store.addCandidate(retained[0]!, {
+            quote: record.body_text,
+            action: "send the report",
+            suggested_due: "2026-10-15",
+          });
+          await store.command({
+            ...ownerPrincipal,
+            chat_type: "private",
+            text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+          });
+          const before = {
+            records: await store.interactions(ownerPrincipal.owner_id),
+            contacts: await store.contacts(ownerPrincipal.owner_id),
+            obligations: await store.commitments(ownerPrincipal.owner_id),
+          };
+          const partial = (
+            await store.sourceStatus(ownerPrincipal.owner_id)
+          )[0]!;
+          expect(partial).toMatchObject({
+            status: "partial",
+            cursor: legacy.cursor,
+          });
+          expect(
+            await store.prepareLiveSnapshot(
+              ownerPrincipal.owner_id,
+              source,
+              account,
+              snapshot.coverage_start,
+              snapshot.coverage_end,
+            ),
+          ).toEqual(partial);
+          await store.reconnectLiveSource(
+            ownerPrincipal.owner_id,
+            source,
+            account,
+            snapshot.coverage_start,
+            snapshot.coverage_end,
+            true,
+          );
+          expect({
+            records: await store.interactions(ownerPrincipal.owner_id),
+            contacts: await store.contacts(ownerPrincipal.owner_id),
+            obligations: await store.commitments(ownerPrincipal.owner_id),
+          }).toEqual(before);
+          expect(
+            (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+          ).toMatchObject({
+            status: "partial",
+            cursor: null,
+            coverage_start: snapshot.coverage_start,
+            coverage_end: snapshot.coverage_end,
+            pagination_complete: false,
+            evidence_incomplete: false,
+          });
+          const first: LiveBatch = {
+            ...legacy,
+            records: records.slice(0, 5),
+            seen_record_ids: records.slice(0, 5).map((r) => r.source_record_id),
+            expected_cursor: null,
+            cursor: "new-five-item-cursor",
+          };
+          await store.commitLiveBatch(first);
+          expect(await store.commitLiveBatch(first)).toEqual([]);
+          expect(await store.interactions(ownerPrincipal.owner_id)).toEqual(
+            before.records,
+          );
+          expect(await store.commitments(ownerPrincipal.owner_id)).toEqual(
+            before.obligations,
+          );
+          await expect(
+            Promise.resolve().then(() =>
+              store.commitLiveBatch({
+                ...first,
+                expected_cursor: "wrong-cursor",
+                cursor: "must-not-advance",
+              }),
+            ),
+          ).rejects.toThrow("stale");
+          await store.markLiveSyncError(
+            ownerPrincipal.owner_id,
+            source,
+            account,
+            false,
+            null,
+            599,
+          );
+          expect(
+            (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+          ).toMatchObject({
+            cursor: "new-five-item-cursor",
+            last_error: 599,
+            coverage_start: snapshot.coverage_start,
+            coverage_end: snapshot.coverage_end,
+          });
+          expect(await store.interactions(ownerPrincipal.owner_id)).toEqual(
+            before.records,
+          );
+          expect(await store.commitments(ownerPrincipal.owner_id)).toEqual(
+            before.obligations,
+          );
+          await store.commitLiveBatch({
+            ...first,
+            records: [],
+            seen_record_ids: [],
+            cursor: null,
+            expected_cursor: "new-five-item-cursor",
+            complete: true,
+            reconcile: true,
+          });
+          expect(
+            (await store.interactions(ownerPrincipal.owner_id))
+              .map((r) => r.source_record_id)
+              .sort(),
+          ).toEqual(
+            records
+              .slice(0, 5)
+              .map((r) => r.source_record_id)
+              .sort(),
+          );
+          expect(await store.commitments(ownerPrincipal.owner_id)).toEqual(
+            before.obligations,
+          );
+          expect(
+            (await store.sourceStatus(ownerPrincipal.owner_id))[0],
+          ).toMatchObject({
+            status: "current",
+            cursor: null,
+            pagination_complete: true,
+            evidence_incomplete: false,
+          });
+          await store.revokeSource(ownerPrincipal.owner_id, source);
+          const revoked = await store.sourceStatus(ownerPrincipal.owner_id);
+          await expect(
+            Promise.resolve().then(() =>
+              store.reconnectLiveSource(
+                ownerPrincipal.owner_id,
+                source,
+                account,
+                snapshot.coverage_start,
+                snapshot.coverage_end,
+                true,
+              ),
+            ),
+          ).rejects.toThrow("source revoked; active connection required");
+          expect(await store.sourceStatus(ownerPrincipal.owner_id)).toEqual(
+            revoked,
+          );
+        }
+      } finally {
+        await postgres.close();
+        memory.close();
+      }
+    },
+  );
   it("blocks conditional refresh after revocation without changing explicit manual reconnect", async () => {
     const ownerPrincipal = {
       owner_id: "reconnect-race",
