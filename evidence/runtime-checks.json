@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T08:43:01.657Z",
+  "checked_at": "2026-10-14T09:03:43.414Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -11,16 +11,16 @@
     "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
     "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf",
     "10-telegram-private.json": "6b3c0f37b1ebcf43f15276fcab3f9921a9813ec397f630012cb2bf45166a4619",
-    "11-google-gmail-readonly.json": "8c9dbcd32e30ae9d28ea3e28b2a51d6322a11435da876a43a7dd0907697660ec",
-    "12-google-calendar-readonly.json": "e203afea6bc10c28f79affcca2a0986b85eeea3ea9e47ce63796b897f09a6c5c",
-    "13-google-normalize-store.json": "04c4703ed941417e62144c624ead612ac13ad9b9eee63fdcc6545e9c71156194",
+    "11-google-gmail-readonly.json": "5ae0c1a86e8f89d4f7599992d0dc1dad83927d36daf8b34e3ba46e38fbca71a5",
+    "12-google-calendar-readonly.json": "218823715bf71e1b11a23130b0d5d46cb758889ed6af86f0b69ff5b02be1f97a",
+    "13-google-normalize-store.json": "6f90a2a86a8940f7624dff12f9bf87fb0db307dbda04e39c06cb873e21ab3b05",
     "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
     "15-google-extract-commitments.json": "da0be1805eeb9044b1f7ee95511af93e66415fe1acdb9106df21df8e2e354b92"
   },
   "source_sha256": {
     "engine.ts": "b8fb8f532454243c1724419b3eed5f10947ae483f1c1940028ef3cbf47a9a999",
     "server.ts": "34f812d3a23d0a1d6db6b85d0f484bc9a736742c1eaea6c89d8e3280345d147c",
-    "build-workflows.ts": "580bd54ff914b00dfdcf3dd296fb9f704ca8c193a9a0bde417cb2ab2821e22f6",
+    "build-workflows.ts": "dbe3f06d5a355aa5379a20a72a8b83fe6bad14969ff8eb39b3b44b1e7415304a",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
     "integration.ts": "efeb6cb6c5e12fc292e0843029102d606680005ac29c3a4d126cb66017285b3d"
   },
