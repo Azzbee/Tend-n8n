@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T15:34:49.308Z",
+  "checked_at": "2026-10-14T19:55:27.145Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -17,13 +17,13 @@
     "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
     "15-google-extract-commitments.json": "098318be83ce2b26c0687b47494f8e6b35e20308b93d8bd8855296b91cb95909",
     "16-live-ai-review.json": "6a00fde27b266ce57f976fd09bbc3147cf291033b3a8b891596d948eae53d02f",
-    "17-personal-whatsapp-readonly.json": "7ad665c93850dbccbf8df10e526f5b3ec8f3bba89943b666b1fa27eb17c31745",
+    "17-personal-whatsapp-readonly.json": "06e128230cce92b28778724932dfc85fccdb47ec937dc84f203b164f2955d2f5",
     "18-linkedin-portability-readonly.json": "afab0c2596c0d54248ddce53511f2fc35650c191463b59c7df0a91f59ea236c4"
   },
   "source_sha256": {
     "engine.ts": "7900718dd979e11c8ea715163f5df7a0228561cd087e57b42312e16dfc121214",
-    "server.ts": "ac82a2c57f94adc61bcf7a1dd80db7ea80c52d2deec8f021ca31b8f399d77b42",
-    "build-workflows.ts": "55dc2489bf7ddf2ace57fe39a073081430bc7a2f030ccbcf810c5818869011b3",
+    "server.ts": "fc1b673550720aa36bbc52c9684201e6ff599d098bd3ea22c8bf67be0febe303",
+    "build-workflows.ts": "796bd094cc80b84f79baf88b22fdc3853c5ff612d4df6306469777c40e2db678",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
     "integration.ts": "b909afef563ef081e6d47099b677139e991f7058f44933cfabdfeb21358084e9"
   },
@@ -45,7 +45,7 @@
       "name": "Review artifact links and private path isolation",
       "pass": true,
       "detail": {
-        "working_local_links": 29,
+        "working_local_links": 31,
         "private_paths_denied": 3
       }
     },
