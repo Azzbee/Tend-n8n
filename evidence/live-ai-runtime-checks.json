@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T14:48:05.694Z",
+  "checked_at": "2026-10-14T15:12:11.891Z",
   "pass": true,
   "scope": "Fictional source data only; isolated native n8n container and in-memory private API. Actual local Ollama execution, no real-data claim.",
   "runtime": {
@@ -7,7 +7,7 @@
     "image": "docker.n8n.io/n8nio/n8n@sha256:c34ee9107a42b837e25cec0c8a927ab90a45b776aa2ccbf15e5b9cda466fad2c",
     "model": "qwen3:0.6b"
   },
-  "workflow_sha256": "834ca3ae87f655200ef5e6c4bb4ccedb4012a4a912cdac363d2d6022c99f4a2a",
+  "workflow_sha256": "6a00fde27b266ce57f976fd09bbc3147cf291033b3a8b891596d948eae53d02f",
   "live_ai_source_sha256": "fcd35b6c265ca640095e3f164c84f1f116def7022fcb5bff5a4b301b97fd2173",
   "model_node_executed": true,
   "result_status": "validated",
