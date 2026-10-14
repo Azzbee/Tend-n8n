@@ -533,6 +533,63 @@ for (const [file, source, host, credential] of [
           ),
         ).toThrow();
       });
+      it("skips explicit group and broadcast lookups while stripping their unverified attendees", () => {
+        for (const suffix of ["@g.us", "@broadcast"]) {
+          const grouped = {
+            ...message,
+            chat_provider_id: "fictional" + suffix,
+          };
+          const context = {
+            ...linked([grouped]),
+            "Prepare exact WhatsApp chats": [[{ _chat_lookup: false }]],
+          };
+          expect(
+            run(
+              "Prepare exact WhatsApp chats",
+              context["Read Selected provider page"],
+              context,
+            ),
+          ).toEqual([{ json: { _chat_lookup: false } }]);
+          const result = run(
+            "Verify exact WhatsApp membership",
+            [{ _chat_lookup: false }],
+            context,
+          ) as {
+            json: {
+              body: { items: Record<string, unknown>[]; cursor: string };
+            };
+          }[];
+          expect(result[0]!.json.body.cursor).toBe("next");
+          expect(result[0]!.json.body.items[0]).not.toHaveProperty("attendees");
+          expect(
+            normalizeUnipileMessage(
+              result[0]!.json.body.items[0],
+              {
+                principal_id: "fictional-owner",
+                account_id: "fictional-account",
+                owner_identity: owner,
+                now: new Date("2026-10-14T12:00:00Z"),
+                authenticated: {
+                  provider: "unipile",
+                  account_id: "fictional-account",
+                },
+              },
+              source,
+            ),
+          ).toMatchObject({
+            kind: "accepted",
+            record: { attribution: "unknown", eligible_for_extraction: false },
+          });
+          const mixed = linked([message, grouped]);
+          expect(
+            run(
+              "Prepare exact WhatsApp chats",
+              mixed["Read Selected provider page"],
+              mixed,
+            ),
+          ).toEqual([{ json: { _chat_lookup: false } }]);
+        }
+      });
       it("rejects dot-only chat IDs before an exact chat request can normalize its path", () => {
         for (const chat_id of [".", ".."])
           expect(() =>
