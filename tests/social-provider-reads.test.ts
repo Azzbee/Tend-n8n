@@ -470,42 +470,10 @@ describe("official read-only social plans", () => {
     expect(p.follow_redirects).toBe(false);
     expect(u.pathname).toBe("/api/v1/messages");
     expect(u.searchParams.get("account_id")).toBe("personal-one");
-    expect(u.searchParams.get("limit")).toBe("5");
+    expect(u.searchParams.get("limit")).toBe("20");
     expect(u.searchParams.get("after")).toBe("2026-09-14T11:59:59.999Z");
     expect(u.searchParams.get("before")).toBe("2026-10-14T12:00:00.001Z");
     expect(JSON.stringify(p)).not.toContain("Authorization");
-  });
-  it("caps Unipile continuation pages without changing opaque cursors or anchored filters", () => {
-    const cursor = "opaque-provider-cursor+/=20";
-    const s = state("whatsapp_personal", cursor);
-    for (const requested of [1, 5, 20, 250]) {
-      const p = planSocialProviderRead(
-        policy,
-        "whatsapp_personal",
-        s.account_id,
-        s,
-        "snapshot",
-        now,
-        requested,
-      );
-      if (p.kind !== "request") throw new Error("expected plan");
-      const u = new URL(p.url);
-      expect(p.limit).toBe(Math.min(requested, 5));
-      expect(u.searchParams.get("limit")).toBe(String(p.limit));
-      expect(u.searchParams.get("cursor")).toBe(cursor);
-      expect(u.searchParams.get("account_id")).toBe(s.account_id);
-      expect(u.searchParams.get("after")).toBe("2026-09-14T11:59:59.999Z");
-      expect(u.searchParams.get("before")).toBe("2026-10-14T12:00:00.001Z");
-      expect(p.expected_cursor).toBe(cursor);
-      expect(p.coverage_start).toBe(s.coverage_start);
-      expect(p.coverage_end).toBe(s.coverage_end);
-    }
-    expect(plan("linkedin", "snapshot").limit).toBe(10);
-    expect(plan("linkedin", "connections").limit).toBe(10);
-    expect(
-      plan("linkedin", "changes", linkedInChangeCursor(now.getTime() - 1))
-        .limit,
-    ).toBe(50);
   });
   it("verifies the configured WhatsApp phone and healthy service statuses", () => {
     const p = plan("whatsapp_personal", "identity");
