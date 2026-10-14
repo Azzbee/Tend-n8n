@@ -12,6 +12,96 @@ async function listen(server: Server): Promise<number> {
   return a.port;
 }
 describe("private live API", () => {
+  it("refreshes both calendars when Gmail polls between every calendar run", async () => {
+    const policy = exampleLivePolicy,
+      clock = () => new Date("2026-10-14T12:00:00Z");
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: policy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+      clock,
+    });
+    const server = createLiveServer({
+      policy,
+      store,
+      auth: new InternalAuth(undefined, verificationHash(key)),
+      clock,
+    });
+    const base = `http://127.0.0.1:${await listen(server)}`,
+      headers = {
+        Authorization: "Bearer " + key,
+        "Content-Type": "application/json",
+      };
+    async function complete(
+      source: "gmail" | "calendar",
+      supplied?: Record<string, unknown>,
+    ): Promise<string> {
+      const state =
+        supplied ??
+        ((await (
+          await fetch(base + "/api/live/sync-state?source=" + source, {
+            headers,
+          })
+        ).json()) as Record<string, unknown>);
+      const response = await fetch(base + "/api/live/sync", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          source,
+          account_email: policy.account_email,
+          profile_account_email: policy.account_email,
+          ...(source === "calendar" ? { calendar_id: state.calendar_id } : {}),
+          records: [],
+          previous_cursor: null,
+          cursor: null,
+          complete: true,
+          reconcile: true,
+          window_start: state.window_start,
+          window_end: state.window_end,
+          seen_record_ids: [],
+        }),
+      });
+      expect(response.status).toBe(200);
+      return String(state.calendar_id ?? "");
+    }
+    try {
+      const selected: string[] = [];
+      for (let i = 0; i < 6; i++) {
+        await complete("gmail");
+        selected.push(await complete("calendar"));
+      }
+      expect(new Set(selected.slice(2)).size).toBe(2);
+      const failing = policy.calendar_ids.find((id) => id !== "primary")!;
+      let healthyRuns = 0;
+      for (let i = 0; i < 8; i++) {
+        const state = (await (
+          await fetch(base + "/api/live/sync-state?source=calendar", {
+            headers,
+          })
+        ).json()) as Record<string, unknown>;
+        if (state.calendar_id === failing)
+          store.markLiveSyncError(
+            policy.principal_id,
+            "calendar",
+            failing,
+            false,
+            null,
+            404,
+          );
+        else {
+          await complete("calendar", state);
+          healthyRuns++;
+        }
+      }
+      expect(healthyRuns).toBe(4);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      store.close();
+    }
+  });
   it("moves extraction past non-promises and failed attempts while retaining them for review", async () => {
     const policy = exampleLivePolicy,
       clock = () => new Date("2026-10-14T12:00:00Z");

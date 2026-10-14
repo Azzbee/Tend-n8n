@@ -288,6 +288,7 @@ describe("private Google Telegram boundary", () => {
               contacts_total: 2,
               unavailable_record_count: 3,
               extraction_review_count: 2,
+              unverified_commitment_count: 1,
               meetings: [
                 {
                   occurred_at: "2026-10-13T22:00:00Z",
@@ -327,6 +328,7 @@ describe("private Google Telegram boundary", () => {
     expect(text).toContain(
       "Unvalidated extraction attempts needing review: 2.",
     );
+    expect(text).toContain("Promises with unavailable evidence: 1.");
     expect(text).toContain("Private Gmail and Calendar summary");
     expect(text).toContain("a@example.invalid");
     expect(text).toContain("Unavailable source records needing review: 3");

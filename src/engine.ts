@@ -1143,6 +1143,19 @@ export class TendStore {
       .get(id, raw.owner_id);
     if (existing) {
       const current = JSON.parse(String(existing.data)) as Commitment;
+      if (this.mode === "live" && current.status === "invalidated") {
+        const proposed: Commitment = {
+          ...current,
+          ...validated,
+          contact_id: normalized.contact_id,
+          direction: raw.direction === "sent" ? "owed_by_me" : "owed_to_me",
+          status: "pending",
+          due_date: null,
+          evidence_valid: true,
+        };
+        this.put(proposed);
+        return proposed;
+      }
       if (current.evidence_valid === false || current.status === "invalidated")
         throw new Error(
           "invalidated candidate requires external owner review; automatic reinstatement unsupported",
@@ -1211,6 +1224,11 @@ export class TendStore {
           suggested_due: null,
           due_date: null,
         });
+      this.db
+        .prepare(
+          "DELETE FROM live_extraction_attempts WHERE owner_id=? AND record_key IN (SELECT record_key FROM interactions WHERE owner_id=? AND source=?)",
+        )
+        .run(owner, owner, source);
       this.db
         .prepare("DELETE FROM interactions WHERE owner_id=? AND source=?")
         .run(owner, source);
@@ -1378,6 +1396,9 @@ export class TendStore {
           ? {
               unavailable_record_count: this.quarantineCount(owner),
               extraction_review_count: this.extractionReviewCount(owner),
+              unverified_commitment_count: this.commitments(owner).filter(
+                (c) => c.evidence_valid === false,
+              ).length,
             }
           : {}),
       };

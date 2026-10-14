@@ -8,6 +8,20 @@ import {
 } from "../src/live-policy.ts";
 
 describe("private read-only live policy", () => {
+  it("keeps autumn repeated-hour coverage nondecreasing through the clock reset", () => {
+    const times = [
+      "2026-10-25T00:59:59.999Z",
+      "2026-10-25T01:00:00Z",
+      "2026-10-25T01:59:59.999Z",
+      "2026-10-25T02:00:00Z",
+    ];
+    const ends = times.map((t) =>
+      Date.parse(calendarWindow(exampleLivePolicy, new Date(t)).end),
+    );
+    for (let i = 1; i < ends.length; i++)
+      expect(ends[i]).toBeGreaterThanOrEqual(ends[i - 1]!);
+    expect(new Date(ends[1]!).toISOString()).toBe("2026-11-01T02:00:00.000Z");
+  });
   it("uses only fictional tracked settings and validates exact scope", () => {
     expect(exampleLivePolicy.account_email).toBe("owner@example.invalid");
     expect(parseLivePolicy(exampleLivePolicy)).toEqual(exampleLivePolicy);
@@ -72,7 +86,20 @@ describe("private read-only live policy", () => {
       calendarWindow(exampleLivePolicy, new Date("2027-03-21T01:30:00Z")),
     ).toEqual({
       start: "2027-03-21T01:30:00.000Z",
-      end: "2027-03-28T01:30:00.000Z",
+      end: "2027-03-28T01:00:00.000Z",
     });
+  });
+  it("does not move a future spring-gap endpoint backwards as the clock advances", () => {
+    const before = calendarWindow(
+      exampleLivePolicy,
+      new Date("2027-03-21T01:59:00Z"),
+    );
+    const after = calendarWindow(
+      exampleLivePolicy,
+      new Date("2027-03-21T02:00:00Z"),
+    );
+    expect(Date.parse(after.end)).toBeGreaterThanOrEqual(
+      Date.parse(before.end),
+    );
   });
 });

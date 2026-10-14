@@ -436,6 +436,11 @@ async function googleIntegration(): Promise<void> {
         sourceState("calendar", policy.account_email)?.status !== "current",
       "Calendar first page incorrectly current",
     );
+    await execute("TendGoogle12", "google-calendar-interleaved-empty");
+    assert(
+      sourceState("calendar", policy.account_email)?.cursor === "cal-next",
+      "interleaved calendar lost its anchored cursor",
+    );
     await execute("TendGoogle12", "google-calendar-page-two");
     assert(
       store

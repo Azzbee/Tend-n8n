@@ -183,6 +183,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
           telegram_delivery: store.telegramDeliveryCounts(),
           unavailable_record_count: store.quarantineCount(owner),
           extraction_review_count: store.extractionReviewCount(owner),
+          unverified_commitment_count: store
+            .commitments(owner)
+            .filter((c) => c.evidence_valid === false).length,
         });
         return;
       }
@@ -200,8 +203,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
               Date.parse(x.retry_after_until) <= clock().getTime()),
         );
         const pool = available.length ? available : states;
-        const interrupted = pool.find((x) => x.status !== "current");
-        const selected = interrupted ?? pool[calendarTurn++ % pool.length];
+        // Every available calendar gets a turn, including when another stays partial or fails.
+        const selected =
+          source === "gmail" ? pool[0] : pool[calendarTurn++ % pool.length];
         if (!selected) throw new Error("source missing");
         const range =
           source === "gmail"
@@ -248,7 +252,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
               (key !== null || !store.extractionAttempted(x)) &&
               !store
                 .commitments(owner)
-                .some((c) => c.record_key === x.record_key),
+                .some(
+                  (c) =>
+                    c.record_key === x.record_key && c.status !== "invalidated",
+                ),
           );
         const record = key
           ? records.find((x) => x.record_key === key)

@@ -207,6 +207,7 @@ export function zonedLocalInstant(
   const target = reference.getTime(),
     candidates = new Set<number>();
   const gapCandidates: { instant: number; wall: number }[] = [];
+  const beforeGap: number[] = [];
   for (const shift of [-86_400_000, 0, 86_400_000]) {
     const probe = new Date(target + shift);
     const offset = wallMillis(localParts(probe, timezone)) - probe.getTime();
@@ -214,12 +215,23 @@ export function zonedLocalInstant(
     const wall = wallMillis(localParts(new Date(instant), timezone));
     if (wall === target) candidates.add(instant);
     else if (wall > target) gapCandidates.push({ instant, wall });
+    else beforeGap.push(instant);
   }
   const found = [...candidates].sort((a, b) => a - b);
   if (!found.length && allowAmbiguous && gapCandidates.length) {
-    // Rolling windows move forward by a spring gap. Provider event times stay strict.
+    // Clamp to the transition so advancing past the gap cannot shorten the window.
     gapCandidates.sort((a, b) => a.wall - b.wall || a.instant - b.instant);
-    return new Date(gapCandidates[0]!.instant);
+    let high = gapCandidates[0]!.instant;
+    const lower = beforeGap.filter((x) => x < high);
+    if (!lower.length) throw new Error("invalid timezone gap bounds");
+    let low = Math.max(...lower);
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (wallMillis(localParts(new Date(middle), timezone)) >= target)
+        high = middle;
+      else low = middle + 1;
+    }
+    return new Date(high);
   }
   if (!found.length || (found.length !== 1 && !allowAmbiguous))
     throw new Error("ambiguous/nonexistent local date/time");
@@ -244,13 +256,43 @@ export function gmailWindow(policy: LivePolicy, now: Date): LiveWindow {
 export function calendarWindow(policy: LivePolicy, now: Date): LiveWindow {
   validateLivePolicy(policy);
   validNow(now);
-  const local = localParts(now, policy.timezone);
+  let local = localParts(now, policy.timezone);
+  const firstOccurrence = zonedLocalInstant(
+    new Date(wallMillis(local)).toISOString().slice(0, 19),
+    policy.timezone,
+    true,
+  ).getTime();
+  const secondOccurrence =
+    Math.floor(now.getTime() / 1000) * 1000 > firstOccurrence;
+  if (secondOccurrence) {
+    // Anchor the repeated hour at its end instead of moving future coverage backwards.
+    let low = now.getTime(),
+      high =
+        now.getTime() +
+        (Math.floor(now.getTime() / 1000) * 1000 - firstOccurrence);
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2),
+        parts = localParts(new Date(middle), policy.timezone);
+      const earliest = zonedLocalInstant(
+        new Date(wallMillis(parts)).toISOString().slice(0, 19),
+        policy.timezone,
+        true,
+      ).getTime();
+      if (earliest === Math.floor(middle / 1000) * 1000) high = middle;
+      else low = middle + 1;
+    }
+    local = localParts(new Date(high), policy.timezone);
+  }
   const shifted = new Date(wallMillis(local) + 7 * 86_400_000);
   const end = zonedLocalInstant(
     shifted.toISOString().slice(0, 19),
     policy.timezone,
     true,
   );
-  end.setUTCMilliseconds(now.getUTCMilliseconds());
+  if (
+    !secondOccurrence &&
+    wallMillis(localParts(end, policy.timezone)) === shifted.getTime()
+  )
+    end.setUTCMilliseconds(now.getUTCMilliseconds());
   return { start: now.toISOString(), end: end.toISOString() };
 }

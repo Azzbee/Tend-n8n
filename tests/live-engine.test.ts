@@ -83,6 +83,69 @@ function makeStore(path = ":memory:"): TendStore {
   return store;
 }
 describe("private live owner store", () => {
+  it("proposes reverified promises as pending after reconnect without restoring confirmation", () => {
+    const store = makeStore(),
+      record = raw();
+    try {
+      store.ingest(record);
+      const candidate = store.addCandidate(record, {
+        quote: record.authored_spans[0]!.text,
+        action: "send the notes",
+        suggested_due: "2026-10-15",
+      });
+      store.command({
+        ...auth,
+        text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+      });
+      store.revokeSource(principal.owner_id, "gmail");
+      store.reconnectLiveSource(
+        principal.owner_id,
+        "gmail",
+        record.account_id,
+        record.coverage_start,
+        record.coverage_end,
+      );
+      store.seed(contacts, identities, []);
+      store.ingest(record);
+      const proposed = store.addCandidate(record, {
+        quote: record.authored_spans[0]!.text,
+        action: "send the notes",
+        suggested_due: "2026-10-15",
+      });
+      expect(proposed).toMatchObject({
+        commitment_id: candidate.commitment_id,
+        status: "pending",
+        due_date: null,
+        evidence_valid: true,
+      });
+      expect(store.commitments(principal.owner_id)).toHaveLength(1);
+      store.command({
+        ...auth,
+        text: `/confirm ${candidate.commitment_id} 2026-10-15`,
+      });
+      store.command({ ...auth, text: `/done ${candidate.commitment_id}` });
+      store.revokeSource(principal.owner_id, "gmail");
+      store.reconnectLiveSource(
+        principal.owner_id,
+        "gmail",
+        record.account_id,
+        record.coverage_start,
+        record.coverage_end,
+      );
+      store.seed(contacts, identities, []);
+      store.ingest(record);
+      expect(() =>
+        store.addCandidate(record, {
+          quote: record.authored_spans[0]!.text,
+          action: "send the notes",
+          suggested_due: "2026-10-15",
+        }),
+      ).toThrow();
+      expect(store.commitments(principal.owner_id)[0]?.status).toBe("done");
+    } finally {
+      store.close();
+    }
+  });
   it("persists attempted evidence without storing model output and permits changed evidence", () => {
     const directory = mkdtempSync(join(tmpdir(), "tend-extraction-")),
       path = join(directory, "private.sqlite");
