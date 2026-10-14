@@ -565,7 +565,9 @@ export class PostgresStore implements LiveStore {
         coverage_start: start,
         coverage_end: end,
         last_batch_hash: "",
-        ...resetLiveCompleteness(state),
+        ...(resumeCursor === undefined
+          ? resetLiveCompleteness(state)
+          : { pagination_complete: false }),
       };
       await s.q(
         "DELETE FROM live_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3",

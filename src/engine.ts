@@ -905,7 +905,9 @@ export class TendStore {
         coverage_start: start,
         coverage_end: end,
         last_batch_hash: "",
-        ...resetLiveCompleteness(state),
+        ...(resumeCursor === undefined
+          ? resetLiveCompleteness(state)
+          : { pagination_complete: false }),
       };
       this.db
         .prepare(

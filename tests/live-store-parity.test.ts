@@ -624,6 +624,132 @@ describe("canonical PostgreSQL live parity", () => {
     }
   });
 
+  it("preserves a quarantined changelog gap across watermark resumes and clean terminal pages", async () => {
+    const ownerPrincipal = {
+        owner_id: "changelog-gap-parity",
+        user_id: "gap-user",
+        chat_id: "gap-chat",
+      },
+      account = "urn:li:person:gap-owner",
+      historical = "2026-10-13T08:00:00Z",
+      baseline = `li-change:${Date.parse("2026-10-13T09:00:00Z")}`,
+      watermark = `li-change:${Date.parse("2026-10-13T09:01:00Z")}`,
+      nextWatermark = `li-change:${Date.parse("2026-10-13T09:02:00Z")}`;
+    const postgres = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: ownerPrincipal,
+        clock,
+      }),
+      memory = new TendStore(":memory:", {
+        mode: "live",
+        principal: ownerPrincipal,
+        clock,
+      });
+    const raw = {
+        ...record,
+        owner_id: ownerPrincipal.owner_id,
+        source: "linkedin" as const,
+        account_id: account,
+      },
+      states = [];
+    try {
+      for (const store of [postgres, memory]) {
+        await store.seed(
+          [
+            {
+              owner_id: ownerPrincipal.owner_id,
+              contact_id: "friend",
+              name: "Friend",
+            },
+          ],
+          [
+            {
+              owner_id: ownerPrincipal.owner_id,
+              identity: "owner@example.com",
+              contact_id: "OWNER",
+            },
+            {
+              owner_id: ownerPrincipal.owner_id,
+              identity: "friend@example.com",
+              contact_id: "friend",
+            },
+          ],
+          [
+            {
+              ...state,
+              owner_id: ownerPrincipal.owner_id,
+              source: "linkedin",
+              account_id: account,
+              cursor: baseline,
+              last_success: historical,
+            },
+          ],
+        );
+        await store.ingest(raw);
+        const bad: LiveBatch = {
+          owner_id: ownerPrincipal.owner_id,
+          source: "linkedin",
+          account_id: account,
+          records: [],
+          cursor: watermark,
+          expected_cursor: baseline,
+          complete: true,
+          reconcile: true,
+          coverage_start: state.coverage_start,
+          coverage_end: state.coverage_end,
+          seen_record_ids: ["bad-change"],
+          evidence_incomplete: true,
+          quarantines: [
+            {
+              source_record_id: "bad-change",
+              reason: "actor_mismatch",
+              observed_at: now,
+            },
+          ],
+        };
+        await store.commitLiveBatch(bad);
+        const resumed = await store.prepareLiveSnapshot(
+          ownerPrincipal.owner_id,
+          "linkedin",
+          account,
+          state.coverage_start,
+          state.coverage_end,
+          watermark,
+        );
+        await store.commitLiveBatch({
+          ...bad,
+          cursor: nextWatermark,
+          expected_cursor: watermark,
+          evidence_incomplete: false,
+          seen_record_ids: [],
+          quarantines: [],
+        });
+        expect((await store.counts(ownerPrincipal.owner_id)).interactions).toBe(
+          1,
+        );
+        expect(resumed).toMatchObject({
+          status: "partial",
+          cursor: watermark,
+          evidence_incomplete: true,
+          pagination_complete: false,
+          last_success: historical,
+        });
+        const current = (await store.sourceStatus(ownerPrincipal.owner_id))[0]!;
+        states.push(current);
+        expect(current).toMatchObject({
+          status: "partial",
+          cursor: nextWatermark,
+          evidence_incomplete: true,
+          pagination_complete: true,
+          last_success: historical,
+        });
+      }
+      expect(states[0]).toEqual(states[1]);
+    } finally {
+      await postgres.close();
+      memory.close();
+    }
+  });
   it("blocks conditional refresh after revocation without changing explicit manual reconnect", async () => {
     const ownerPrincipal = {
       owner_id: "reconnect-race",
