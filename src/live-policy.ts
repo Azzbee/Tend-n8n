@@ -1,7 +1,23 @@
 import { parseSocialPolicy, type SocialPolicy } from "./social-policy.ts";
+import type { Source } from "./engine.ts";
+export interface VerifiedContactMember {
+  contact_id: string;
+  source: Source;
+  account_id: string;
+  identity: string;
+}
+export interface VerifiedContactGroup {
+  id: string;
+  name: string;
+  verified_at: string;
+  proof_kind: "owner_confirmed" | "provider_verified";
+  proof_reference: string;
+  members: VerifiedContactMember[];
+}
 /** Private operator input only. This tracked example has fictional identities. */
 export interface LivePolicy {
   social?: SocialPolicy;
+  verified_contact_groups?: VerifiedContactGroup[];
   principal_id: string;
   account_email: string;
   verified_owner_emails: string[];
@@ -64,6 +80,7 @@ export function parseLivePolicy(input: unknown): LivePolicy {
   const value = object(input);
   const keys = [
     "social",
+    "verified_contact_groups",
     "principal_id",
     "account_email",
     "verified_owner_emails",
@@ -116,7 +133,7 @@ export function parseLivePolicy(input: unknown): LivePolicy {
   )
     throw new Error("invalid verified account/aliases");
   const social = parseSocialPolicy(value.social);
-  return {
+  const policy: LivePolicy = {
     ...(social ? { social } : {}),
     principal_id: nonempty(value.principal_id),
     account_email: account,
@@ -127,6 +144,122 @@ export function parseLivePolicy(input: unknown): LivePolicy {
     calendar_window_days: 7,
     limits: parsedLimits,
   };
+  if (value.verified_contact_groups !== undefined)
+    policy.verified_contact_groups = parseContactGroups(
+      value.verified_contact_groups,
+      policy,
+    );
+  return policy;
+}
+function parseContactGroups(
+  input: unknown,
+  policy: LivePolicy,
+): VerifiedContactGroup[] {
+  if (!Array.isArray(input) || input.length > 5)
+    throw new Error("invalid verified contact groups");
+  const ids = new Set<string>(),
+    assignedContacts = new Set<string>(),
+    assignedIdentities = new Set<string>();
+  const token = (v: unknown, max = 1024): string => {
+    const text = nonempty(v);
+    if (text.length > max || /\s/u.test(text))
+      throw new Error("invalid verified contact token");
+    return text;
+  };
+  const exact = (v: Record<string, unknown>, allowed: string[]): void => {
+    if (
+      Object.keys(v).length !== allowed.length ||
+      Object.keys(v).some((k) => !allowed.includes(k))
+    )
+      throw new Error("invalid verified contact fields");
+  };
+  const owners = [
+    ...policy.verified_owner_emails,
+    ...(policy.social?.accounts.map((a) => a.owner_identity) ?? []),
+  ];
+  const ownerKey = (v: string): string =>
+    v
+      .toLowerCase()
+      .replace(/@(s\.whatsapp\.net|c\.us)$/, "")
+      .replace(/^\+(?=\d+$)/, "");
+  return input.map((value) => {
+    const raw = object(value);
+    exact(raw, [
+      "id",
+      "name",
+      "verified_at",
+      "proof_kind",
+      "proof_reference",
+      "members",
+    ]);
+    const id = token(raw.id, 70),
+      name = nonempty(raw.name),
+      verified_at = token(raw.verified_at, 40),
+      proof_reference = token(raw.proof_reference);
+    if (
+      !/^group:[A-Za-z0-9_-]{1,64}$/.test(id) ||
+      ids.has(id) ||
+      name.length > 120 ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(verified_at) ||
+      !Number.isFinite(Date.parse(verified_at)) ||
+      new Date(verified_at).toISOString().replace(".000Z", "Z") !==
+        verified_at.replace(".000Z", "Z") ||
+      typeof raw.proof_kind !== "string" ||
+      !["owner_confirmed", "provider_verified"].includes(raw.proof_kind) ||
+      !/^(?:https:\/\/[^\s]+|tend-source:[^\s]+|owner-confirmation:[A-Za-z0-9._:-]+)$/.test(
+        proof_reference,
+      ) ||
+      !Array.isArray(raw.members) ||
+      raw.members.length < 2 ||
+      raw.members.length > 5
+    )
+      throw new Error("unverified contact group");
+    ids.add(id);
+    const localContacts = new Set<string>(),
+      localIdentities = new Set<string>();
+    const members = raw.members.map((value): VerifiedContactMember => {
+      const m = object(value);
+      exact(m, ["contact_id", "source", "account_id", "identity"]);
+      const contact_id = token(m.contact_id, 128),
+        source = token(m.source, 32) as Source,
+        account_id = token(m.account_id),
+        identity = token(m.identity);
+      const enabled =
+        source === "gmail"
+          ? account_id === policy.account_email
+          : source === "calendar"
+            ? policy.calendar_ids.includes(account_id)
+            : policy.social?.accounts.some(
+                (a) => a.source === source && a.account_id === account_id,
+              );
+      const key = JSON.stringify([source, account_id, identity]);
+      if (
+        !enabled ||
+        contact_id === "OWNER" ||
+        contact_id.startsWith("group:") ||
+        owners.some((o) => ownerKey(o) === ownerKey(identity)) ||
+        assignedContacts.has(contact_id) ||
+        assignedIdentities.has(key) ||
+        localIdentities.has(key)
+      )
+        throw new Error("unapproved verified contact member");
+      localContacts.add(contact_id);
+      localIdentities.add(key);
+      return { contact_id, source, account_id, identity };
+    });
+    if (new Set(members.map((m) => m.source)).size < 2)
+      throw new Error("cross-channel contact sources required");
+    for (const c of localContacts) assignedContacts.add(c);
+    for (const i of localIdentities) assignedIdentities.add(i);
+    return {
+      id,
+      name,
+      verified_at,
+      proof_kind: raw.proof_kind as VerifiedContactGroup["proof_kind"],
+      proof_reference,
+      members,
+    };
+  });
 }
 export function validateLivePolicy(policy: LivePolicy): void {
   parseLivePolicy(policy);

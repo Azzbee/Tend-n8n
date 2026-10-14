@@ -2,23 +2,27 @@ import { describe, expect, it } from "vitest";
 import { createLiveServer } from "../src/live-api.ts";
 import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { TendStore } from "../src/engine.ts";
-import { exampleLivePolicy as policy } from "../src/live-policy.ts";
+import {
+  exampleLivePolicy as policy,
+  parseLivePolicy,
+  type LivePolicy,
+} from "../src/live-policy.ts";
 import type { LiveRecord } from "../src/google-records.ts";
 
 const key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
 const clock = () => new Date("2026-10-14T12:00:00Z");
-async function setup() {
+async function setup(inputPolicy: LivePolicy = policy) {
   const store = new TendStore(":memory:", {
     mode: "live",
     principal: {
-      owner_id: policy.principal_id,
+      owner_id: inputPolicy.principal_id,
       user_id: "live-owner",
       chat_id: "live-private",
     },
     clock,
   });
   const server = createLiveServer({
-    policy,
+    policy: inputPolicy,
     store,
     auth: new InternalAuth(undefined, verificationHash(key)),
     clock,
@@ -35,14 +39,14 @@ async function setup() {
   store.seed(
     [
       {
-        owner_id: policy.principal_id,
+        owner_id: inputPolicy.principal_id,
         contact_id: "P1",
         name: "Fictional Person",
       },
     ],
     [
       {
-        owner_id: policy.principal_id,
+        owner_id: inputPolicy.principal_id,
         contact_id: "P1",
         identity: "person@example.invalid",
       },
@@ -51,15 +55,15 @@ async function setup() {
   );
   const text = "I'll send the notes by 2026-10-15.";
   const record: LiveRecord = {
-    owner_id: policy.principal_id,
+    owner_id: inputPolicy.principal_id,
     source: "gmail",
-    account_id: policy.account_email,
+    account_id: inputPolicy.account_email,
     source_record_id: "fictional-mail-1",
     source_thread_id: "fictional-thread",
     kind: "message",
     direction: "received",
     actor_identity: "person@example.invalid",
-    participant_identities: [policy.account_email],
+    participant_identities: [inputPolicy.account_email],
     occurred_at: "2026-10-14T08:00:00Z",
     observed_at: clock().toISOString(),
     body_text: text,
@@ -86,6 +90,7 @@ async function setup() {
     store,
     record,
     normalized,
+    base,
     get,
     post,
     close: async () => {
@@ -209,6 +214,206 @@ describe("private AI evidence API", () => {
           })
         ).json(),
       ).toMatchObject({ candidate: { status: "pending" } });
+    } finally {
+      await x.close();
+    }
+  });
+});
+
+function groupPolicy() {
+  return parseLivePolicy({
+    ...policy,
+    social: {
+      window_days: 30,
+      accounts: [
+        {
+          source: "whatsapp_personal",
+          provider: "unipile",
+          account_id: "wa-one",
+          owner_identity: "15550000001",
+          owner_verified: true,
+          api_base_url: "https://api1.unipile.com:13111",
+        },
+      ],
+    },
+    verified_contact_groups: [
+      {
+        id: "group:fictional",
+        name: "Fictional Person",
+        verified_at: "2026-10-14T10:00:00.000Z",
+        proof_kind: "owner_confirmed",
+        proof_reference: "owner-confirmation:fictional-message",
+        members: [
+          {
+            contact_id: "P1",
+            source: "gmail",
+            account_id: policy.account_email,
+            identity: "person@example.invalid",
+          },
+          {
+            contact_id: "M1",
+            source: "whatsapp_personal",
+            account_id: "wa-one",
+            identity: "999999999@lid",
+          },
+        ],
+      },
+    ],
+  });
+}
+async function setupGroup(p: LivePolicy) {
+  const x = await setup(p);
+  x.store.seed(
+    [{ owner_id: p.principal_id, contact_id: "M1", name: "Fictional Person" }],
+    [{ owner_id: p.principal_id, contact_id: "M1", identity: "999999999@lid" }],
+    [],
+  );
+  const text = "The WhatsApp notes are ready.";
+  const wa = x.store.ingest({
+    ...x.record,
+    source: "whatsapp_personal",
+    account_id: "wa-one",
+    source_record_id: "wa-message",
+    actor_identity: "999999999@lid",
+    contact_ids: ["M1"],
+    body_text: text,
+    authored_text: text,
+    authored_spans: [{ start: 0, end: text.length, text }],
+    evidence_reference: "tend-source:whatsapp_personal/wa-one/wa-message",
+  });
+  return { ...x, wa };
+}
+describe("protected verified group AI API", () => {
+  it("combines exact owned channel evidence without changing contact IDs, hashes or candidates", async () => {
+    const p = groupPolicy(),
+      x = await setupGroup(p);
+    try {
+      const before = {
+        records: x.store.interactions(p.principal_id),
+        contacts: x.store.contacts(p.principal_id),
+        commitments: x.store.commitments(p.principal_id),
+      };
+      expect(
+        (
+          await fetch(
+            x.base +
+              "/api/live/ai/input?contact_id=group:fictional&purpose=briefing",
+          )
+        ).status,
+      ).toBe(401);
+      const input = (await (
+        await x.get(
+          "/api/live/ai/input?contact_id=group:fictional&purpose=draft",
+        )
+      ).json()) as {
+        eligible: boolean;
+        request_id: string;
+        evidence_count: number;
+      };
+      expect(input).toMatchObject({ eligible: true, evidence_count: 2 });
+      const response = await x.post("/api/live/ai/validate", {
+        request_id: input.request_id,
+        output: {
+          items: [x.normalized, x.wa].map((r) => ({
+            record_key: r.record_key,
+            content_hash: r.content_hash,
+            quote: r.body_text,
+          })),
+        },
+      });
+      expect(await response.json()).toMatchObject({
+        status: "validated",
+        items: [{ source: "gmail" }, { source: "whatsapp_personal" }],
+        draft: { pending_review: true },
+        outbound_sent: false,
+      });
+      expect({
+        records: x.store.interactions(p.principal_id),
+        contacts: x.store.contacts(p.principal_id),
+        commitments: x.store.commitments(p.principal_id),
+      }).toEqual(before);
+    } finally {
+      await x.close();
+    }
+  });
+  it.each(["proof", "withdraw", "revoke", "identity", "future"])(
+    "withdraws pending excerpts after %s changes",
+    async (change) => {
+      const p = groupPolicy(),
+        x = await setupGroup(p);
+      try {
+        const input = (await (
+          await x.get(
+            "/api/live/ai/input?contact_id=group:fictional&purpose=draft",
+          )
+        ).json()) as { request_id: string };
+        if (change === "proof")
+          p.verified_contact_groups![0]!.proof_reference =
+            "owner-confirmation:replacement";
+        if (change === "withdraw") delete p.verified_contact_groups;
+        if (change === "revoke")
+          x.store.revokeSource(p.principal_id, "whatsapp_personal");
+        if (change === "future")
+          p.verified_contact_groups![0]!.verified_at =
+            "2099-10-14T10:00:00.000Z";
+        if (change === "identity") {
+          const contacts = x.store.contacts.bind(x.store);
+          x.store.contacts = (owner, query) =>
+            contacts(owner, query).map((contact) =>
+              contact.contact_id === "M1"
+                ? { ...contact, emails: [] }
+                : contact,
+            );
+        }
+        const response = await x.post("/api/live/ai/validate", {
+          request_id: input.request_id,
+          output: {
+            items: [
+              {
+                record_key: x.wa.record_key,
+                content_hash: x.wa.content_hash,
+                quote: x.wa.body_text,
+              },
+            ],
+          },
+        });
+        expect(await response.json()).toMatchObject({
+          status: "fallback",
+          items: [],
+          draft: null,
+          outbound_sent: false,
+        });
+      } finally {
+        await x.close();
+      }
+    },
+  );
+  it("rejects unresolved or different exact identity bindings and client-supplied scopes", async () => {
+    const p = groupPolicy();
+    p.verified_contact_groups![0]!.members[1]!.contact_id = "P1";
+    const x = await setupGroup(p);
+    try {
+      expect(
+        (
+          await x.get(
+            "/api/live/ai/input?contact_id=group:fictional&purpose=briefing",
+          )
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await x.get(
+            "/api/live/ai/input?contact_id=group:fictional&purpose=briefing&members=M1",
+          )
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await x.get(
+            "/api/live/ai/input?contact_id=Fictional%20Person&purpose=briefing",
+          )
+        ).status,
+      ).toBe(400);
     } finally {
       await x.close();
     }

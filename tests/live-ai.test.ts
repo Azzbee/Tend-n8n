@@ -241,3 +241,128 @@ describe("private sourced local AI review", () => {
     expect(result.items).toEqual([]);
   });
 });
+
+const group = {
+  id: "group:mira",
+  name: "Mira",
+  verified_at: "2026-10-14T10:00:00.000Z",
+  proof_kind: "owner_confirmed" as const,
+  proof_reference: "owner-confirmation:fictional-message",
+  members: [
+    {
+      contact_id: "F17",
+      source: "gmail" as const,
+      account_id: "owner@example.invalid",
+      identity: "mira@example.invalid",
+    },
+    {
+      contact_id: "M17",
+      source: "whatsapp_personal" as const,
+      account_id: "wa-one",
+      identity: "peer@lid",
+    },
+  ],
+};
+function prepareGroup(records: NormalizedRecord[]) {
+  return prepareLiveAI({
+    owner_id: "fictional-owner",
+    contact_id: group.id,
+    contact_group: group,
+    purpose: "draft",
+    records,
+  });
+}
+const waRecord = () =>
+  record({
+    source: "whatsapp_personal",
+    account_id: "wa-one",
+    contact_id: "M17",
+    contact_ids: ["M17"],
+    actor_identity: "peer@lid",
+    record_key: "c".repeat(64),
+    content_hash: "d".repeat(64),
+    evidence_reference: "tend-source:whatsapp_personal/wa-one/message",
+  });
+describe("verified cross-channel AI evidence", () => {
+  it("preserves original identities and reserves evidence for each available member source", () => {
+    const records = [
+      ...Array.from({ length: 10 }, (_, i) =>
+        record({ record_key: i.toString(16).padStart(64, "0") }),
+      ),
+      waRecord(),
+    ];
+    const prepared = prepareGroup(records);
+    expect(prepared.evidence).toHaveLength(6);
+    expect(prepared.evidence.map((e) => e.source)).toContain(
+      "whatsapp_personal",
+    );
+    expect(
+      prepared.evidence.find((e) => e.source === "whatsapp_personal"),
+    ).toMatchObject({
+      record_key: waRecord().record_key,
+      content_hash: waRecord().content_hash,
+    });
+    expect(
+      validateLiveAI(prepared, output(waRecord()), records, group),
+    ).toMatchObject({
+      status: "validated",
+      draft: { pending_review: true },
+      outbound_sent: false,
+    });
+  });
+  it("binds every exact source/account/contact/identity and current direct attribution", () => {
+    for (const patch of [
+      { account_id: "foreign" },
+      { contact_ids: ["other"] },
+      {
+        actor_identity: "other",
+        participant_identities: ["owner@example.invalid"],
+      },
+      { attribution: "unknown" as const },
+      { source: "whatsapp_business" as const },
+      { owner_id: "foreign" },
+    ])
+      expect(
+        prepareGroup([
+          waRecord(),
+          record({ record_key: "f".repeat(64) }),
+          { ...waRecord(), record_key: "e".repeat(64), ...patch },
+        ]).evidence,
+      ).not.toContainEqual(
+        expect.objectContaining({ record_key: "e".repeat(64) }),
+      );
+  });
+  it("withdraws all pending group evidence if proof, membership or policy is changed", () => {
+    const records = [record(), waRecord()];
+    const prepared = prepareGroup(records);
+    for (const current of [
+      undefined,
+      null,
+      { ...group, proof_reference: "owner-confirmation:changed" },
+      { ...group, members: group.members.slice(0, 1) },
+    ]) {
+      const result = validateLiveAI(
+        prepared,
+        output(waRecord()),
+        records,
+        current,
+      );
+      expect(result).toMatchObject({
+        status: "fallback",
+        items: [],
+        draft: null,
+        outbound_sent: false,
+      });
+    }
+    const result = validateLiveAI(
+      prepared,
+      output(waRecord()),
+      [record()],
+      group,
+    );
+    expect(result.status).toBe("fallback");
+    expect(result.items.every((e) => e.source !== "whatsapp_personal")).toBe(
+      true,
+    );
+  });
+});

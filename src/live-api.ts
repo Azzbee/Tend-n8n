@@ -14,6 +14,8 @@ import {
   gmailWindow,
   calendarWindow,
   validateLivePolicy,
+  parseLivePolicy,
+  type VerifiedContactGroup,
   type LivePolicy,
 } from "./live-policy.ts";
 import {
@@ -122,6 +124,44 @@ export function createLiveServer(options: LiveServerOptions): Server {
     string,
     { prepared: PreparedLiveAI; expires: number }
   >();
+  const resolveGroup = async (
+    id: string,
+  ): Promise<VerifiedContactGroup | undefined> => {
+    try {
+      const currentPolicy = parseLivePolicy(policy);
+      if (currentPolicy.principal_id !== owner) return undefined;
+      const group = currentPolicy.verified_contact_groups?.find(
+        (group) => group.id === id,
+      );
+      if (!group || Date.parse(group.verified_at) > clock().getTime())
+        return undefined;
+      const contacts = await store.contacts(owner),
+        states = await store.sourceStatus(owner);
+      for (const member of group.members) {
+        const contact = await store.resolveContact(owner, member.contact_id);
+        if (
+          contact.contact_id !== member.contact_id ||
+          contact.contact_id === "OWNER" ||
+          !contacts.some(
+            (current) =>
+              current.contact_id === member.contact_id &&
+              current.emails.includes(member.identity),
+          ) ||
+          !states.some(
+            (state) =>
+              state.source === member.source &&
+              state.account_id === member.account_id &&
+              state.mode === "live" &&
+              state.status !== "revoked",
+          )
+        )
+          return undefined;
+      }
+      return group;
+    } catch {
+      return undefined;
+    }
+  };
   return createServer(async (req, res) => {
     const respond = (status: number, data: unknown) => {
       res.writeHead(status, {
@@ -339,12 +379,20 @@ export function createLiveServer(options: LiveServerOptions): Server {
           url.searchParams.getAll("purpose").length !== 1
         )
           throw new Error("Explicit contact and purpose required");
-        const contact = await store.resolveContact(owner, contactId);
-        if (contact.contact_id !== contactId)
-          throw new Error("Use exact contact ID");
+        const group = contactId.startsWith("group:")
+          ? await resolveGroup(contactId)
+          : undefined;
+        if (contactId.startsWith("group:")) {
+          if (!group) throw new Error("Verified contact group unavailable");
+        } else {
+          const contact = await store.resolveContact(owner, contactId);
+          if (contact.contact_id !== contactId)
+            throw new Error("Use exact contact ID");
+        }
         const prepared = prepareLiveAI({
           owner_id: owner,
           contact_id: contactId,
+          ...(group ? { contact_group: group } : {}),
           purpose: purpose as "briefing" | "draft",
           records: (await store.interactions(owner)).sort((a, b) =>
             b.occurred_at.localeCompare(a.occurred_at),
@@ -466,6 +514,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
             entry.prepared,
             value.output,
             await store.interactions(owner),
+            entry.prepared.contact_group
+              ? await resolveGroup(entry.prepared.contact_id)
+              : undefined,
           ),
         );
         return;

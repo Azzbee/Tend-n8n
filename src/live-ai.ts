@@ -1,4 +1,6 @@
 import type { NormalizedRecord, Source } from "./engine.ts";
+import { createHash } from "node:crypto";
+import type { VerifiedContactGroup } from "./live-policy.ts";
 
 export type LiveAIPurpose = "briefing" | "draft";
 export interface LiveAICitation {
@@ -15,6 +17,7 @@ export interface PreparedLiveAI {
   owner_id: string;
   contact_id: string;
   purpose: LiveAIPurpose;
+  contact_group?: { group: VerifiedContactGroup; revision: string };
   evidence: (SelectedEvidence & { evidence_id: string })[];
   request: {
     model: "qwen3:0.6b";
@@ -46,14 +49,25 @@ function selected(
   record: NormalizedRecord,
   owner: string,
   contact: string,
+  group?: VerifiedContactGroup,
 ): SelectedEvidence | null {
+  const scoped = group
+    ? group.members.some(
+        (member) =>
+          member.contact_id === record.contact_ids?.[0] &&
+          member.source === record.source &&
+          member.account_id === record.account_id &&
+          (member.identity === record.actor_identity ||
+            record.participant_identities.includes(member.identity)),
+      )
+    : record.contact_ids?.[0] === contact;
   if (
     record.owner_id !== owner ||
     record.cancelled ||
     !["live", "snapshot"].includes(record.ingestion_mode) ||
     record.attribution !== "direct" ||
     record.contact_ids?.length !== 1 ||
-    record.contact_ids[0] !== contact ||
+    !scoped ||
     !/^[a-f0-9]{64}$/.test(record.record_key) ||
     !/^[a-f0-9]{64}$/.test(record.content_hash) ||
     !/^(?:https:\/\/|tend-source:)/.test(record.evidence_reference)
@@ -77,19 +91,36 @@ export function prepareLiveAI(input: {
   contact_id: string;
   purpose: LiveAIPurpose;
   records: readonly NormalizedRecord[];
+  contact_group?: VerifiedContactGroup;
 }): PreparedLiveAI {
   if (
     !input.owner_id ||
     !input.contact_id ||
     input.contact_id === "OWNER" ||
-    !["briefing", "draft"].includes(input.purpose)
+    !["briefing", "draft"].includes(input.purpose) ||
+    (input.contact_group !== undefined &&
+      input.contact_group.id !== input.contact_id)
   )
     throw new Error("Explicit owner, contact and supported purpose required");
   const evidence: (SelectedEvidence & { evidence_id: string })[] = [];
   const seen = new Set<string>();
-  for (const record of input.records) {
-    const item = selected(record, input.owner_id, input.contact_id);
-    if (!item || seen.has(item.record_key)) continue;
+  const records = input.contact_group
+    ? [...input.records].sort((a, b) =>
+        b.occurred_at.localeCompare(a.occurred_at),
+      )
+    : input.records;
+  const eligible = records
+    .map((record) =>
+      selected(record, input.owner_id, input.contact_id, input.contact_group),
+    )
+    .filter((item): item is SelectedEvidence => item !== null);
+  const reserved = input.contact_group
+    ? [...new Set(input.contact_group.members.map((member) => member.source))]
+        .map((source) => eligible.find((item) => item.source === source))
+        .filter((item): item is SelectedEvidence => item !== undefined)
+    : [];
+  for (const item of [...reserved, ...eligible]) {
+    if (seen.has(item.record_key)) continue;
     const candidate = [...evidence, item];
     if (bytes(JSON.stringify(candidate)) > MAX_INPUT_BYTES) continue;
     evidence.push({ ...item, evidence_id: `E${evidence.length + 1}` });
@@ -100,6 +131,14 @@ export function prepareLiveAI(input: {
     owner_id: input.owner_id,
     contact_id: input.contact_id,
     purpose: input.purpose,
+    ...(input.contact_group
+      ? {
+          contact_group: {
+            group: structuredClone(input.contact_group),
+            revision: groupRevision(input.contact_group),
+          },
+        }
+      : {}),
     evidence,
     request: {
       model: "qwen3:0.6b",
@@ -151,15 +190,32 @@ function result(
   };
 }
 
+function groupRevision(group: VerifiedContactGroup): string {
+  return createHash("sha256").update(JSON.stringify(group)).digest("hex");
+}
 /** Re-read current evidence before validation so deletion and edits fail closed. */
 export function validateLiveAI(
   prepared: PreparedLiveAI,
   output: unknown,
   currentRecords: readonly NormalizedRecord[],
+  currentGroup?: VerifiedContactGroup | null,
 ): LiveAIResult {
   const current = new Map<string, SelectedEvidence>();
-  for (const record of currentRecords) {
-    const item = selected(record, prepared.owner_id, prepared.contact_id);
+  const groupCurrent =
+    !prepared.contact_group ||
+    (currentGroup !== undefined &&
+      currentGroup !== null &&
+      currentGroup.id === prepared.contact_id &&
+      groupRevision(currentGroup) === prepared.contact_group.revision &&
+      groupRevision(prepared.contact_group.group) ===
+        prepared.contact_group.revision);
+  for (const record of groupCurrent ? currentRecords : []) {
+    const item = selected(
+      record,
+      prepared.owner_id,
+      prepared.contact_id,
+      prepared.contact_group?.group,
+    );
     if (item) current.set(item.record_key, item);
   }
   const usable = prepared.evidence.filter((item) => {

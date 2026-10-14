@@ -103,3 +103,152 @@ describe("private read-only live policy", () => {
     );
   });
 });
+
+const contactGroup = {
+  id: "group:fictional-person",
+  name: "Fictional Person",
+  verified_at: "2026-10-14T10:00:00.000Z",
+  proof_kind: "owner_confirmed",
+  proof_reference: "owner-confirmation:fictional-message-1",
+  members: [
+    {
+      contact_id: "E1",
+      source: "gmail",
+      account_id: exampleLivePolicy.account_email,
+      identity: "person@example.invalid",
+    },
+    {
+      contact_id: "M1",
+      source: "calendar",
+      account_id: "primary",
+      identity: "person@example.invalid",
+    },
+  ],
+};
+describe("verified contact group policy", () => {
+  it("keeps absent configuration absent and accepts exact protected groups", () => {
+    expect(parseLivePolicy(exampleLivePolicy)).not.toHaveProperty(
+      "verified_contact_groups",
+    );
+    expect(
+      parseLivePolicy({
+        ...exampleLivePolicy,
+        verified_contact_groups: [contactGroup],
+      }),
+    ).toMatchObject({ verified_contact_groups: [contactGroup] });
+  });
+  it("rejects names as proof, owners, unapproved accounts, overlapping groups and invalid scope", () => {
+    for (const group of [
+      { ...contactGroup, proof_kind: "name_match" },
+      { ...contactGroup, proof_kind: ["owner_confirmed"] },
+      {
+        ...contactGroup,
+        members: Array.from({ length: 6 }, (_, i) => ({
+          ...contactGroup.members[i % 2],
+          contact_id: "P" + i,
+          identity: "person" + i + "@example.invalid",
+        })),
+      },
+      { ...contactGroup, proof_reference: "Fictional Person" },
+      { ...contactGroup, verified_at: "not-a-date" },
+      { ...contactGroup, id: "E1" },
+      { ...contactGroup, extra: true },
+      { ...contactGroup, members: [contactGroup.members[0]] },
+      {
+        ...contactGroup,
+        members: [contactGroup.members[0], contactGroup.members[0]],
+      },
+      {
+        ...contactGroup,
+        members: contactGroup.members.map((m) => ({
+          ...m,
+          source: "gmail",
+          account_id: exampleLivePolicy.account_email,
+        })),
+      },
+      ...[
+        { contact_id: "OWNER" },
+        { identity: exampleLivePolicy.account_email },
+        { account_id: "foreign" },
+        { source: "whatsapp_business" },
+        { extra: true },
+      ].map((patch) => ({
+        ...contactGroup,
+        members: [
+          { ...contactGroup.members[0], ...patch },
+          contactGroup.members[1],
+        ],
+      })),
+    ])
+      expect(() =>
+        parseLivePolicy({
+          ...exampleLivePolicy,
+          verified_contact_groups: [group],
+        }),
+      ).toThrow();
+    expect(() =>
+      parseLivePolicy({
+        ...exampleLivePolicy,
+        verified_contact_groups: [
+          contactGroup,
+          { ...contactGroup, id: "group:other" },
+        ],
+      }),
+    ).toThrow();
+  });
+});
+
+it("binds social group members to approved accounts and rejects verified owner variants", () => {
+  const social = {
+    window_days: 30,
+    accounts: [
+      {
+        source: "whatsapp_personal",
+        provider: "unipile",
+        account_id: "wa-one",
+        owner_identity: "+15550000001",
+        owner_verified: true,
+        api_base_url: "https://api1.unipile.com:13111",
+      },
+    ],
+  };
+  const member = {
+    contact_id: "M1",
+    source: "whatsapp_personal",
+    account_id: "wa-one",
+    identity: "999999999@lid",
+  };
+  expect(
+    parseLivePolicy({
+      ...exampleLivePolicy,
+      social,
+      verified_contact_groups: [
+        {
+          ...contactGroup,
+          proof_kind: "provider_verified",
+          proof_reference: "tend-source:fictional-proof",
+          members: [contactGroup.members[0], member],
+        },
+      ],
+    }).verified_contact_groups,
+  ).toHaveLength(1);
+  for (const patch of [
+    { account_id: "foreign" },
+    { identity: "+15550000001" },
+    { identity: "15550000001@s.whatsapp.net" },
+    { source: "whatsapp_business" },
+    { identity: "Owner@Example.Invalid" },
+  ])
+    expect(() =>
+      parseLivePolicy({
+        ...exampleLivePolicy,
+        social,
+        verified_contact_groups: [
+          {
+            ...contactGroup,
+            members: [contactGroup.members[0], { ...member, ...patch }],
+          },
+        ],
+      }),
+    ).toThrow();
+});
