@@ -63,9 +63,7 @@ describe("manual private cited AI workflow", () => {
       workflow.nodes.filter((item) => item.type.endsWith("manualTrigger")),
     ).toHaveLength(1);
     expect(
-      workflow.nodes.some((item) =>
-        /schedule|telegram|webhook/i.test(item.type),
-      ),
+      workflow.nodes.some((item) => /schedule|webhook/i.test(item.type)),
     ).toBe(false);
     expect(
       node("Set explicit contact and review purpose").parameters,
@@ -74,6 +72,9 @@ describe("manual private cited AI workflow", () => {
         assignments: [
           { name: "contact_id", value: "CONFIGURE_CONTACT_ID" },
           { name: "purpose", value: "CONFIGURE_PURPOSE" },
+          { name: "deliver_to_owner", value: false },
+          { name: "owner_chat_id", value: "CONFIGURE_OWNER_CHAT_ID" },
+          { name: "owner_user_id", value: "CONFIGURE_OWNER_USER_ID" },
         ],
       },
       includeOtherFields: false,
@@ -139,6 +140,262 @@ describe("manual private cited AI workflow", () => {
     expect(
       workflow.nodes.some((item) => /sendMessage|sendEmail/.test(item.type)),
     ).toBe(false);
+  });
+  it("defaults delivery off and binds native transport only to trusted owner configuration", () => {
+    const assignments = node("Set explicit contact and review purpose")
+      .parameters.assignments as {
+      assignments: { name: string; value: unknown }[];
+    };
+    expect(assignments.assignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "deliver_to_owner", value: false }),
+        expect.objectContaining({
+          name: "owner_chat_id",
+          value: "CONFIGURE_OWNER_CHAT_ID",
+        }),
+        expect.objectContaining({
+          name: "owner_user_id",
+          value: "CONFIGURE_OWNER_USER_ID",
+        }),
+      ]),
+    );
+    const transport = node("Deliver validated review only to enrolled owner");
+    expect(
+      workflow.connections["Owner delivery explicitly enabled"]?.main?.[1]?.[0]
+        ?.node,
+    ).toBe("Return local review without delivery");
+    expect(
+      workflow.connections["Owner delivery explicitly enabled"]?.main?.[0]?.[0]
+        ?.node,
+    ).toBe("Prepare bounded validated owner review");
+    expect(
+      workflow.connections["Prepare bounded validated owner review"]
+        ?.main?.[0]?.[0]?.node,
+    ).toBe(transport.name);
+    expect(transport.retryOnFail).toBe(false);
+    expect(transport.continueOnFail).not.toBe(true);
+    expect(transport.credentials?.telegramApi?.id).toBe(
+      "CONFIGURE_OWNER_TELEGRAM_CREDENTIAL",
+    );
+    expect(transport.parameters.chatId).toBe(
+      "={{ $('Validate explicit private AI selection').first().json.owner_chat_id }}",
+    );
+    expect(
+      evaluate(
+        "Check explicit owner delivery",
+        { deliver_to_owner: true },
+        {
+          "Validate explicit private AI selection": { deliver_to_owner: false },
+        },
+      ),
+    ).toEqual([{ json: { deliver_to_owner: false } }]);
+  });
+  it.each(["validated", "fallback", "unavailable"])(
+    "retains the complete %s result as default local output",
+    (status) => {
+      const result = {
+        status,
+        purpose: "draft",
+        items: [],
+        draft: null,
+        outbound_sent: false,
+        warning: "Local review",
+      };
+      expect(
+        evaluate(
+          "Return local review without delivery",
+          { deliver_to_owner: false },
+          { "Return review only without delivery": result },
+        ),
+      ).toEqual([{ json: result }]);
+    },
+  );
+  it("rejects non-private, unconfigured or mismatched owner destinations before retrieval", () => {
+    const selection = {
+      contact_id: "F17",
+      purpose: "briefing",
+      deliver_to_owner: true,
+      owner_chat_id: "12345",
+      owner_user_id: "12345",
+    };
+    expect(
+      evaluate("Validate explicit private AI selection", selection),
+    ).toEqual([
+      expect.objectContaining({ json: expect.objectContaining(selection) }),
+    ]);
+    for (const patch of [
+      { owner_chat_id: "-12345" },
+      { owner_user_id: "12346" },
+      { owner_chat_id: "CONFIGURE_OWNER_CHAT_ID" },
+      { deliver_to_owner: "true" },
+    ]) {
+      expect(() =>
+        evaluate("Validate explicit private AI selection", {
+          ...selection,
+          ...patch,
+        }),
+      ).toThrow();
+    }
+  });
+  it("delivers escaped bounded cited review text and leaves drafts pending", () => {
+    const result = {
+      status: "validated",
+      purpose: "briefing",
+      outbound_sent: false,
+      draft: null,
+      warning: null,
+      items: [
+        {
+          record_key: "record",
+          content_hash: "hash",
+          source: "gmail",
+          evidence_reference: "tend-source:fictional",
+          quote: "<hello> & goodbye",
+        },
+      ],
+    };
+    const linked = {
+      "Validate explicit private AI selection": {
+        purpose: "briefing",
+        deliver_to_owner: true,
+        owner_chat_id: "12345",
+        owner_user_id: "12345",
+      },
+      "Return review only without delivery": result,
+    };
+    expect(
+      evaluate("Prepare bounded validated owner review", {}, linked),
+    ).toEqual([
+      {
+        json: { text: expect.stringContaining("&lt;hello&gt; &amp; goodbye") },
+      },
+    ]);
+    for (const patch of [
+      { status: "fallback" },
+      { status: "unavailable" },
+      { recipients: ["other"] },
+      { recipient: "other" },
+      { tools: [] },
+      { items: [] },
+      { purpose: "draft" },
+      { draft: { text: "bad", pending_review: false } },
+      { items: [{ ...result.items[0], quote: "&".repeat(3900) }] },
+      { items: [{ ...result.items[0], recipient: "other" }] },
+    ]) {
+      expect(() =>
+        evaluate(
+          "Prepare bounded validated owner review",
+          {},
+          {
+            ...linked,
+            "Return review only without delivery": { ...result, ...patch },
+          },
+        ),
+      ).toThrow();
+    }
+    const draft = {
+      ...result,
+      purpose: "draft",
+      draft: { text: "Draft <pending>", pending_review: true },
+    };
+    expect(
+      evaluate(
+        "Prepare bounded validated owner review",
+        {},
+        {
+          ...linked,
+          "Validate explicit private AI selection": {
+            ...linked["Validate explicit private AI selection"],
+            purpose: "draft",
+          },
+          "Return review only without delivery": draft,
+        },
+      ),
+    ).toEqual([
+      { json: { text: expect.stringContaining("Draft &lt;pending&gt;") } },
+    ]);
+  });
+  it("enforces the escaped UTF-16 limit exactly without truncating source text", () => {
+    const result = {
+      status: "validated",
+      purpose: "briefing",
+      outbound_sent: false,
+      draft: null,
+      warning: null,
+      items: [
+        {
+          record_key: "record",
+          content_hash: "hash",
+          source: "gmail",
+          evidence_reference: "tend-source:fictional",
+          quote: "x",
+        },
+      ],
+    };
+    const linked = {
+      "Validate explicit private AI selection": {
+        purpose: "briefing",
+        deliver_to_owner: true,
+        owner_chat_id: "12345",
+        owner_user_id: "12345",
+      },
+      "Return review only without delivery": result,
+    };
+    const initial = evaluate(
+      "Prepare bounded validated owner review",
+      {},
+      linked,
+    ) as { json: { text: string } }[];
+    const overhead = initial[0]!.json.text.length - 1;
+    result.items[0]!.quote = "x".repeat(3900 - overhead);
+    const boundary = evaluate(
+      "Prepare bounded validated owner review",
+      {},
+      linked,
+    ) as { json: { text: string } }[];
+    expect(boundary[0]!.json.text.length).toBe(3900);
+    expect(boundary[0]!.json.text).toContain(result.items[0]!.quote);
+    result.items[0]!.quote += "x";
+    expect(() =>
+      evaluate("Prepare bounded validated owner review", {}, linked),
+    ).toThrow(/limit/);
+    result.items[0]!.quote = "x".repeat(3900 - overhead - 1) + "😀";
+    expect(() =>
+      evaluate("Prepare bounded validated owner review", {}, linked),
+    ).toThrow(/limit/);
+  });
+  it("acknowledges only the configured private owner and never claims contact delivery", () => {
+    const linked = {
+      "Validate explicit private AI selection": { owner_chat_id: "12345" },
+      "Return review only without delivery": {
+        status: "validated",
+        outbound_sent: false,
+        draft: null,
+      },
+    };
+    expect(
+      evaluate(
+        "Verify owner delivery receipt",
+        { message_id: 42, chat: { id: 12345, type: "private" } },
+        linked,
+      ),
+    ).toEqual([
+      {
+        json: expect.objectContaining({
+          outbound_sent: false,
+          owner_delivery: { status: "sent", message_id: 42 },
+        }),
+      },
+    ]);
+    for (const response of [
+      { error: "timeout" },
+      { message_id: 42, chat: { id: 12346, type: "private" } },
+      { message_id: 42, chat: { id: 12345, type: "group" } },
+      { message_id: 0, chat: { id: 12345, type: "private" } },
+    ])
+      expect(() =>
+        evaluate("Verify owner delivery receipt", response, linked),
+      ).toThrow();
   });
   it("branches missing evidence away from the model", () => {
     expect(

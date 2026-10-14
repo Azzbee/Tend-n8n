@@ -1082,6 +1082,24 @@ const reviewSelection = node(
           value: "CONFIGURE_PURPOSE",
           type: "string",
         },
+        {
+          id: "deliver",
+          name: "deliver_to_owner",
+          value: false,
+          type: "boolean",
+        },
+        {
+          id: "owner-chat",
+          name: "owner_chat_id",
+          value: "CONFIGURE_OWNER_CHAT_ID",
+          type: "string",
+        },
+        {
+          id: "owner-user",
+          name: "owner_user_id",
+          value: "CONFIGURE_OWNER_USER_ID",
+          type: "string",
+        },
       ],
     },
     includeOtherFields: false,
@@ -1093,7 +1111,7 @@ const reviewSelection = node(
 );
 const reviewSelectionGuard = code(
   "Validate explicit private AI selection",
-  "const x=$input.first().json;if(typeof x.contact_id!=='string'||!x.contact_id.trim()||x.contact_id.length>128||x.contact_id==='OWNER'||x.contact_id.startsWith('CONFIGURE_')||!['briefing','draft'].includes(x.purpose))throw new Error('Configure an explicit contact ID and briefing or draft purpose before retrieval');return [{json:{contact_id:x.contact_id,purpose:x.purpose,started_at:Date.now()}}];",
+  "const x=$input.first().json;if(typeof x.contact_id!=='string'||!x.contact_id.trim()||x.contact_id.length>128||x.contact_id==='OWNER'||x.contact_id.startsWith('CONFIGURE_')||!['briefing','draft'].includes(x.purpose))throw new Error('Configure an explicit contact ID and briefing or draft purpose before retrieval');if(x.deliver_to_owner!==undefined&&typeof x.deliver_to_owner!=='boolean')throw new Error('Owner delivery must be an explicit boolean');const deliver=x.deliver_to_owner===true;if(deliver&&(typeof x.owner_chat_id!=='string'||! /^[1-9]\\d{0,15}$/.test(x.owner_chat_id)||x.owner_chat_id!==x.owner_user_id))throw new Error('Configure the same enrolled private owner user and chat');return [{json:{contact_id:x.contact_id,purpose:x.purpose,deliver_to_owner:deliver,owner_chat_id:x.owner_chat_id,owner_user_id:x.owner_user_id,started_at:Date.now()}}];",
   500,
 );
 const reviewInput = liveHttp(
@@ -1171,6 +1189,61 @@ const reviewResult = code(
   "const x=$input.first().json;if(x.outbound_sent!==false||!['validated','fallback','unavailable'].includes(x.status)||(x.draft!==null&&(!x.draft||x.draft.pending_review!==true))||Object.keys(x).some(k=>['recipients','actions','send','tools'].includes(k)))throw new Error('Private AI result must remain review only');return [{json:x}];",
   2250,
 );
+const reviewDeliveryCheck = code(
+  "Check explicit owner delivery",
+  "return [{json:{deliver_to_owner:$('Validate explicit private AI selection').first().json.deliver_to_owner===true}}];",
+  2500,
+);
+const reviewDeliveryBranch = condition(
+  "Owner delivery explicitly enabled",
+  "deliver_to_owner",
+  2750,
+);
+const reviewLocalResult = code(
+  "Return local review without delivery",
+  "return [{json:$('Return review only without delivery').first().json}];",
+  3000,
+);
+reviewLocalResult.position = [3000, 500];
+const reviewDeliveryFormat = code(
+  "Prepare bounded validated owner review",
+  String.raw`const c=$('Validate explicit private AI selection').first().json;const x=$('Return review only without delivery').first().json;const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).every(k=>keys.includes(k));if(c.deliver_to_owner!==true||typeof c.owner_chat_id!=='string'||!/^[1-9]\d{0,15}$/.test(c.owner_chat_id)||c.owner_chat_id!==c.owner_user_id||!exact(x,['status','purpose','items','draft','outbound_sent','warning'])||x.status!=='validated'||x.outbound_sent!==false||!['briefing','draft'].includes(x.purpose)||x.purpose!==c.purpose||!Array.isArray(x.items)||x.items.length<1||x.items.length>3||x.items.some(i=>!exact(i,['record_key','content_hash','quote','source','evidence_reference'])||['record_key','content_hash','quote','source','evidence_reference'].some(k=>typeof i[k]!=='string'||!i[k])||!['gmail','calendar','whatsapp_personal','whatsapp_business','linkedin'].includes(i.source))||(x.purpose==='briefing'?x.draft!==null:!exact(x.draft,['text','pending_review'])||x.draft.pending_review!==true||typeof x.draft.text!=='string'||!x.draft.text))throw new Error('Only validated pending review output may reach the enrolled owner');const text='Tend '+(x.purpose==='draft'?'draft. Pending your review.':'cited briefing.')+'\n\n'+x.items.map(i=>'['+i.source+'] '+i.quote+'\nSource: '+i.evidence_reference).join('\n\n')+(x.draft?'\n\n'+x.draft.text:'');const escaped=text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');if(escaped.length>3900)throw new Error('Owner review exceeds Telegram reply limit; use local review');return [{json:{text:escaped}}];`,
+  3000,
+);
+const reviewDelivery = {
+  ...node(
+    "Deliver validated review only to enrolled owner",
+    "telegram",
+    {
+      resource: "message",
+      operation: "sendMessage",
+      chatId:
+        "={{ $('Validate explicit private AI selection').first().json.owner_chat_id }}",
+      text: "={{ $json.text }}",
+      additionalFields: {
+        parse_mode: "HTML",
+        appendAttribution: false,
+        disable_web_page_preview: true,
+        disable_notification: true,
+      },
+    },
+    3250,
+    0,
+    1.2,
+  ),
+  retryOnFail: false,
+  credentials: {
+    telegramApi: {
+      id: "CONFIGURE_OWNER_TELEGRAM_CREDENTIAL",
+      name: "Configure existing enrolled owner Telegram credential",
+    },
+  },
+};
+const reviewDeliveryReceipt = code(
+  "Verify owner delivery receipt",
+  "const x=$input.first().json;const c=$('Validate explicit private AI selection').first().json;if(!Number.isSafeInteger(x.message_id)||x.message_id<=0||!x.chat||x.chat.type!=='private'||String(x.chat.id)!==c.owner_chat_id)throw new Error('Owner transport acknowledgement unavailable or mismatched; inspect delivery before any manual retry');return [{json:{...$('Return review only without delivery').first().json,owner_delivery:{status:'sent',message_id:x.message_id}}}];",
+  3500,
+);
 liveReviewAI.nodes.push(
   reviewStart,
   reviewSelection,
@@ -1184,6 +1257,12 @@ liveReviewAI.nodes.push(
   reviewValidate,
   reviewUnavailable,
   reviewResult,
+  reviewDeliveryCheck,
+  reviewDeliveryBranch,
+  reviewLocalResult,
+  reviewDeliveryFormat,
+  reviewDelivery,
+  reviewDeliveryReceipt,
 );
 connect(liveReviewAI, reviewStart.name, reviewSelection.name);
 connect(liveReviewAI, reviewSelection.name, reviewSelectionGuard.name);
@@ -1196,6 +1275,12 @@ connect(liveReviewAI, reviewChain.name, reviewOutput.name);
 connect(liveReviewAI, reviewOutput.name, reviewValidate.name);
 connect(liveReviewAI, reviewValidate.name, reviewResult.name);
 connect(liveReviewAI, reviewUnavailable.name, reviewResult.name);
+connect(liveReviewAI, reviewResult.name, reviewDeliveryCheck.name);
+connect(liveReviewAI, reviewDeliveryCheck.name, reviewDeliveryBranch.name);
+connect(liveReviewAI, reviewDeliveryBranch.name, reviewDeliveryFormat.name);
+connect(liveReviewAI, reviewDeliveryBranch.name, reviewLocalResult.name, 1);
+connect(liveReviewAI, reviewDeliveryFormat.name, reviewDelivery.name);
+connect(liveReviewAI, reviewDelivery.name, reviewDeliveryReceipt.name);
 liveReviewAI.connections[reviewModel.name] = {
   ai_languageModel: [
     [{ node: reviewChain.name, type: "ai_languageModel", index: 0 }],
