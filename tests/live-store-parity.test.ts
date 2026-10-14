@@ -132,7 +132,8 @@ describe("canonical PostgreSQL live parity", () => {
       action: "send the report",
       suggested_due: "2026-10-15",
     };
-    expect(await pg.addCandidate(record, candidate)).toEqual(
+    const persisted = (await pg.interactions(principal.owner_id))[0]!;
+    expect(await pg.addCandidate(persisted, candidate)).toEqual(
       sqlite.addCandidate(record, candidate),
     );
     const id = (await pg.commitments(principal.owner_id))[0]!.commitment_id;

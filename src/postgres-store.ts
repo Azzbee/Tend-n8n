@@ -293,6 +293,11 @@ export class PostgresStore implements LiveStore {
   }
   private record(row: QueryResultRow): NormalizedRecord {
     const out = { ...row };
+    if (Array.isArray(row.authored_spans)) {
+      out.authored_spans = (
+        row.authored_spans as NonNullable<NormalizedRecord["authored_spans"]>
+      ).map(({ start, end, text }) => ({ start, end, text }));
+    }
     if (out.contact_id === null) out.contact_id = "";
     if (out.end_at === null) delete out.end_at;
     if (out.all_day === null) delete out.all_day;
@@ -518,14 +523,36 @@ export class PostgresStore implements LiveStore {
     account: string,
     start: string,
     end: string,
+    resumeCursor?: string,
   ): Promise<SourceState> {
     this.owner(owner);
     return this.run(async (s) => {
       const state = await s.state(owner, source, account);
-      if (state.status !== "current") return state;
+      if (resumeCursor !== undefined) {
+        if (
+          source !== "linkedin" ||
+          resumeCursor.length > 8192 ||
+          !/^li-change:(0|[1-9]\d*)$/.test(resumeCursor) ||
+          !Number.isSafeInteger(Number(resumeCursor.slice(10)))
+        )
+          throw new Error("invalid changelog resume cursor");
+        if (state.status === "revoked" || state.mode !== "live")
+          throw new Error("source revoked or unavailable");
+        if (state.cursor?.startsWith("li-change:")) {
+          if (state.cursor !== resumeCursor)
+            throw new Error("stale changelog resume cursor");
+        } else if (state.cursor !== null || state.status !== "current")
+          throw new Error("completed snapshot required before changes");
+        if (
+          !exactTimestamp(start) ||
+          !exactTimestamp(end) ||
+          Date.parse(start) >= Date.parse(end)
+        )
+          throw new Error("invalid changelog window");
+      } else if (state.status !== "current") return state;
       const next = {
         ...state,
-        cursor: null,
+        cursor: resumeCursor ?? null,
         status: "partial",
         coverage_start: start,
         coverage_end: end,
