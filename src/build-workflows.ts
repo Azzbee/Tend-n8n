@@ -1125,7 +1125,26 @@ reviewModel.id = "local-review-ollama-chat-model";
 reviewModel.position = [1500, 260];
 reviewModel.parameters.options = {
   temperature: 0,
-  format: "json",
+  format: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        maxItems: 3,
+        items: {
+          type: "object",
+          properties: {
+            evidence_id: { type: "string", pattern: "^E[1-6]$" },
+            quote: { type: "string", minLength: 1 },
+          },
+          required: ["evidence_id", "quote"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["items"],
+    additionalProperties: false,
+  },
   think: false,
   numCtx: 8192,
   numPredict: 1024,

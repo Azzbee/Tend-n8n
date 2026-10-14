@@ -184,10 +184,39 @@ describe("manual private cited AI workflow", () => {
       model: "qwen3:0.6b",
       options: {
         temperature: 0,
-        format: "json",
+        format: {
+          type: "object",
+          required: ["items"],
+          additionalProperties: false,
+          properties: {
+            items: {
+              type: "array",
+              maxItems: 3,
+              items: {
+                type: "object",
+                required: ["evidence_id", "quote"],
+                additionalProperties: false,
+                properties: {
+                  evidence_id: { type: "string", pattern: "^E[1-6]$" },
+                  quote: { type: "string", minLength: 1 },
+                },
+              },
+            },
+          },
+        },
         numCtx: 8192,
         numPredict: 1024,
       },
+    });
+    const options = node("Local review Ollama Chat Model").parameters
+      .options as {
+      format: {
+        properties: { items: { items: { properties: { quote: object } } } };
+      };
+    };
+    expect(options.format.properties.items.items.properties.quote).toEqual({
+      type: "string",
+      minLength: 1,
     });
     expect(
       workflow.connections["Local review Ollama Chat Model"]
