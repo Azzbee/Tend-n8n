@@ -594,6 +594,59 @@ describe("read-only Google workflow contracts", () => {
       ]),
     );
   });
+  it("paces full Gmail reads to two launches per second within the existing run and acknowledgement budget", () => {
+    const workflow = load(files[0]!);
+    const request = workflow.nodes.find(
+      (n) => n.name === "Read Gmail full messages",
+    )!;
+    const preflight = workflow.nodes.find(
+      (n) => n.name === "Choose message details or empty page",
+    )!;
+    const options = request.parameters.options as {
+      timeout: number;
+      batching: { batch: { batchSize: number; batchInterval: number } };
+    };
+    const { batchSize, batchInterval } = options.batching.batch;
+    expect(Number.isSafeInteger(batchSize) && batchSize > 0).toBe(true);
+    expect(Number.isSafeInteger(batchInterval) && batchInterval > 0).toBe(true);
+    const launches = Array.from(
+      { length: 20 },
+      (_, i) => Math.floor(i / batchSize) * batchInterval,
+    );
+    for (const start of launches) {
+      expect(
+        launches.filter((time) => time >= start && time < start + 1000).length,
+      ).toBeLessThanOrEqual(2);
+    }
+    expect(options.timeout).toBe(5000);
+    const required = launches.at(-1)! + options.timeout + 5000;
+    expect(required).toBeLessThanOrEqual(60000);
+    const allowed = (remaining: number) =>
+      vm.runInNewContext(
+        `(function(){${String(preflight.parameters.jsCode)}})()`,
+        {
+          $input: {
+            first: () => ({
+              json: {
+                message_refs: Array.from({ length: 20 }, (_, i) => ({
+                  id: `fictional-${i}`,
+                })),
+                deadline_at: remaining,
+              },
+            }),
+          },
+          Date: { now: () => 0 },
+        },
+      ) as { json: { details_allowed: boolean; status_code: number } }[];
+    expect(allowed(required)[0]!.json.details_allowed).toBe(true);
+    expect(allowed(required - 1)[0]!.json).toEqual(
+      expect.objectContaining({
+        details_allowed: false,
+        status_code: 599,
+      }),
+    );
+    expect(allowed(60000)[0]!.json.details_allowed).toBe(true);
+  });
   it("defers a detail batch whose worst-case duration exceeds the run budget", () => {
     const n = load(files[0]!).nodes.find(
       (n) => n.name === "Choose message details or empty page",

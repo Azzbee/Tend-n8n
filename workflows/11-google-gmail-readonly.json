@@ -448,7 +448,7 @@
       "typeVersion": 2,
       "position": [3500, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json;const details_allowed=Date.now()+Math.ceil(x.message_refs.length/4)*5250+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];"
+        "jsCode": "const x=$input.first().json;const launch_delay_ms=Math.max(0,Math.ceil(x.message_refs.length/1)-1)*500;const details_allowed=Date.now()+launch_delay_ms+5000+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];"
       }
     },
     {
@@ -517,7 +517,7 @@
         "jsonQuery": "={{ JSON.stringify({format:\"full\"}) }}",
         "options": {
           "timeout": 5000,
-          "batching": { "batch": { "batchSize": 4, "batchInterval": 250 } },
+          "batching": { "batch": { "batchSize": 1, "batchInterval": 500 } },
           "response": {
             "response": {
               "fullResponse": true,

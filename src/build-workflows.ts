@@ -787,9 +787,10 @@ const gList = addReadStage(
   "={{ JSON.stringify({q:'after:'+Math.floor(Date.parse($json.window_start)/1000)+' before:'+Math.ceil(Date.parse($json.window_end)/1000)+' -in:spam -in:trash -is:draft',includeSpamTrash:false,maxResults:$json.page_size,...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
 );
 connect(liveGmail, gProfile.success, gList.start);
+const gmailDetailBatch = { batchSize: 1, batchInterval: 500 };
 const refEmpty = code(
   "Choose message details or empty page",
-  "const x=$input.first().json;const details_allowed=Date.now()+Math.ceil(x.message_refs.length/4)*5250+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];",
+  `const x=$input.first().json;const launch_delay_ms=Math.max(0,Math.ceil(x.message_refs.length/${gmailDetailBatch.batchSize})-1)*${gmailDetailBatch.batchInterval};const details_allowed=Date.now()+launch_delay_ms+5000+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];`,
   3500,
 );
 const refBranch = condition("Message references empty", "empty", 3650);
@@ -823,7 +824,7 @@ const details: Node = {
       jsonQuery: '={{ JSON.stringify({format:"full"}) }}',
       options: {
         timeout: 5000,
-        batching: { batch: { batchSize: 4, batchInterval: 250 } },
+        batching: { batch: gmailDetailBatch },
         response: {
           response: {
             fullResponse: true,
