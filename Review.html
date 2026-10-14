@@ -169,9 +169,11 @@
       evidence. Native AI execution also passed briefing and draft checks on a
       private real-data review copy. Personal WhatsApp, Business WhatsApp and
       LinkedIn provider setup and genuine synchronization proofs remain pending.
-      PostgreSQL is implemented and tested; the production migration is held for
-      verification and review. Teacher scope approval remains pending. Public
-      examples stay fictional.
+      Canonical PostgreSQL migration passed exact parity, replay and restart
+      checks. The production native AI briefing and draft each validated one
+      current citation, with the draft pending review. Existing imports resumed
+      and a fresh owner Telegram status reply succeeded. Teacher scope approval
+      remains pending. Public examples stay fictional.
     </div>
     <p>
       Published review:
@@ -312,8 +314,11 @@
       <p class="small">
         Editable diagram source:
         <a href="Architecture.mmd">Architecture.mmd</a>. PostgreSQL migration
-        design: <a href="schema/001-tend.sql">001-tend.sql</a>. The current
-        fixture flow persists in SQLite, not Postgres.
+        initial design: <a href="schema/001-tend.sql">001-tend.sql</a>. The
+        private operational store uses
+        <a href="schema/002-live-runtime.sql">002-live-runtime.sql</a> and
+        <a href="schema/003-social-inbox.sql">003-social-inbox.sql</a>. The
+        fictional flow shown here persists in SQLite.
       </p>
     </section>
     <section class="card">
@@ -460,8 +465,16 @@ bun run schema:check</pre>
     <section class="card">
       <h2>Files to inspect line by line</h2>
       <p>
-        These files touch authorization, stored data or simulated actions. They
-        contain fictional source data and generic credential references. No
+        These files touch authorization, stored data or actions. Also review
+        <code>src/postgres-store.ts</code>,
+        <code>src/migrate-live-store.ts</code>,
+        <code>src/social-policy.ts</code>,
+        <code>src/social-read-session.ts</code>,
+        <code>src/social-provider-reads.ts</code>,
+        <code>src/social-api.ts</code>, <code>src/social-sync.ts</code>,
+        <code>src/social-inbox.ts</code>, <code>src/messaging-records.ts</code>,
+        <code>src/authored-promises.ts</code> and <code>src/live-ai.ts</code>.
+        They contain fictional source data and generic credential references. No
         payment code or action on a real contact is present.
       </p>
       <p>
@@ -512,7 +525,7 @@ bun run schema:check</pre>
           <td><a href="src/build-workflows.ts">src/build-workflows.ts</a></td>
           <td>
             Generates the scope/owner/model guards and local HTTP calls in all
-            ten exports.
+            eighteen exports.
           </td>
         </tr>
         <tr>
@@ -530,8 +543,9 @@ bun run schema:check</pre>
         <tr>
           <td><a href="schema/001-tend.sql">schema/001-tend.sql</a></td>
           <td>
-            Proposed PostgreSQL ownership, relationships, uniqueness and state
-            constraints. Current application storage is SQLite.
+            Initial PostgreSQL design. The operational private store uses
+            schema/002-live-runtime.sql and schema/003-social-inbox.sql;
+            fictional fixtures remain in SQLite.
           </td>
         </tr>
         <tr>
