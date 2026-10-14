@@ -532,6 +532,22 @@ describe("private live API", () => {
       expect(store.contacts(policy.principal_id)).toHaveLength(1);
       // A resumed page preserves its original clock/window instead of drifting.
       instant = new Date("2026-10-14T12:01:00Z");
+      expect((await request("/api/live/sync", batch)).status).toBe(200);
+      expect(store.counts(policy.principal_id)).toEqual({
+        interactions: 1,
+        commitments: 1,
+      });
+      expect(store.contacts(policy.principal_id)).toHaveLength(1);
+      expect(store.interactions(policy.principal_id)[0]).toMatchObject({
+        record_key: record.record_key,
+        content_hash: record.content_hash,
+        observed_at: instant.toISOString(),
+      });
+      expect(store.commitments(policy.principal_id)[0]).toMatchObject({
+        status: "pending",
+        evidence_valid: true,
+        quote: record.authored_spans![0]!.text,
+      });
       const resumed = (await (
         await request("/api/live/sync-state?source=gmail")
       ).json()) as Record<string, unknown>;

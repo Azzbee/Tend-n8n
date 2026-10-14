@@ -18,7 +18,37 @@
       "typeVersion": 2,
       "position": [250, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');const serialize=(context,record)=>JSON.stringify({source:context.source,account_email:context.account_email,profile_account_email:context.profile_account_email,...(context.calendar_id?{calendar_id:context.calendar_id}:{}),records:[record],previous_cursor:context.cursor,cursor:context.cursor,complete:false,reconcile:false,window_start:context.window_start,window_end:context.window_end,seen_record_ids:[record.id]});if(typeof x.storage_body!=='string'||Buffer.byteLength(x.storage_body,'utf8')>c.budget.max_body_bytes||x.storage_body!==serialize(c,x.record))throw new Error('invalid approved storage body');return [{json:x}];"
+        "jsCode": "const x=$input.first().json;const c=x.context;const attempts=c?.budget?.max_attempts;if(!Number.isSafeInteger(attempts)||attempts<1||attempts>5)throw new Error('invalid storage attempt budget');const storage_retry_allowed=attempts>1;const reserve=storage_retry_allowed?11000:5000;if(c&&Date.now()+reserve>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');const serialize=(context,record)=>JSON.stringify({source:context.source,account_email:context.account_email,profile_account_email:context.profile_account_email,...(context.calendar_id?{calendar_id:context.calendar_id}:{}),records:[record],previous_cursor:context.cursor,cursor:context.cursor,complete:false,reconcile:false,window_start:context.window_start,window_end:context.window_end,seen_record_ids:[record.id]});if(typeof x.storage_body!=='string'||Buffer.byteLength(x.storage_body,'utf8')>c.budget.max_body_bytes||x.storage_body!==serialize(c,x.record))throw new Error('invalid approved storage body');return [{json:{...x,storage_retry_allowed}}];"
+      }
+    },
+    {
+      "id": "storage-retry-allowed-by-approved-budget",
+      "name": "Storage retry allowed by approved budget",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [400, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.storage_retry_allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       }
     },
     {
@@ -27,6 +57,35 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [500, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/sync",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.storage_body }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "normalize-and-commit-approved-record-once",
+      "name": "Normalize and commit approved record once",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 220],
       "parameters": {
         "url": "http://host.docker.internal:18768/api/live/sync",
         "method": "POST",
@@ -71,7 +130,25 @@
       "main": [
         [
           {
+            "node": "Storage retry allowed by approved budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Storage retry allowed by approved budget": {
+      "main": [
+        [
+          {
             "node": "Normalize and commit approved record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize and commit approved record once",
             "type": "main",
             "index": 0
           }
@@ -79,6 +156,17 @@
       ]
     },
     "Normalize and commit approved record": {
+      "main": [
+        [
+          {
+            "node": "Return committed page context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize and commit approved record once": {
       "main": [
         [
           {

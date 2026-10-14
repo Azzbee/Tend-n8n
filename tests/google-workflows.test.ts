@@ -7,6 +7,8 @@ interface Node {
   parameters: Record<string, unknown>;
   credentials?: Record<string, { id: string; name: string }>;
   retryOnFail?: boolean;
+  maxTries?: number;
+  waitBetweenTries?: number;
 }
 interface Workflow {
   active: boolean;
@@ -352,7 +354,7 @@ describe("read-only Google workflow contracts", () => {
         window_end: "2026-10-14T12:00:00.000Z",
         deadline_at: Date.now() + 60000,
         page_size: 20,
-        budget: { max_body_bytes: limit },
+        budget: { max_body_bytes: limit, max_attempts: 3 },
       };
       const envelope = (record: { id: string; payload?: string }) => ({
         source,
@@ -465,7 +467,7 @@ describe("read-only Google workflow contracts", () => {
         window_end: "2026-10-14T12:00:00.000Z",
         deadline_at: Date.now() + 60000,
         page_size: 20,
-        budget: { max_body_bytes: 262144 },
+        budget: { max_body_bytes: 262144, max_attempts: 3 },
         message_refs: records.map(({ id }) => ({ id })),
         provider_records: records,
       };
@@ -594,6 +596,104 @@ describe("read-only Google workflow contracts", () => {
       ]),
     );
   });
+  it("retries only local record storage within the approved attempt and deadline budgets", () => {
+    const child = load(files[2]!);
+    const retry = child.nodes.find(
+      (n) => n.name === "Normalize and commit approved record",
+    )!;
+    const once = child.nodes.find(
+      (n) => n.name === "Normalize and commit approved record once",
+    )!;
+    expect(retry.retryOnFail).toBe(true);
+    expect(retry.maxTries).toBe(2);
+    expect(retry.waitBetweenTries).toBe(1000);
+    expect(once.retryOnFail).toBe(false);
+    const timeout = (retry.parameters.options as { timeout: number }).timeout;
+    expect(timeout).toBe(5000);
+    expect((once.parameters.options as { timeout: number }).timeout).toBe(
+      timeout,
+    );
+    const check = child.nodes.find(
+      (n) => n.name === "Validate approved raw input",
+    )!;
+    const fan = load(files[0]!).nodes.find(
+      (n) => n.name === "Prepare bounded provider records",
+    )!;
+    for (const max_attempts of [1, 2, 3, 5]) {
+      const attempts = Math.min(max_attempts, retry.maxTries!);
+      const reserve =
+        timeout * attempts + retry.waitBetweenTries! * (attempts - 1);
+      const context = {
+        source: "gmail",
+        account_email: "owner@example.invalid",
+        profile_account_email: "owner@example.invalid",
+        cursor: null,
+        window_start: "2026-09-14T12:00:00Z",
+        window_end: "2026-10-14T12:00:00Z",
+        deadline_at: reserve,
+        page_size: 1,
+        budget: { max_attempts, max_body_bytes: 262144 },
+        provider_records: [{ id: "fictional-record" }],
+      };
+      const [item] = evaluate(String(fan.parameters.jsCode), context) as {
+        json: Record<string, unknown>;
+      }[];
+      const run = (
+        deadline_at: number,
+        budget: Record<string, unknown> = context.budget,
+      ) =>
+        vm.runInNewContext(
+          `(function(){${String(check.parameters.jsCode)}})()`,
+          {
+            $input: {
+              first: () => ({
+                json: {
+                  ...item!.json,
+                  context: { ...context, deadline_at, budget },
+                },
+              }),
+            },
+            Date: { now: () => 0 },
+            Buffer,
+          },
+        ) as { json: { storage_retry_allowed: boolean } }[];
+      expect(run(reserve)[0]!.json.storage_retry_allowed).toBe(
+        max_attempts > 1,
+      );
+      expect(() => run(reserve - 1)).toThrow("storage budget exhausted");
+      for (const budget of [
+        {},
+        { max_attempts: 0 },
+        { max_attempts: 6 },
+        { max_attempts: 1.5 },
+      ]) {
+        expect(() => run(reserve, budget)).toThrow(
+          "invalid storage attempt budget",
+        );
+      }
+    }
+    const connections = child.connections as Record<
+      string,
+      { main: { node: string }[][] }
+    >;
+    const branch =
+      connections["Storage retry allowed by approved budget"]!.main;
+    expect(branch[0]!.map((x) => x.node)).toEqual([retry.name]);
+    expect(branch[1]!.map((x) => x.node)).toEqual([once.name]);
+    for (const node of [retry, once])
+      expect(connections[node.name]!.main[0]!.map((x) => x.node)).toEqual([
+        "Return committed page context",
+      ]);
+    for (const file of files) {
+      for (const node of load(file).nodes) {
+        if (
+          (file !== files[2] || node.name !== retry.name) &&
+          node.name !== "Record Telegram send acknowledgement"
+        )
+          expect(node.retryOnFail).not.toBe(true);
+      }
+    }
+  });
   it("paces full Gmail reads to two launches per second within the existing run and acknowledgement budget", () => {
     const workflow = load(files[0]!);
     const request = workflow.nodes.find(
@@ -619,9 +719,12 @@ describe("read-only Google workflow contracts", () => {
       ).toBeLessThanOrEqual(2);
     }
     expect(options.timeout).toBe(5000);
-    const required = launches.at(-1)! + options.timeout + 5000;
-    expect(required).toBeLessThanOrEqual(60000);
-    const allowed = (remaining: number) =>
+    const storage = load(files[2]!).nodes.find(
+      (n) => n.name === "Normalize and commit approved record",
+    )!;
+    const storageTimeout = (storage.parameters.options as { timeout: number })
+      .timeout;
+    const allowed = (remaining: number, max_attempts: number) =>
       vm.runInNewContext(
         `(function(){${String(preflight.parameters.jsCode)}})()`,
         {
@@ -632,20 +735,30 @@ describe("read-only Google workflow contracts", () => {
                   id: `fictional-${i}`,
                 })),
                 deadline_at: remaining,
+                budget: { max_attempts },
               },
             }),
           },
           Date: { now: () => 0 },
         },
       ) as { json: { details_allowed: boolean; status_code: number } }[];
-    expect(allowed(required)[0]!.json.details_allowed).toBe(true);
-    expect(allowed(required - 1)[0]!.json).toEqual(
-      expect.objectContaining({
-        details_allowed: false,
-        status_code: 599,
-      }),
-    );
-    expect(allowed(60000)[0]!.json.details_allowed).toBe(true);
+    for (const max_attempts of [1, 2, 3, 5]) {
+      const attempts = Math.min(max_attempts, storage.maxTries!);
+      const reserve =
+        storageTimeout * attempts + storage.waitBetweenTries! * (attempts - 1);
+      const required = launches.at(-1)! + options.timeout + reserve;
+      expect(required).toBeLessThanOrEqual(60000);
+      expect(allowed(required, max_attempts)[0]!.json.details_allowed).toBe(
+        true,
+      );
+      expect(allowed(required - 1, max_attempts)[0]!.json).toEqual(
+        expect.objectContaining({
+          details_allowed: false,
+          status_code: 599,
+        }),
+      );
+      expect(allowed(60000, max_attempts)[0]!.json.details_allowed).toBe(true);
+    }
   });
   it("defers a detail batch whose worst-case duration exceeds the run budget", () => {
     const n = load(files[0]!).nodes.find(
@@ -654,6 +767,7 @@ describe("read-only Google workflow contracts", () => {
     const result = evaluate(String(n.parameters.jsCode), {
       message_refs: Array.from({ length: 20 }, (_, i) => ({ id: `m${i}` })),
       deadline_at: Date.now() + 10000,
+      budget: { max_attempts: 3 },
     });
     expect(result).toEqual(
       expect.arrayContaining([

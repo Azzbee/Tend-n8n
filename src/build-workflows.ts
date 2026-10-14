@@ -682,6 +682,12 @@ function addSyncStart(w: Workflow, source: "gmail" | "calendar"): string {
 }
 const profileAccept = `if(!body||typeof body.emailAddress!=='string')throw new Error('profile shape');const email=body.emailAddress.toLowerCase();out=email===ctx.account_email?{...out,ok:true,profile_account_email:email,retry_allowed:false,reconnect_required:false}:{...out,status_code:403,profile_account_email:null,reconnect_required:true,retry_allowed:false,failure_kind:'account-mismatch'};`;
 const approvedRecordBodyCode = `(context,record)=>JSON.stringify({source:context.source,account_email:context.account_email,profile_account_email:context.profile_account_email,...(context.calendar_id?{calendar_id:context.calendar_id}:{}),records:[record],previous_cursor:context.cursor,cursor:context.cursor,complete:false,reconcile:false,window_start:context.window_start,window_end:context.window_end,seen_record_ids:[record.id]})`;
+const storageTimeoutMs = 5000;
+const storageMaxTries = 2;
+const storageRetryDelayMs = 1000;
+const storageRetryReserveMs =
+  storageTimeoutMs * storageMaxTries +
+  storageRetryDelayMs * (storageMaxTries - 1);
 const normalizeLive = privateWorkflow(
   "TendGoogle13",
   "Tend 13: Approved Google normalize and store",
@@ -696,7 +702,7 @@ const normalizeTrigger = node(
 );
 const normalizeCheck = code(
   "Validate approved raw input",
-  `const x=$input.first().json;const c=x.context;if(c&&Date.now()+5000>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');const serialize=${approvedRecordBodyCode};if(typeof x.storage_body!=='string'||Buffer.byteLength(x.storage_body,'utf8')>c.budget.max_body_bytes||x.storage_body!==serialize(c,x.record))throw new Error('invalid approved storage body');return [{json:x}];`,
+  `const x=$input.first().json;const c=x.context;const attempts=c?.budget?.max_attempts;if(!Number.isSafeInteger(attempts)||attempts<1||attempts>5)throw new Error('invalid storage attempt budget');const storage_retry_allowed=attempts>1;const reserve=storage_retry_allowed?${storageRetryReserveMs}:${storageTimeoutMs};if(c&&Date.now()+reserve>c.deadline_at)throw new Error('storage budget exhausted; checkpoint unchanged');if(!c||!['gmail','calendar'].includes(c.source)||c.account_email!==c.profile_account_email||!x.record||typeof x.record.id!=='string'||!x.record.id||!(c.cursor===null||typeof c.cursor==='string'))throw new Error('invalid approved provider envelope');const serialize=${approvedRecordBodyCode};if(typeof x.storage_body!=='string'||Buffer.byteLength(x.storage_body,'utf8')>c.budget.max_body_bytes||x.storage_body!==serialize(c,x.record))throw new Error('invalid approved storage body');return [{json:{...x,storage_retry_allowed}}];`,
   250,
 );
 const normalizeCall = liveHttp(
@@ -704,6 +710,23 @@ const normalizeCall = liveHttp(
   "/api/live/sync",
   500,
   "={{ $json.storage_body }}",
+);
+normalizeCall.parameters.options = { timeout: storageTimeoutMs };
+normalizeCall.retryOnFail = true;
+normalizeCall.maxTries = storageMaxTries;
+normalizeCall.waitBetweenTries = storageRetryDelayMs;
+const normalizeOnce = liveHttp(
+  "Normalize and commit approved record once",
+  "/api/live/sync",
+  500,
+  "={{ $json.storage_body }}",
+);
+normalizeOnce.parameters.options = { timeout: storageTimeoutMs };
+normalizeOnce.position[1] = 220;
+const normalizeRetry = condition(
+  "Storage retry allowed by approved budget",
+  "storage_retry_allowed",
+  400,
 );
 const normalizedReceipt = code(
   "Return committed page context",
@@ -713,12 +736,17 @@ const normalizedReceipt = code(
 normalizeLive.nodes.push(
   normalizeTrigger,
   normalizeCheck,
+  normalizeRetry,
   normalizeCall,
+  normalizeOnce,
   normalizedReceipt,
 );
 connect(normalizeLive, normalizeTrigger.name, normalizeCheck.name);
-connect(normalizeLive, normalizeCheck.name, normalizeCall.name);
+connect(normalizeLive, normalizeCheck.name, normalizeRetry.name);
+connect(normalizeLive, normalizeRetry.name, normalizeCall.name);
+connect(normalizeLive, normalizeRetry.name, normalizeOnce.name, 1);
 connect(normalizeLive, normalizeCall.name, normalizedReceipt.name);
+connect(normalizeLive, normalizeOnce.name, normalizedReceipt.name);
 function addCommitPage(
   w: Workflow,
   from: string,
@@ -790,7 +818,7 @@ connect(liveGmail, gProfile.success, gList.start);
 const gmailDetailBatch = { batchSize: 1, batchInterval: 500 };
 const refEmpty = code(
   "Choose message details or empty page",
-  `const x=$input.first().json;const launch_delay_ms=Math.max(0,Math.ceil(x.message_refs.length/${gmailDetailBatch.batchSize})-1)*${gmailDetailBatch.batchInterval};const details_allowed=Date.now()+launch_delay_ms+5000+5000<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];`,
+  `const x=$input.first().json;const launch_delay_ms=Math.max(0,Math.ceil(x.message_refs.length/${gmailDetailBatch.batchSize})-1)*${gmailDetailBatch.batchInterval};const storage_reserve_ms=x.budget.max_attempts>1?${storageRetryReserveMs}:${storageTimeoutMs};const details_allowed=Date.now()+launch_delay_ms+5000+storage_reserve_ms<=x.deadline_at;return [{json:{...x,empty:x.message_refs.length===0,details_allowed,status_code:details_allowed?0:599,retry_delay_seconds:0,reconnect_required:false}}];`,
   3500,
 );
 const refBranch = condition("Message references empty", "empty", 3650);

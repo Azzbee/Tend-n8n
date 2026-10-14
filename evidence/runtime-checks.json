@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T11:22:31.429Z",
+  "checked_at": "2026-10-14T12:05:37.718Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -11,18 +11,18 @@
     "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
     "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf",
     "10-telegram-private.json": "6b3c0f37b1ebcf43f15276fcab3f9921a9813ec397f630012cb2bf45166a4619",
-    "11-google-gmail-readonly.json": "891c2bbd984e14be7fed70a5760a67d8dd9c7eb4c5a5ae5b1e3d8bd89bca2c45",
-    "12-google-calendar-readonly.json": "7ff96d9ec18dadff4dc132d96bb1614f47ee0d5165001235e94944cba3c72021",
-    "13-google-normalize-store.json": "6f90a2a86a8940f7624dff12f9bf87fb0db307dbda04e39c06cb873e21ab3b05",
+    "11-google-gmail-readonly.json": "09052c99e7b745cc35e35c25e500a344219b77e77aced5bdfaea43648a98a3fc",
+    "12-google-calendar-readonly.json": "0986cdb6b3cdf7c04bea86c9d2edff447d02d47132ade18fa977dcf92d8842c6",
+    "13-google-normalize-store.json": "2e97ad270c12b370da19deebaa49d6d3789121f5976f9e21c3fc538e8d121692",
     "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
     "15-google-extract-commitments.json": "da0be1805eeb9044b1f7ee95511af93e66415fe1acdb9106df21df8e2e354b92"
   },
   "source_sha256": {
     "engine.ts": "10a1f5c436e81bb2fc9d6bf3053ec35287f3cb6779d7f62b4238cdb5ef02c985",
     "server.ts": "34f812d3a23d0a1d6db6b85d0f484bc9a736742c1eaea6c89d8e3280345d147c",
-    "build-workflows.ts": "3feebc7a698e8ab604c04b47de683568fa5ea855890501c360c12caa8cd1fab5",
+    "build-workflows.ts": "b2df232a2e0c18bec59432c10227b179ee5b0ab44a0e0d89e44ccf64771cd450",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "efeb6cb6c5e12fc292e0843029102d606680005ac29c3a4d126cb66017285b3d"
+    "integration.ts": "3d5167407d7bc65044a36398977c0c9740fe374e8dace09c6a05e77cfbe1125f"
   },
   "runtime": {
     "node": "v24.5.0",

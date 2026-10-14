@@ -124,8 +124,8 @@ async function asyncDocker(args: string[], log: string): Promise<string> {
   });
 }
 async function googleIntegration(): Promise<void> {
-  const now = new Date(),
-    clock = () => now;
+  let now = new Date();
+  const clock = () => now;
   const policy = {
     ...exampleLivePolicy,
     calendar_ids: [
@@ -152,6 +152,71 @@ async function googleIntegration(): Promise<void> {
   });
   const live = createLiveServer({ policy, auth, store, clock });
   const livePort = await listen(live);
+  let storageFailure: "once-after-commit" | "always-before-commit" | "none" =
+    "once-after-commit";
+  let firstCommitObservedAt: string | undefined;
+  const storageRequests: { record_id: string; body_hash: string }[] = [];
+  const relay = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req)
+      chunks.push(Buffer.from(chunk as Uint8Array));
+    const body = Buffer.concat(chunks);
+    let recordId: string | undefined;
+    if (req.method === "POST" && req.url === "/api/live/sync") {
+      const value: unknown = JSON.parse(body.toString("utf8"));
+      if (
+        isRecord(value) &&
+        Array.isArray(value.records) &&
+        isRecord(value.records[0]) &&
+        typeof value.records[0].id === "string"
+      ) {
+        recordId = value.records[0].id;
+        storageRequests.push({
+          record_id: recordId,
+          body_hash: createHash("sha256").update(body).digest("hex"),
+        });
+        if (storageFailure === "always-before-commit") {
+          res.destroy();
+          return;
+        }
+      }
+    }
+    const upstream = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port: livePort,
+        path: req.url,
+        method: req.method,
+        headers: { ...req.headers, host: `127.0.0.1:${livePort}` },
+        agent: false,
+      },
+      (response) => {
+        const reply: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => reply.push(chunk));
+        response.on("error", () => res.destroy());
+        response.on("end", () => {
+          if (
+            recordId &&
+            storageFailure === "once-after-commit" &&
+            response.statusCode === 200
+          ) {
+            firstCommitObservedAt = store
+              .interactions(policy.principal_id)
+              .find((r) => r.source_record_id === recordId)?.observed_at;
+            storageFailure = "none";
+            now = new Date(now.getTime() + 1000);
+            res.destroy();
+            return;
+          }
+          res.writeHead(response.statusCode ?? 502, response.headers);
+          res.end(Buffer.concat(reply));
+        });
+      },
+    );
+    upstream.on("error", () => res.destroy());
+    upstream.end(body);
+  });
+  const relayPort = await listen(relay);
   let wrongProfile = false,
     pageRequests = 0,
     profileRequests = 0,
@@ -354,7 +419,7 @@ async function googleIntegration(): Promise<void> {
         "https://www.googleapis.com/calendar/v3",
         `http://host.docker.internal:${providerPort}/calendar/v3`,
       )
-      .replaceAll(":18768", `:${livePort}`)
+      .replaceAll(":18768", `:${relayPort}`)
       .replaceAll("CONFIGURE_INTERNAL_API_CREDENTIAL_ID", "GoogleCheckInternal")
       .replaceAll("CONFIGURE_GMAIL_READONLY_CREDENTIAL_ID", "GoogleCheck0")
       .replaceAll("CONFIGURE_CALENDAR_READONLY_CREDENTIAL_ID", "GoogleCheck1");
@@ -406,6 +471,48 @@ async function googleIntegration(): Promise<void> {
       store.counts(policy.principal_id).interactions === 2,
       "native child did not store both first-page records",
     );
+    assert(
+      storageRequests[0]?.record_id === "m1" &&
+        storageRequests[1]?.record_id === "m1" &&
+        storageRequests[0].body_hash === storageRequests[1].body_hash &&
+        firstCommitObservedAt !== undefined &&
+        store
+          .interactions(policy.principal_id)
+          .find((r) => r.source_record_id === "m1")?.observed_at !==
+          firstCommitObservedAt,
+      "native retry did not replay identical bytes after committed response loss and clock advance",
+    );
+    for (const maxAttempts of [1, 3]) {
+      policy.limits.max_attempts = maxAttempts;
+      storageFailure = "always-before-commit";
+      const before = storageRequests.length;
+      let failed = false;
+      try {
+        await execute(
+          "TendGoogle11",
+          `google-storage-exhausted-${maxAttempts}`,
+        );
+      } catch {
+        failed = true;
+      }
+      assert(
+        failed && storageRequests.length - before === Math.min(maxAttempts, 2),
+        "storage retry exceeded approved cap or exhaustion did not fail",
+      );
+      assert(
+        sourceState("gmail", policy.account_email)?.cursor === "mail-next" &&
+          store.counts(policy.principal_id).interactions === 2,
+        "exhausted storage advanced cursor or altered stored evidence",
+      );
+    }
+    policy.limits.max_attempts = 3;
+    storageFailure = "none";
+    googleChecks.push({
+      name: "Bounded native storage retry and ambiguous replay",
+      pass: true,
+      detail:
+        "First local POST committed but its response socket aborted; native retry sent identical bytes after clock advance without duplicate records. Exhausted budgets1 and3 made exactly1 and2 attempts and left page cursor unchanged.",
+    });
     googleChecks.push({
       name: "Native Google GET, retry and callable storage",
       pass: true,
@@ -528,6 +635,7 @@ async function googleIntegration(): Promise<void> {
       ) + "\n",
     );
   } finally {
+    await new Promise<void>((ok) => relay.close(() => ok()));
     await new Promise<void>((ok) => mock.close(() => ok()));
     await new Promise<void>((ok) => live.close(() => ok()));
     store.close();

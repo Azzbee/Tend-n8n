@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-14T11:22:30.903Z",
+  "checked_at": "2026-10-14T12:05:35.411Z",
   "scope": "Isolated n8n native-node tests with fictional Google provider and OAuth tokens. No real inbox or Calendar reads; no actual Google authorization claim.",
   "runtime": {
     "n8n": "2.43.4",
@@ -7,13 +7,18 @@
     "model": "qwen3:0.6b"
   },
   "workflow_sha256": {
-    "11-google-gmail-readonly.json": "891c2bbd984e14be7fed70a5760a67d8dd9c7eb4c5a5ae5b1e3d8bd89bca2c45",
-    "12-google-calendar-readonly.json": "7ff96d9ec18dadff4dc132d96bb1614f47ee0d5165001235e94944cba3c72021",
-    "13-google-normalize-store.json": "6f90a2a86a8940f7624dff12f9bf87fb0db307dbda04e39c06cb873e21ab3b05",
+    "11-google-gmail-readonly.json": "09052c99e7b745cc35e35c25e500a344219b77e77aced5bdfaea43648a98a3fc",
+    "12-google-calendar-readonly.json": "0986cdb6b3cdf7c04bea86c9d2edff447d02d47132ade18fa977dcf92d8842c6",
+    "13-google-normalize-store.json": "2e97ad270c12b370da19deebaa49d6d3789121f5976f9e21c3fc538e8d121692",
     "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
     "15-google-extract-commitments.json": "da0be1805eeb9044b1f7ee95511af93e66415fe1acdb9106df21df8e2e354b92"
   },
   "checks": [
+    {
+      "name": "Bounded native storage retry and ambiguous replay",
+      "pass": true,
+      "detail": "First local POST committed but its response socket aborted; native retry sent identical bytes after clock advance without duplicate records. Exhausted budgets1 and3 made exactly1 and2 attempts and left page cursor unchanged."
+    },
     {
       "name": "Native Google GET, retry and callable storage",
       "pass": true,
