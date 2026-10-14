@@ -75,12 +75,21 @@ const obligationColumns = [
   "evidence_valid",
 ] as const;
 export class PostgresStore implements LiveStore {
+  private readonly pool: Pool;
+  private readonly principal: Principal;
+  private readonly clock: () => Date;
+  private readonly client: PoolClient | null;
   private constructor(
-    private readonly pool: Pool,
-    private readonly principal: Principal,
-    private readonly clock: () => Date,
-    private readonly client: PoolClient | null = null,
-  ) {}
+    pool: Pool,
+    principal: Principal,
+    clock: () => Date,
+    client: PoolClient | null = null,
+  ) {
+    this.pool = pool;
+    this.principal = principal;
+    this.clock = clock;
+    this.client = client;
+  }
   static async open(options: PostgresOptions): Promise<PostgresStore> {
     const { principal, clock, ...config } = options;
     if (
