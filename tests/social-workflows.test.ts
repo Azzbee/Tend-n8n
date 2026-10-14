@@ -498,7 +498,7 @@ for (const [file, source, host, credential] of [
         expect(n.retryOnFail).toBe(false);
         expect(n.credentials?.httpHeaderAuth?.id).toBe(credential);
         expect(n.parameters.options).toMatchObject({
-          timeout: 5000,
+          timeout: 15000,
           redirect: { redirect: { followRedirects: false } },
           batching: { batch: { batchSize: 4, batchInterval: 5000 } },
         });
@@ -532,6 +532,16 @@ for (const [file, source, host, credential] of [
             linked(),
           ),
         ).toThrow();
+      });
+      it("rejects dot-only chat IDs before an exact chat request can normalize its path", () => {
+        for (const chat_id of [".", ".."])
+          expect(() =>
+            run(
+              "Prepare exact WhatsApp chats",
+              linked([{ ...message, chat_id }])["Read Selected provider page"],
+              linked(),
+            ),
+          ).toThrow("Unbound WhatsApp message");
       });
       const enriched = (response: unknown, items: unknown[] = [message]) =>
         (

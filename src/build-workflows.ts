@@ -1345,7 +1345,7 @@ const p=ctx.plan,b=r.body;const valid=v=>typeof v==='string'&&v.length>0&&v.leng
 if(p.source!==${JSON.stringify(spec.source)}||p.method!=='GET'||!valid(p.account_id)||!valid(p.expected_owner_identity)||!Number.isSafeInteger(p.limit)||p.limit<1||p.limit>20||!b||b.object!=='MessageList'||!Array.isArray(b.items)||b.items.length>p.limit||!Object.hasOwn(b,'cursor'))throw new Error('Invalid WhatsApp membership page');
 if(!Number.isSafeInteger(ctx.max_result_bytes)||Buffer.byteLength(JSON.stringify(r),'utf8')>ctx.max_result_bytes)throw new Error('WhatsApp page exceeds budget');
 if(typeof p.url!=='string'||!${approvedOrigin}.test(p.url)||/[\s\u0000-\u001f\u007f\\#]/u.test(p.url))throw new Error('Invalid WhatsApp membership origin');const origin=p.url.slice(0,p.url.indexOf('/',8));if(!p.url.startsWith(origin+'/api/v1/messages?'))throw new Error('Invalid WhatsApp membership path');
-const ids=new Set();for(const m of b.items){if(!m||m.account_id!==p.account_id||!valid(m.chat_id))throw new Error('Unbound WhatsApp message');ids.add(m.chat_id);}
+const ids=new Set();for(const m of b.items){if(!m||m.account_id!==p.account_id||(!valid(m.chat_id)||m.chat_id==='.'||m.chat_id==='..'))throw new Error('Unbound WhatsApp message');ids.add(m.chat_id);}
 return ids.size?[...ids].map(chat_id=>({json:{_chat_lookup:true,chat_id,url:origin+'/api/v1/chats/'+encodeURIComponent(chat_id)}})):[{json:{_chat_lookup:false}}];`,
         stage.x + 360,
       );
@@ -1363,7 +1363,8 @@ return ids.size?[...ids].map(chat_id=>({json:{_chat_lookup:true,chat_id,url:orig
           authentication: "genericCredentialType",
           genericAuthType: "httpHeaderAuth",
           options: {
-            timeout: 5000,
+            // Repeated real chat reads abort at five seconds; retain a bounded 15-second request.
+            timeout: 15000,
             redirect: { redirect: { followRedirects: false } },
             response: { response: { fullResponse: true, neverError: true } },
             batching: { batch: { batchSize: 4, batchInterval: 5000 } },
