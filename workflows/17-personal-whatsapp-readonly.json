@@ -79,7 +79,7 @@
       "typeVersion": 2,
       "position": [960, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||!u.hostname.endsWith('.unipile.com'))throw new Error('Unapproved provider request');return [{json:x}];"
+        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const url=p.url;if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||typeof url!=='string'||/[\\s\\u0000-\\u001f\\u007f\\\\]/u.test(url)||url.includes('#')||!/^https:\\/\\/(?:api[0-9]*|[a-z0-9-]+)\\.unipile\\.com(?::(?:443|13111))?\\//.test(url))throw new Error('Unapproved provider request');return [{json:x}];"
       }
     },
     {
@@ -159,7 +159,7 @@
       "typeVersion": 2,
       "position": [2640, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||!u.hostname.endsWith('.unipile.com'))throw new Error('Unapproved provider request');return [{json:x}];"
+        "jsCode": "const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const url=p.url;if(p.method!=='GET'||p.source!==\"whatsapp_personal\"||p.account_id!==$('Validate configured read selection').first().json.account_id||typeof url!=='string'||/[\\s\\u0000-\\u001f\\u007f\\\\]/u.test(url)||url.includes('#')||!/^https:\\/\\/(?:api[0-9]*|[a-z0-9-]+)\\.unipile\\.com(?::(?:443|13111))?\\//.test(url))throw new Error('Unapproved provider request');return [{json:x}];"
       }
     },
     {

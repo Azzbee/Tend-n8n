@@ -49,7 +49,6 @@ for (const [file, source, host] of [
           },
         }),
         $runIndex: runIndex,
-        URL,
         Buffer,
       },
     );
@@ -110,11 +109,35 @@ for (const [file, source, host] of [
           linked,
         ),
       ).not.toThrow();
+      for (const port of source === "whatsapp_personal" ? [443, 13111] : [443])
+        expect(() =>
+          run(
+            "Check Owner identity plan",
+            {
+              available: true,
+              plan: { ...plan, url: "https://" + host + ":" + port + "/read" },
+            },
+            linked,
+          ),
+        ).not.toThrow();
       for (const replacement of [
         { method: "POST" },
         { source: "calendar" },
         { account_id: "foreign" },
         { url: "https://attacker.invalid/read" },
+        { url: "https://" + host + ".attacker.invalid/read" },
+        { url: "https://attacker@" + host + "/read" },
+        { url: "https://" + host + "@attacker.invalid/read" },
+        { url: "https://" + host + ":444/read" },
+        { url: "https://" + host + "\\@attacker.invalid/read" },
+        { url: "https://" + host + "/read\n" },
+        { url: "https://" + host + "/read\u0000" },
+        { url: "https://" + host + "/read#fragment" },
+        { url: " https://" + host + "/read" },
+        { url: "https://" + host },
+        ...(source === "linkedin"
+          ? [{ url: "https://" + host + ":13111/read" }]
+          : []),
       ])
         expect(() =>
           run(

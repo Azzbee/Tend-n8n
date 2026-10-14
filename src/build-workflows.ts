@@ -1256,10 +1256,14 @@ for (const spec of [
       x: 2640,
     },
   ];
+  const approvedOrigin =
+    spec.provider === "linkedin"
+      ? String.raw`/^https:\/\/api\.linkedin\.com(?::443)?\//`
+      : String.raw`/^https:\/\/(?:api[0-9]*|[a-z0-9-]+)\.unipile\.com(?::(?:443|13111))?\//`;
   for (const stage of stages) {
     const checked = code(
       `Check ${stage.prefix} plan`,
-      `const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const u=new URL(p.url);if(p.method!=='GET'||p.source!==${JSON.stringify(spec.source)}||p.account_id!==$('Validate configured read selection').first().json.account_id||u.protocol!=='https:'||u.username||u.password||u.hash||${spec.provider === "linkedin" ? "u.hostname!=='api.linkedin.com'" : "!u.hostname.endsWith('.unipile.com')"})throw new Error('Unapproved provider request');return [{json:x}];`,
+      String.raw`const x=$input.first().json;if(x.available!==true)throw new Error('Provider read unavailable: '+String(x.reason||'unavailable'));const p=x.plan;const url=p.url;if(p.method!=='GET'||p.source!==${JSON.stringify(spec.source)}||p.account_id!==$('Validate configured read selection').first().json.account_id||typeof url!=='string'||/[\s\u0000-\u001f\u007f\\]/u.test(url)||url.includes('#')||!${approvedOrigin}.test(url))throw new Error('Unapproved provider request');return [{json:x}];`,
       stage.x,
     );
     const provider = node(
