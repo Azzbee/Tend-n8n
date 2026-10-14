@@ -1337,6 +1337,19 @@ for (const spec of [
       spec.provider === "unipile" &&
       stage.prefix === "Selected provider page"
     ) {
+      const projection = code(
+        "Project bounded WhatsApp message page",
+        String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$input.first().json;
+if(Buffer.byteLength(JSON.stringify(r),'utf8')>4194304)throw new Error('WhatsApp raw page exceeds budget');
+if(!Number.isSafeInteger(ctx.max_result_bytes)||ctx.max_result_bytes<1024||ctx.max_result_bytes>1048576)throw new Error('Invalid WhatsApp projection budget');
+const status=Number(r.statusCode)||599;const retry=r.headers?.['retry-after']??r.headers?.['Retry-After'];const headers=typeof retry==='string'&&retry.length<=128?{headers:{'Retry-After':retry}}:{};
+let body={error:'provider_read_failed'};
+if(status===200){const b=r.body,p=ctx.plan;if(!b||b.object!=='MessageList'||!Array.isArray(b.items)||!Number.isSafeInteger(p.limit)||p.limit<1||p.limit>20||b.items.length>p.limit||!Object.hasOwn(b,'cursor')||(b.cursor!==null&&(typeof b.cursor!=='string'||!b.cursor||b.cursor.length>8192||/[\u0000-\u001f\u007f]/u.test(b.cursor))))throw new Error('Invalid WhatsApp projection page');
+const fields=['hidden','deleted','edited','is_event','event_type','is_hidden','id','message_id','account_id','chat_id','sender_id','is_sender','timestamp','text','chat_provider_id'];
+const items=b.items.map(m=>{if(!m||typeof m!=='object'||Array.isArray(m))throw new Error('Invalid WhatsApp projection message');const out={};for(const key of fields)if(Object.hasOwn(m,key))out[key]=m[key];return out;});body={object:b.object,items,cursor:b.cursor};}
+const projected={statusCode:status,body,...headers};if(Buffer.byteLength(JSON.stringify(projected),'utf8')>ctx.max_result_bytes)throw new Error('WhatsApp projected page exceeds budget');return [{json:projected}];`,
+        stage.x + 300,
+      );
       const prepare = code(
         "Prepare exact WhatsApp chats",
         String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$input.first().json;
@@ -1382,7 +1395,7 @@ return lookup.length?lookup.map(chat_id=>({json:{_chat_lookup:true,chat_id,url:o
       chats.continueOnFail = true;
       const membership = code(
         "Verify exact WhatsApp membership",
-        String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$('Read Selected provider page').first(0,$runIndex).json;
+        String.raw`const ctx=$('Plan selected provider page').first(0,$runIndex).json;const r=$('Project bounded WhatsApp message page').first(0,$runIndex).json;
 if(Number(r.statusCode)!==200)return [{json:r}];
 const requests=$('Prepare exact WhatsApp chats').all(0,$runIndex).map(x=>x.json);const responses=$input.all().map(x=>x.json);const p=ctx.plan;
 const blocked=reason=>[{json:{statusCode:599,body:{error:reason}}}];
@@ -1398,8 +1411,9 @@ if(c&&c.type===0&&valid(c.attendee_provider_id)&&c.attendee_provider_id!==p.expe
 return [{json:{...r,body:{...r.body,items}}}];`,
         stage.x + 600,
       );
-      w.nodes.push(prepare, needed, chats, membership);
-      connect(w, provider.name, prepare.name);
+      w.nodes.push(projection, prepare, needed, chats, membership);
+      connect(w, provider.name, projection.name);
+      connect(w, projection.name, prepare.name);
       connect(w, prepare.name, needed.name);
       connect(w, needed.name, chats.name);
       connect(w, needed.name, membership.name, 1);

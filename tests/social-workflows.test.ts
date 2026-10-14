@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, it, expect } from "vitest";
 import { normalizeUnipileMessage } from "../src/messaging-records.ts";
+import { normalizeLiveRecord, validateLiveCandidate } from "../src/engine.ts";
 interface Node {
   name: string;
   type: string;
@@ -475,7 +476,7 @@ for (const [file, source, host, credential] of [
       };
       const linked = (items: unknown[] = [message]) => ({
         "Plan selected provider page": ctx,
-        "Read Selected provider page": {
+        "Project bounded WhatsApp message page": {
           statusCode: 200,
           body: { object: "MessageList", items, cursor: "next" },
         },
@@ -492,6 +493,195 @@ for (const [file, source, host, credential] of [
         provider_id: peer,
         attendee_provider_id: peer,
       };
+      const project = (response: unknown, context = ctx) =>
+        (
+          run("Project bounded WhatsApp message page", response, {
+            "Plan selected provider page": context,
+          }) as {
+            json: {
+              statusCode: number;
+              body: {
+                object: string;
+                items: Record<string, unknown>[];
+                cursor: string | null;
+              };
+              headers?: Record<string, string>;
+            };
+          }[]
+        )[0]!.json;
+      it("projects ignored metadata while retaining every message, exact text, cursor and normalization outcome", () => {
+        const context = {
+          principal_id: "fictional-owner",
+          account_id: "fictional-account",
+          owner_identity: owner,
+          now: new Date("2026-10-14T12:00:00Z"),
+          authenticated: {
+            provider: "unipile" as const,
+            account_id: "fictional-account",
+          },
+        };
+        for (const patch of [
+          {},
+          { text: null },
+          { hidden: 1 },
+          { deleted: true },
+          { edited: 1 },
+          { is_event: true },
+          { event_type: 1 },
+          { is_hidden: true },
+          { hidden: "invalid" },
+          { is_sender: "1" },
+          { sender_id: "foreign-phone" },
+          { timestamp: "bad-date" },
+        ]) {
+          const raw = {
+            ...message,
+            ...patch,
+            message_id: "alternate-id",
+            original: "x".repeat(900000),
+            seen_by: { ignored: "x".repeat(190000) },
+          };
+          const projected = project({
+            statusCode: 200,
+            body: {
+              object: "MessageList",
+              items: [raw],
+              cursor: "opaque+/=20",
+            },
+          });
+          expect(projected.body.cursor).toBe("opaque+/=20");
+          expect(projected.body.items).toHaveLength(1);
+          expect(projected.body.items[0]?.text).toBe(raw.text);
+          for (const key of ["original", "seen_by", "attendees"])
+            expect(projected.body.items[0]).not.toHaveProperty(key);
+          const before = normalizeUnipileMessage(
+            enriched({ statusCode: 200, body: chat }, [raw]).body.items[0],
+            context,
+            source,
+          );
+          const after = normalizeUnipileMessage(
+            enriched({ statusCode: 200, body: chat }, projected.body.items).body
+              .items[0],
+            context,
+            source,
+          );
+          expect(after).toEqual(before);
+          if (before.kind === "accepted" && after.kind === "accepted") {
+            expect(normalizeLiveRecord(after.record, after.identities)).toEqual(
+              normalizeLiveRecord(before.record, before.identities),
+            );
+            if (after.record.eligible_for_extraction) {
+              const candidate = {
+                quote: after.record.authored_spans[0]!.text,
+                action: "send the draft",
+                suggested_due: null,
+              };
+              expect(validateLiveCandidate(after.record, candidate)).toEqual(
+                validateLiveCandidate(before.record, candidate),
+              );
+            }
+          }
+        }
+        const ordered = Array.from({ length: 20 }, (_, i) => ({
+          ...message,
+          id: String(i),
+          text: "exact " + i,
+        }));
+        expect(
+          project({
+            statusCode: 200,
+            body: { object: "MessageList", items: ordered, cursor: null },
+          }).body.items.map((x) => [x.id, x.text]),
+        ).toEqual(ordered.map((x) => [x.id, x.text]));
+      });
+      it("enforces independent raw and projected envelope budgets without truncation", () => {
+        const response = {
+          statusCode: 200,
+          body: { object: "MessageList", items: [message], cursor: "next" },
+          ignored: "",
+        };
+        const exact = {
+          ...response,
+          ignored: "x".repeat(
+            4 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(response)),
+          ),
+        };
+        expect(Buffer.byteLength(JSON.stringify(exact))).toBe(4 * 1024 * 1024);
+        expect(project(exact).body.items[0]?.text).toBe(message.text);
+        expect(() =>
+          project({ ...exact, ignored: exact.ignored + "x" }),
+        ).toThrow("WhatsApp raw page exceeds budget");
+        const textPage = {
+          ...response,
+          body: {
+            ...response.body,
+            items: [{ ...message, text: "x".repeat(2000) }],
+          },
+        };
+        const projected = project(textPage);
+        const size = Buffer.byteLength(JSON.stringify(projected));
+        expect(project(textPage, { ...ctx, max_result_bytes: size })).toEqual(
+          projected,
+        );
+        expect(() =>
+          project(textPage, { ...ctx, max_result_bytes: size - 1 }),
+        ).toThrow("WhatsApp projected page exceeds budget");
+        expect(() =>
+          project({
+            ...response,
+            body: {
+              ...response.body,
+              items: Array.from({ length: 21 }, () => message),
+            },
+          }),
+        ).toThrow();
+        for (const cursor of [undefined, "", 1, "x".repeat(8193), "bad\n"]) {
+          expect(() =>
+            project({ ...response, body: { ...response.body, cursor } }),
+          ).toThrow();
+        }
+      });
+      it("bounds failed-page headers and routes both enrichment stages through the projection", () => {
+        expect(
+          project({
+            statusCode: 429,
+            headers: { "retry-after": "60", private: "do not retain" },
+            body: { private: "do not retain" },
+          }),
+        ).toEqual({
+          statusCode: 429,
+          body: { error: "provider_read_failed" },
+          headers: { "Retry-After": "60" },
+        });
+        expect(
+          project({
+            statusCode: 503,
+            headers: { "Retry-After": "x".repeat(129) },
+            body: "private",
+          }),
+        ).toEqual({ statusCode: 503, body: { error: "provider_read_failed" } });
+        expect(
+          w.connections["Read Selected provider page"]?.main?.[0]?.[0]?.node,
+        ).toBe("Project bounded WhatsApp message page");
+        expect(
+          w.connections["Project bounded WhatsApp message page"]?.main?.[0]?.[0]
+            ?.node,
+        ).toBe("Prepare exact WhatsApp chats");
+        const context = {
+          ...linked(),
+          "Read Selected provider page": {
+            statusCode: 200,
+            body: { private: "must not be read" },
+          },
+        };
+        expect(
+          run(
+            "Verify exact WhatsApp membership",
+            [{ statusCode: 200, body: chat }],
+            context,
+          ),
+        ).toEqual([{ json: enriched({ statusCode: 200, body: chat }) }]);
+      });
       it("uses bounded exact native chat GETs with the distinct source credential", () => {
         const n = node("Read exact WhatsApp chats");
         expect(n.parameters.method).toBe("GET");
@@ -506,7 +696,7 @@ for (const [file, source, host, credential] of [
           run(
             "Prepare exact WhatsApp chats",
             linked([message, { ...message, id: "m2" }])[
-              "Read Selected provider page"
+              "Project bounded WhatsApp message page"
             ],
             linked([message, { ...message, id: "m2" }]),
           ),
@@ -528,7 +718,7 @@ for (const [file, source, host, credential] of [
                 id: String(i),
                 chat_id: String(i),
               })),
-            )["Read Selected provider page"],
+            )["Project bounded WhatsApp message page"],
             linked(),
           ),
         ).toThrow();
@@ -546,7 +736,7 @@ for (const [file, source, host, credential] of [
           expect(
             run(
               "Prepare exact WhatsApp chats",
-              context["Read Selected provider page"],
+              context["Project bounded WhatsApp message page"],
               context,
             ),
           ).toEqual([{ json: { _chat_lookup: false } }]);
@@ -584,7 +774,7 @@ for (const [file, source, host, credential] of [
           expect(
             run(
               "Prepare exact WhatsApp chats",
-              mixed["Read Selected provider page"],
+              mixed["Project bounded WhatsApp message page"],
               mixed,
             ),
           ).toEqual([{ json: { _chat_lookup: false } }]);
@@ -595,7 +785,9 @@ for (const [file, source, host, credential] of [
           expect(() =>
             run(
               "Prepare exact WhatsApp chats",
-              linked([{ ...message, chat_id }])["Read Selected provider page"],
+              linked([{ ...message, chat_id }])[
+                "Project bounded WhatsApp message page"
+              ],
               linked(),
             ),
           ).toThrow("Unbound WhatsApp message");
@@ -955,7 +1147,7 @@ for (const [file, source, host, credential] of [
           expect(
             run(
               "Prepare exact WhatsApp chats",
-              context["Read Selected provider page"],
+              context["Project bounded WhatsApp message page"],
               context,
             ),
           ).toHaveLength(1);
@@ -976,7 +1168,7 @@ for (const [file, source, host, credential] of [
           expect(() =>
             run(
               "Prepare exact WhatsApp chats",
-              context["Read Selected provider page"],
+              context["Project bounded WhatsApp message page"],
               context,
             ),
           ).toThrow();
@@ -1006,7 +1198,7 @@ for (const [file, source, host, credential] of [
         expect(() =>
           run(
             "Prepare exact WhatsApp chats",
-            selected["Read Selected provider page"],
+            selected["Project bounded WhatsApp message page"],
             {
               ...selected,
               "Plan selected provider page": { ...ctx, max_result_bytes: 10 },
@@ -1017,7 +1209,7 @@ for (const [file, source, host, credential] of [
       it("preserves failed provider page status without starting chat reads", () => {
         const context = {
           ...linked(),
-          "Read Selected provider page": {
+          "Project bounded WhatsApp message page": {
             statusCode: 429,
             body: { error: "limited" },
             headers: { "retry-after": "5" },
@@ -1026,12 +1218,12 @@ for (const [file, source, host, credential] of [
         expect(
           run(
             "Prepare exact WhatsApp chats",
-            context["Read Selected provider page"],
+            context["Project bounded WhatsApp message page"],
             context,
           ),
         ).toEqual([{ json: { _chat_lookup: false } }]);
         expect(run("Verify exact WhatsApp membership", [{}], context)).toEqual([
-          { json: context["Read Selected provider page"] },
+          { json: context["Project bounded WhatsApp message page"] },
         ]);
       });
     }
