@@ -608,9 +608,10 @@ for (const [file, source, host, credential] of [
         };
         expect(Buffer.byteLength(JSON.stringify(exact))).toBe(4 * 1024 * 1024);
         expect(project(exact).body.items[0]?.text).toBe(message.text);
-        expect(() =>
-          project({ ...exact, ignored: exact.ignored + "x" }),
-        ).toThrow("WhatsApp raw page exceeds budget");
+        expect(project({ ...exact, ignored: exact.ignored + "x" })).toEqual({
+          statusCode: 599,
+          body: { error: "provider_envelope_exceeds_budget" },
+        });
         const textPage = {
           ...response,
           body: {
@@ -623,9 +624,12 @@ for (const [file, source, host, credential] of [
         expect(project(textPage, { ...ctx, max_result_bytes: size })).toEqual(
           projected,
         );
-        expect(() =>
+        expect(
           project(textPage, { ...ctx, max_result_bytes: size - 1 }),
-        ).toThrow("WhatsApp projected page exceeds budget");
+        ).toEqual({
+          statusCode: 599,
+          body: { error: "provider_envelope_exceeds_budget" },
+        });
         expect(() =>
           project({
             ...response,
@@ -640,6 +644,169 @@ for (const [file, source, host, credential] of [
             project({ ...response, body: { ...response.body, cursor } }),
           ).toThrow();
         }
+      });
+      it("returns bounded errors through the read-result envelope for oversized raw pages", () => {
+        for (const statusCode of [200, 401, 403, 429, 503, 599]) {
+          for (const retry of ["120", "x".repeat(129)]) {
+            const response = project({
+              statusCode,
+              headers: { "Retry-After": retry, private: "discard" },
+              body: { private: "x".repeat(4 * 1024 * 1024) },
+            });
+            const status = statusCode === 200 ? 599 : statusCode;
+            const body = {
+              error:
+                statusCode === 200
+                  ? "provider_envelope_exceeds_budget"
+                  : "provider_read_failed",
+            };
+            const headers =
+              retry.length <= 128 ? { headers: { "Retry-After": retry } } : {};
+            expect(response).toEqual({ statusCode: status, body, ...headers });
+            const context = {
+              ...linked(),
+              "Project bounded WhatsApp message page": response,
+            };
+            expect(
+              run("Prepare exact WhatsApp chats", response, context),
+            ).toEqual([{ json: { _chat_lookup: false } }]);
+            expect(
+              run("Verify exact WhatsApp membership", [{}], context),
+            ).toEqual([{ json: response }]);
+            const envelope = run(
+              "Bound Selected provider page response",
+              response,
+              {
+                "Plan selected provider page": {
+                  ...ctx,
+                  request_id: "fictional-request",
+                },
+              },
+            );
+            expect(envelope).toEqual([
+              {
+                json: {
+                  request_id: "fictional-request",
+                  status,
+                  body,
+                  ...headers,
+                },
+              },
+            ]);
+          }
+        }
+      });
+      it("uses stable projected quarantine fingerprints for malformed IDs without inferring an ID", () => {
+        const context = {
+          principal_id: "fictional-owner",
+          account_id: "fictional-account",
+          owner_identity: owner,
+          now: new Date("2026-10-14T12:00:00Z"),
+          authenticated: {
+            provider: "unipile" as const,
+            account_id: "fictional-account",
+          },
+        };
+        const raw = {
+          ...message,
+          id: "",
+          message_id: undefined,
+          original: "unused first metadata",
+        };
+        const before = normalizeUnipileMessage(
+          enriched({ statusCode: 200, body: chat }, [raw]).body.items[0],
+          context,
+          source,
+        );
+        const normalizeProjected = (input: unknown) =>
+          normalizeUnipileMessage(
+            enriched(
+              { statusCode: 200, body: chat },
+              project({
+                statusCode: 200,
+                body: { object: "MessageList", items: [input], cursor: "next" },
+              }).body.items,
+            ).body.items[0],
+            context,
+            source,
+          );
+        const after = normalizeProjected(raw);
+        expect(before).toMatchObject({
+          kind: "quarantined",
+          reason: "invalid_identity",
+        });
+        expect(after).toMatchObject({
+          kind: "quarantined",
+          reason: "invalid_identity",
+        });
+        if (before.kind === "accepted" || after.kind === "accepted")
+          throw new Error("Malformed ID was accepted");
+        expect(after.source_record_id).toMatch(/^invalid-record:[a-f0-9]{64}$/);
+        // Fingerprints cover the retained canonical fields, rather than discarded metadata.
+        expect(after.source_record_id).not.toBe(before.source_record_id);
+        expect(
+          normalizeProjected({ ...raw, original: "changed unused metadata" }),
+        ).toEqual(after);
+      });
+      it("intentionally excludes oversized unused metadata from message validation while preserving text limits", () => {
+        const context = {
+          principal_id: "fictional-owner",
+          account_id: "fictional-account",
+          owner_identity: owner,
+          now: new Date("2026-10-14T12:00:00Z"),
+          authenticated: {
+            provider: "unipile" as const,
+            account_id: "fictional-account",
+          },
+        };
+        let deep: unknown = null;
+        for (let i = 0; i < 22; i++) deep = { next: deep };
+        for (const original of [Array.from({ length: 20001 }, () => 0), deep]) {
+          const raw = { ...message, original };
+          expect(
+            normalizeUnipileMessage(
+              enriched({ statusCode: 200, body: chat }, [raw]).body.items[0],
+              context,
+              source,
+            ),
+          ).toMatchObject({ kind: "quarantined", reason: "payload_limit" });
+          const projected = project({
+            statusCode: 200,
+            body: { object: "MessageList", items: [raw], cursor: "next" },
+          });
+          expect(
+            normalizeUnipileMessage(
+              enriched({ statusCode: 200, body: chat }, projected.body.items)
+                .body.items[0],
+              context,
+              source,
+            ),
+          ).toMatchObject({
+            kind: "accepted",
+            record: { body_text: message.text, eligible_for_extraction: true },
+          });
+        }
+        const text = "x".repeat(262145);
+        const projected = project(
+          {
+            statusCode: 200,
+            body: {
+              object: "MessageList",
+              items: [{ ...message, text }],
+              cursor: "next",
+            },
+          },
+          { ...ctx, max_result_bytes: 1048576 },
+        );
+        expect(projected.body.items[0]?.text).toBe(text);
+        expect(
+          normalizeUnipileMessage(
+            enriched({ statusCode: 200, body: chat }, projected.body.items).body
+              .items[0],
+            context,
+            source,
+          ),
+        ).toMatchObject({ kind: "quarantined", reason: "invalid_string" });
       });
       it("bounds failed-page headers and routes both enrichment stages through the projection", () => {
         expect(
