@@ -119,6 +119,7 @@ const recordReasonCodes = new Set([
   "malformed_html",
   "html_structure_limit",
   "malformed_suppressed_html",
+  "unsupported_css_visibility",
   "body_size_limit",
   "invalid_message_labels",
   "invalid_internal_date",
@@ -313,10 +314,84 @@ function part(value: unknown, budget: { nodes: number }, depth = 0): GmailPart {
   if (p.filename !== undefined) result.filename = string(p.filename);
   return result;
 }
+function inlineStyleHides(style: string): boolean {
+  if (style.length > 4096 || /[\\@{}()]|\/\*|\*\//.test(style))
+    throw new Error("unsupported_css_visibility");
+  const declarations = style
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (declarations.length > 64) throw new Error("unsupported_css_visibility");
+  let hidden = false;
+  const positiveLength = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%)$/;
+  const spacing =
+    /^(?:0|(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%))(?: (?:0|(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%))){0,3}$/;
+  for (const declaration of declarations) {
+    const pair = /^([a-z-]+)\s*:\s*(.*?)\s*(?:!important)?$/i.exec(declaration);
+    if (!pair) throw new Error("unsupported_css_visibility");
+    const name = pair[1]!.toLowerCase(),
+      value = pair[2]!.trim().toLowerCase();
+    if (
+      (name === "display" && value === "none") ||
+      (name === "visibility" && ["hidden", "collapse"].includes(value)) ||
+      (name === "opacity" &&
+        Number(value) === 0 &&
+        /^(?:0+(?:\.0*)?|\.0+)$/.test(value)) ||
+      (name === "font-size" &&
+        /^0+(?:\.0+)?(?:px|pt|em|rem|%)?$/.test(value)) ||
+      (name === "mso-hide" && value === "all") ||
+      (name === "color" && value === "transparent")
+    ) {
+      hidden = true;
+      continue;
+    }
+    const supported =
+      (name === "display" && value === "inline") ||
+      (name === "visibility" && value === "visible") ||
+      (name === "opacity" && value === "1") ||
+      (name === "mso-hide" && value === "none") ||
+      (name === "font-weight" &&
+        /^(?:normal|bold|bolder|lighter|[1-9]00)$/.test(value)) ||
+      (name === "font-style" && /^(?:normal|italic|oblique)$/.test(value)) ||
+      (name === "font-family" && /^[\p{L}\p{N} ,"'-]+$/u.test(value)) ||
+      (name === "font-size" &&
+        positiveLength.test(value) &&
+        parseFloat(value) > 0) ||
+      (name === "line-height" &&
+        (value === "normal" ||
+          ((positiveLength.test(value) || /^\d+(?:\.\d+)?$/.test(value)) &&
+            parseFloat(value) > 0))) ||
+      (name === "text-align" &&
+        /^(?:left|right|center|justify|start|end)$/.test(value)) ||
+      (name === "text-decoration" &&
+        /^(?:none|(?:underline|overline|line-through)(?: (?:underline|overline|line-through))*)$/.test(
+          value,
+        )) ||
+      (name === "text-transform" &&
+        /^(?:none|uppercase|lowercase|capitalize)$/.test(value)) ||
+      ((/^(?:margin|padding)(?:-(?:top|right|bottom|left))?$/.test(name) ||
+        ["letter-spacing", "word-spacing"].includes(name)) &&
+        spacing.test(value)) ||
+      (name === "overflow" && /^(?:hidden|visible|auto|scroll)$/.test(value));
+    if (!supported) throw new Error("unsupported_css_visibility");
+  }
+  return hidden;
+}
 /** HTML5 AST text only. Parsing never fetches resources or executes scripts. */
 function htmlText(html: string): string {
   if (Buffer.byteLength(html, "utf8") > 1048576)
     throw new Error("body_size_limit");
+  let lexicalWork = 0,
+    whitespace = false;
+  for (let i = 0; i < html.length; i++) {
+    const code = html.charCodeAt(i);
+    const space =
+      code === 9 || code === 10 || code === 12 || code === 13 || code === 32;
+    if ((space && !whitespace) || code === 47 || code === 61)
+      if (++lexicalWork > 4096) throw new Error("html_structure_limit");
+    whitespace = space;
+  }
+  let parseErrors = 0;
   let allocated = 0;
   const allocate = (): void => {
     if (++allocated > 20000) throw new Error("html_structure_limit");
@@ -371,6 +446,7 @@ function htmlText(html: string): string {
     treeAdapter: adapter,
     sourceCodeLocationInfo: true,
     onParseError(error) {
+      if (++parseErrors > 1000) throw new Error("malformed_html");
       if (
         [
           "non-void-html-element-start-tag-with-trailing-solidus",
@@ -379,14 +455,7 @@ function htmlText(html: string): string {
         ].includes(error.code)
       )
         throw new Error("malformed_suppressed_html");
-      if (
-        [
-          "eof-in-comment",
-          "eof-in-tag",
-          "eof-before-tag-name",
-          "invalid-first-character-of-tag-name",
-        ].includes(error.code)
-      )
+      if (["eof-in-comment", "eof-in-tag"].includes(error.code))
         throw new Error("malformed_html");
     },
   });
@@ -401,6 +470,9 @@ function htmlText(html: string): string {
     "math",
     "noscript",
     "template",
+    "noembed",
+    "noframes",
+    "datalist",
   ]);
   const voidTags = new Set([
     "area",
@@ -430,16 +502,55 @@ function htmlText(html: string): string {
     "section",
     "article",
     "pre",
+    "td",
+    "th",
+    "ul",
+    "ol",
+    "h5",
+    "h6",
   ]);
   const quoteMarker =
     /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature|divRplyFwdMsg)/i;
-  const attributes = (node: DefaultTreeAdapterTypes.Element): string =>
-    node.attrs.map((a) => a.name + "=" + a.value).join(" ");
-  const suppressed = (node: DefaultTreeAdapterTypes.Element): boolean =>
-    suppressedTags.has(node.tagName) ||
-    /(?:\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden)/i.test(
-      attributes(node),
-    );
+  const presentationalAttributes: Record<string, readonly string[]> = {
+    color: ["font"],
+    bgcolor: ["body", "table", "tr", "td", "th", "col", "colgroup"],
+    background: ["body", "table", "td", "th"],
+    text: ["body"],
+    width: [
+      "table",
+      "tr",
+      "td",
+      "th",
+      "col",
+      "colgroup",
+      "pre",
+      "hr",
+      "iframe",
+      "object",
+      "embed",
+      "img",
+      "video",
+      "canvas",
+      "input",
+      "marquee",
+    ],
+    height: [
+      "table",
+      "tr",
+      "td",
+      "th",
+      "iframe",
+      "object",
+      "embed",
+      "img",
+      "video",
+      "canvas",
+      "input",
+      "marquee",
+    ],
+    size: ["font", "hr", "input", "select"],
+  };
+  const suppressedElements = new WeakSet<DefaultTreeAdapterTypes.Element>();
   const pending: { node: DefaultTreeAdapterTypes.Node; level: number }[] = [
     { node: document, level: 0 },
   ];
@@ -451,10 +562,46 @@ function htmlText(html: string): string {
       throw new Error("html_structure_limit");
     if (defaultTreeAdapter.isElementNode(node)) {
       const location = node.sourceCodeLocation;
-      if (node.tagName === "blockquote" || quoteMarker.test(attributes(node)))
+      if (
+        node.attrs.some(
+          (a) =>
+            Object.hasOwn(presentationalAttributes, a.name) &&
+            presentationalAttributes[a.name]!.includes(node.tagName),
+        )
+      )
+        throw new Error("unsupported_css_visibility");
+      if (
+        node.tagName === "style" &&
+        node.childNodes.some(
+          (child) => defaultTreeAdapter.isTextNode(child) && child.value.trim(),
+        )
+      )
+        throw new Error("unsupported_css_visibility");
+      if (
+        node.tagName === "link" &&
+        node.attrs.some(
+          (a) =>
+            a.name === "rel" &&
+            a.value.toLowerCase().split(/\s+/).includes("stylesheet"),
+        )
+      )
+        throw new Error("unsupported_css_visibility");
+      const style = node.attrs.find((a) => a.name === "style")?.value ?? "";
+      const styleHidden = inlineStyleHides(style);
+      const suppressed =
+        suppressedTags.has(node.tagName) ||
+        node.attrs.some((a) => a.name === "hidden") ||
+        styleHidden;
+      if (suppressed) suppressedElements.add(node);
+      if (
+        node.tagName === "blockquote" ||
+        node.attrs.some(
+          (a) => ["class", "id"].includes(a.name) && quoteMarker.test(a.value),
+        )
+      )
         cutoff = Math.min(cutoff, location?.startOffset ?? 0);
       if (
-        suppressed(node) &&
+        suppressed &&
         location &&
         !location.endTag &&
         node.tagName !== "head" &&
@@ -478,19 +625,24 @@ function htmlText(html: string): string {
         pending.push({ node: child, level: level + 1 });
   }
   let text = "";
-  const render: { node: DefaultTreeAdapterTypes.Node; closing: boolean }[] = [
-    { node: document, closing: false },
-  ];
+  const render: {
+    node: DefaultTreeAdapterTypes.Node;
+    closing: boolean;
+    preformatted: boolean;
+  }[] = [{ node: document, closing: false, preformatted: false }];
   while (render.length) {
-    const { node, closing } = render.pop()!;
+    const { node, closing, preformatted } = render.pop()!;
     if (defaultTreeAdapter.isTextNode(node)) {
       const location = node.sourceCodeLocation;
-      if (location && location.endOffset <= cutoff) text += node.value;
+      if (location && location.endOffset <= cutoff)
+        text += preformatted
+          ? node.value
+          : node.value.replace(/[\t\n\f\r ]+/g, " ");
       continue;
     }
     if (defaultTreeAdapter.isElementNode(node)) {
       if (
-        suppressed(node) ||
+        suppressedElements.has(node) ||
         (node.sourceCodeLocation?.startOffset ?? -1) >= cutoff
       )
         continue;
@@ -501,9 +653,16 @@ function htmlText(html: string): string {
         text += "\n";
     }
     if (!closing && "childNodes" in node) {
-      render.push({ node, closing: true });
+      const preserve =
+        preformatted ||
+        (defaultTreeAdapter.isElementNode(node) && node.tagName === "pre");
+      render.push({ node, closing: true, preformatted: preserve });
       for (let i = node.childNodes.length - 1; i >= 0; i--)
-        render.push({ node: node.childNodes[i]!, closing: false });
+        render.push({
+          node: node.childNodes[i]!,
+          closing: false,
+          preformatted: preserve,
+        });
     }
   }
   return text;
@@ -562,9 +721,16 @@ function authoredText(text: string): { text: string; spans: AuthoredSpan[] } {
     .join("")
     .split("\n");
   const kept: string[] = [];
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
     if (
-      /^\s*(?:--\s*$|Sent from my\b|Envoyé de mon\b|On .+wrote:\s*$|Le .+(?:écrit|ecrit)\s*:\s*$|[-_]{2,}\s*(?:Original Message|Forwarded message|Message transféré)|Begin forwarded message:|From:\s+.+@)/i.test(
+      /^\s*_{10,}\s*$/.test(line) ||
+      (/^\s*(?:From|De|Von)\s*:\s*\S/i.test(line) &&
+        /^\s*(?:Sent|Envoyé|Envoye|Gesendet)\s*:/i.test(lines[index + 1] ?? ""))
+    )
+      break;
+    if (
+      /^\s*(?:--\s*$|Sent from my\b|Envoyé de mon\b|On .+wrote:\s*$|Le .+(?:écrit|ecrit)\s*:\s*$|[-_]{2,}\s*(?:Original Message|Forwarded message|Message transféré|Message d['’]origine|Ursprüngliche Nachricht)|Begin forwarded message:|From:\s+.+@)/i.test(
         line,
       )
     )

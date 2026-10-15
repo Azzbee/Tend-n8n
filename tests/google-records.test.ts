@@ -336,6 +336,152 @@ describe("Calendar instances, windows and cancellation", () => {
 });
 
 describe("conservative attribution edge cases", () => {
+  it("excludes Outlook and localized plain-text reply threads", () => {
+    for (const separator of [
+      "________________________________\nFrom: Owner Name\nSent: Monday\nTo: Mira\nSubject: Demo",
+      "From: Owner Name\nSent: Monday\nTo: Mira\nSubject: Demo",
+      "De : Propriétaire\nEnvoyé : lundi\nÀ : Mira\nObjet : Démo",
+      "Von: Besitzer\nGesendet: Montag\nAn: Mira\nBetreff: Demo",
+      "-----Message d'origine-----",
+      "-----Ursprüngliche Nachricht-----",
+    ]) {
+      const result = normalizeGmailMessage(
+        mail(
+          "I will review the demo.\n\n" +
+            separator +
+            "\n\nI will send confidential notes.",
+        ),
+        context,
+      );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.authored_text).toBe("I will review the demo.");
+      expect(result.record.body_text).not.toContain("confidential");
+    }
+  });
+  it.each(["gmail", "calendar"])(
+    "excludes inert fallback and datalist text in %s",
+    (source) => {
+      for (const tag of ["noembed", "noframes", "datalist"]) {
+        const description = `<body><${tag}>I will send confidential notes.</${tag}><p>I will review the demo.</p></body>`;
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result.kind).toBe("accepted");
+        if (result.kind !== "accepted") throw new Error("not accepted");
+        expect(result.record.body_text).toContain("I will review the demo.");
+        expect(result.record.body_text).not.toContain("confidential");
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "uses typed attributes without hiding ordinary links or overflow in %s",
+    (source) => {
+      const description =
+        '<p aria-hidden="false" class="hidden-sm">Read <a href="https://example.invalid/hidden-costs/gmail_quote">this</a>.</p><p style="overflow:hidden">I will review the demo.<p>Thanks';
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.body_text).toContain("Read this.");
+      expect(result.record.body_text).toContain("I will review the demo.");
+      expect(result.record.body_text).toContain("Thanks");
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "quarantines CSS visibility ambiguity before retaining context in %s",
+    (source) => {
+      for (const description of [
+        '<style>.q{display:none}</style><p class="q">I will send confidential notes.</p>',
+        '<style>.x::before { content: "<b>"; }</style><p>I will send the demo by 2026-10-26.</p>',
+        '<link rel="stylesheet" href="https://example.invalid/style.css"><p>I will send confidential notes.</p>',
+        '<p style="display:/**/none">I will send confidential notes.</p>',
+        '<p style="display:n\\one">I will send confidential notes.</p>',
+        '<p style="width:1px;overflow:hidden">I will send confidential notes.</p>',
+        '<p style="position:absolute;left:-9999px">I will send confidential notes.</p>',
+        '<body text="white" bgcolor="white"><p>I will send confidential notes.</p></body>',
+        '<font color="white">I will send confidential notes.</font>',
+        '<table width="0"><tr><td>I will send confidential notes.</td></tr></table>',
+        '<font size="1">I will send confidential notes.</font>',
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "unsupported_css_visibility",
+        });
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "retains supported simple formatting while excluding understood hidden styles in %s",
+    (source) => {
+      const description =
+        '<p style="font-weight:bold;font-size:14px;text-align:left;overflow:hidden">I will review the demo.</p><span style="opacity:0">Confidential.</span><span style="font-size:0">Confidential.</span><span style="color:transparent">Confidential.</span><span style="mso-hide:all">Confidential.</span>';
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.body_text).toContain("I will review the demo.");
+      expect(result.record.body_text).not.toContain("Confidential");
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "preserves literal angle text, table boundaries and wrapped HTML sentences in %s",
+    (source) => {
+      const description =
+        "<p>Budget < 30k; <3; a <= b.</p><p>I will send the deck by\nFriday.</p><table><tr><td>I will send</td><td>the deck</td></tr></table><pre>Keep\nthese lines.</pre>";
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.body_text).toContain("Budget < 30k; <3; a <= b.");
+      expect(result.record.body_text).toContain(
+        "I will send the deck by Friday.",
+      );
+      expect(result.record.body_text).not.toContain("sendthe deck");
+      expect(result.record.body_text).toContain("Keep\nthese lines.");
+    },
+  );
   it("never promotes quote-only/wrapped quoted text into authored text", () => {
     for (const body of [
       "> I will review the demo.\nI will send the password.",
@@ -391,7 +537,6 @@ describe("conservative attribution edge cases", () => {
     (source) => {
       for (const description of [
         "<".repeat(64000),
-        "<" + " ".repeat(96000) + ">",
         '<a title="' + "<".repeat(64000),
         "<!--<p>".repeat(10000),
       ]) {
@@ -414,6 +559,73 @@ describe("conservative attribution edge cases", () => {
           reason: "malformed_html",
         });
         expect(performance.now() - started).toBeLessThan(1000);
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "bounds attribute tokenization before HTML5 allocation in %s",
+    (source) => {
+      const names = Array.from(
+        { length: 40000 },
+        (_, i) => "a" + i.toString(36),
+      );
+      for (const description of [
+        "<a " + names.join(" ") + ">",
+        "<a/" + names.join("/") + ">",
+        "<a " + names.map((n) => n + '=""').join("") + ">",
+        names.map((n) => "<body " + n + ">").join(""),
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const enlarged = {
+          ...context,
+          policy: {
+            ...context.policy,
+            limits: { ...context.policy.limits, max_body_bytes: 1048576 },
+          },
+        };
+        const started = performance.now();
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, enlarged)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...enlarged, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "html_structure_limit",
+        });
+        expect(performance.now() - started).toBeLessThan(1000);
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "retains bounded large text and literal whitespace after an angle in %s",
+    (source) => {
+      for (const description of [
+        "<" + " ".repeat(96000) + ">",
+        "<p>" + "x".repeat(500000) + "</p>",
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const enlarged = {
+          ...context,
+          policy: {
+            ...context.policy,
+            limits: { ...context.policy.limits, max_body_bytes: 1048576 },
+          },
+        };
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, enlarged)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...enlarged, calendar_id: "primary" },
+              );
+        expect(result.kind).toBe("accepted");
       }
     },
   );
@@ -445,7 +657,7 @@ describe("conservative attribution edge cases", () => {
     "bounds HTML5 node allocation and nesting in %s",
     (source) => {
       for (const description of [
-        "<b></b>".repeat(20001),
+        "<!---->".repeat(20001),
         "<div>".repeat(101),
       ]) {
         const input = mail();
@@ -525,7 +737,6 @@ describe("conservative attribution edge cases", () => {
         '<SCRIPT>const s="<b>";</ScRiPt ><p>I will send the demo by 2026-10-26.</p>',
         "<svg/><math/><p>I will send the demo by 2026-10-26.</p>",
         '<svg><rect visibility="hidden"/></svg><math><mi hidden/></math><p>I will send the demo by 2026-10-26.</p>',
-        '<style>.x::before { content: "<b>"; }</style><p>I will send the demo by 2026-10-26.</p>',
         '<div><script>const s="</div><p>ignored";</script></div><p>I will send the demo by 2026-10-26.</p>',
       ]) {
         const input = mail();
@@ -667,7 +878,7 @@ describe("conservative attribution edge cases", () => {
     "preserves visible text after explicitly closed suppressed HTML in %s",
     (source) => {
       const description =
-        "<div><script>ignored</script><style>ignored</style><span hidden>ignored</span></div><p>I will send the demo by 2026-10-26.</p>";
+        "<div><script>ignored</script><style></style><span hidden>ignored</span></div><p>I will send the demo by 2026-10-26.</p>";
       const input = mail();
       input.payload.mimeType = "text/html";
       input.payload.body.data = encoded(description);
