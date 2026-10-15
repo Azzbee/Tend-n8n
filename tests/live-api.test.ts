@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createLiveServer } from "../src/live-api.ts";
 import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { TendStore } from "../src/engine.ts";
+import type { LiveRecord } from "../src/google-records.ts";
 import { exampleLivePolicy } from "../src/live-policy.ts";
 import { request as httpRequest, type Server } from "node:http";
 const key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
@@ -811,6 +812,316 @@ it("reads one owner-bound pending reply without changing delivery state and excl
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
+});
+
+it("withdraws only local LinkedIn evidence with exact owner-authenticated confirmation", async () => {
+  const account = "urn:li:person:fixture-owner";
+  const policy = {
+    ...exampleLivePolicy,
+    social: {
+      window_days: 30 as const,
+      accounts: [
+        {
+          source: "linkedin" as const,
+          provider: "linkedin" as const,
+          account_id: account,
+          owner_identity: account,
+          owner_verified: true as const,
+          profile_bindings: [],
+        },
+      ],
+    },
+  };
+  const clock = () => new Date("2026-10-14T12:00:00Z"),
+    principal = {
+      owner_id: policy.principal_id,
+      user_id: "live-owner",
+      chat_id: "live-private",
+    };
+  const store = new TendStore(":memory:", { mode: "live", principal, clock });
+  const states = [
+    {
+      owner_id: policy.principal_id,
+      source: "linkedin" as const,
+      account_id: account,
+      mode: "live" as const,
+      last_success: null,
+      status: "partial",
+      coverage_start: "2026-09-14T12:00:00.000Z",
+      coverage_end: clock().toISOString(),
+      cursor: null,
+    },
+  ];
+  store.seed(
+    [
+      {
+        owner_id: policy.principal_id,
+        contact_id: "LI-F",
+        name: "Fictional LinkedIn contact",
+      },
+      {
+        owner_id: policy.principal_id,
+        contact_id: "G-F",
+        name: "Fictional Gmail contact",
+      },
+    ],
+    [
+      {
+        owner_id: policy.principal_id,
+        contact_id: "OWNER",
+        identity: policy.account_email,
+      },
+      {
+        owner_id: policy.principal_id,
+        contact_id: "LI-F",
+        identity: "linkedin-fixture-peer",
+      },
+      {
+        owner_id: policy.principal_id,
+        contact_id: "G-F",
+        identity: "gmail-fixture-peer",
+      },
+    ],
+    [
+      ...states,
+      { ...states[0]!, source: "gmail", account_id: policy.account_email },
+    ],
+  );
+  const row = (
+    source: "linkedin" | "gmail",
+    id: string,
+    mode: "live" | "snapshot" = "live",
+  ): LiveRecord => {
+    const text =
+      source === "linkedin"
+        ? "I will send the withdrawal fixture notes by 2026-10-15."
+        : "Unrelated Gmail evidence remains.";
+    return {
+      owner_id: policy.principal_id,
+      source,
+      account_id: source === "linkedin" ? account : policy.account_email,
+      source_record_id: id,
+      source_thread_id: "fixture-thread-" + id,
+      kind: "message",
+      direction: "received",
+      actor_identity:
+        source === "linkedin" ? "linkedin-fixture-peer" : "gmail-fixture-peer",
+      participant_identities: [policy.account_email],
+      occurred_at: "2026-10-14T11:00:00Z",
+      observed_at: clock().toISOString(),
+      body_text: text,
+      evidence_reference: `tend-source:${source}/fixture/${id}`,
+      ingestion_mode: mode,
+      coverage_start: states[0]!.coverage_start,
+      coverage_end: states[0]!.coverage_end,
+      cancelled: false,
+      contact_ids: [source === "linkedin" ? "LI-F" : "G-F"],
+      authored_text: text,
+      authored_spans: [{ start: 0, end: text.length, text }],
+      attribution: "direct",
+      eligible_for_extraction: source === "linkedin",
+    };
+  };
+  const snapshot = row("linkedin", "snapshot-one", "snapshot"),
+    live = row("linkedin", "change-one"),
+    gmail = row("gmail", "gmail-one");
+  store.ingest(snapshot);
+  store.ingest(live);
+  store.ingest(gmail);
+  const candidate = store.addCandidate(snapshot, {
+    quote: snapshot.body_text,
+    action: "send the withdrawal fixture notes",
+    suggested_due: "2026-10-15",
+  });
+  store.telegramCommand(
+    { ...principal, chat_type: "private", text: "/prep LI-F" },
+    "fixture-withdraw",
+    1,
+  );
+  expect(store.cachedReplyText(policy.principal_id)).toContain(
+    "withdrawal fixture notes",
+  );
+  const server = createLiveServer({
+    policy,
+    store,
+    clock,
+    auth: new InternalAuth(undefined, verificationHash(key)),
+  });
+  const base = `http://127.0.0.1:${await listen(server)}`,
+    route = base + "/api/live/linkedin-withdraw";
+  const headers = {
+    Authorization: "Bearer " + key,
+    "Content-Type": "application/json",
+  };
+  const current = () => ({
+    records: store.interactions(policy.principal_id),
+    commitments: store.commitments(policy.principal_id),
+    cache: store.cachedReplyText(policy.principal_id),
+    states: store.sourceStatus(policy.principal_id),
+  });
+  try {
+    await fetch(base + "/api/live/status", { headers });
+    const before = current();
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE",
+          }),
+        })
+      ).status,
+    ).toBe(401);
+    expect(current()).toEqual(before);
+    for (const body of [
+      {},
+      { confirm: "wrong" },
+      { confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE", owner_id: "foreign" },
+      { confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE", source: "gmail" },
+      { confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE", account_id: account },
+    ]) {
+      expect(
+        (
+          await fetch(route, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          })
+        ).status,
+      ).toBe(400);
+      expect(current()).toEqual(before);
+    }
+    const pendingAI = (await (
+      await fetch(
+        base + "/api/live/ai/input?contact_id=LI-F&purpose=briefing",
+        { headers },
+      )
+    ).json()) as { eligible: boolean; request_id: string };
+    expect(pendingAI.eligible).toBe(true);
+    const confirmed = { confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE" };
+    expect(
+      (
+        await fetch(route + "?owner_id=foreign", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(confirmed),
+        })
+      ).status,
+    ).toBe(400);
+    expect(current()).toEqual(before);
+    const removed = await fetch(route, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(confirmed),
+    });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({
+      withdrawn: true,
+      source: "linkedin",
+      scope: "all_local_evidence",
+      status: "revoked",
+      remote_changed: false,
+    });
+    expect(store.interactions(policy.principal_id)).toEqual(
+      before.records.filter((r) => r.source === "gmail"),
+    );
+    expect(
+      store
+        .commitments(policy.principal_id)
+        .find((c) => c.commitment_id === candidate.commitment_id),
+    ).toMatchObject({
+      status: "invalidated",
+      evidence_valid: false,
+      quote: "",
+      action: "",
+      suggested_due: null,
+    });
+    expect(store.cachedReplyText(policy.principal_id)).not.toContain(
+      "withdrawal fixture notes",
+    );
+    expect(
+      store
+        .sourceStatus(policy.principal_id)
+        .find((s) => s.source === "linkedin")?.status,
+    ).toBe("revoked");
+    expect(
+      (
+        await fetch(base + "/api/live/ai/validate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            request_id: pendingAI.request_id,
+            output: {},
+          }),
+        })
+      ).status,
+    ).toBe(400);
+    const after = current();
+    expect(
+      (
+        await fetch(route, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(confirmed),
+        })
+      ).status,
+    ).toBe(200);
+    expect(current()).toEqual(after);
+    const future = await fetch(
+      base +
+        "/api/live/social/read-input?source=linkedin&account_id=" +
+        encodeURIComponent(account) +
+        "&phase=identity",
+      { headers },
+    );
+    expect(future.status).toBe(200);
+    expect(await future.json()).toMatchObject({
+      available: false,
+      reason: "unavailable_social_account",
+    });
+    expect(() =>
+      store.commitLiveBatch({
+        owner_id: policy.principal_id,
+        source: "linkedin",
+        account_id: account,
+        records: [live],
+        seen_record_ids: [live.source_record_id],
+        cursor: null,
+        expected_cursor: null,
+        complete: false,
+        reconcile: false,
+        coverage_start: states[0]!.coverage_start,
+        coverage_end: states[0]!.coverage_end,
+      }),
+    ).toThrow("unregistered live account");
+    store.reconnectLiveSource(
+      policy.principal_id,
+      "linkedin",
+      account,
+      states[0]!.coverage_start,
+      states[0]!.coverage_end,
+    );
+    expect(
+      store
+        .sourceStatus(policy.principal_id)
+        .find((s) => s.source === "linkedin")?.status,
+    ).toBe("partial");
+    expect(
+      await (
+        await fetch(
+          base +
+            "/api/live/social/read-input?source=linkedin&account_id=" +
+            encodeURIComponent(account) +
+            "&phase=identity",
+          { headers },
+        )
+      ).json(),
+    ).toMatchObject({ available: true });
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
     store.close();
   }
 });

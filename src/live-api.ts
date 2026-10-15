@@ -492,6 +492,28 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      if (url.pathname === "/api/live/linkedin-withdraw") {
+        if (
+          url.search ||
+          Object.keys(value).length !== 1 ||
+          value.confirm !== "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE"
+        )
+          throw new Error("Explicit LinkedIn withdrawal confirmation required");
+        await store.revokeSource(owner, "linkedin");
+        for (const [id, entry] of pendingAI)
+          if (
+            entry.prepared.evidence.some((item) => item.source === "linkedin")
+          )
+            pendingAI.delete(id);
+        respond(200, {
+          withdrawn: true,
+          source: "linkedin",
+          scope: "all_local_evidence",
+          status: "revoked",
+          remote_changed: false,
+        });
+        return;
+      }
       if (url.pathname === "/api/live/social/read-result") {
         if (!socialReads) throw new Error("Social source not configured");
         respond(200, await socialReads.result(value));
