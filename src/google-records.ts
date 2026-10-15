@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import { domainToASCII } from "node:url";
+import {
+  parse,
+  defaultTreeAdapter,
+  type DefaultTreeAdapterTypes,
+  type TreeAdapter,
+  type DefaultTreeAdapterMap,
+} from "parse5";
 import type { Contact, Identity, RawRecord } from "./engine.ts";
 import {
   assertGoogleRead,
@@ -306,36 +313,95 @@ function part(value: unknown, budget: { nodes: number }, depth = 0): GmailPart {
   if (p.filename !== undefined) result.filename = string(p.filename);
   return result;
 }
-function entities(value: string): string {
-  const named: Record<string, string> = {
-    amp: "&",
-    lt: "<",
-    gt: ">",
-    quot: '"',
-    apos: "'",
-    nbsp: " ",
-    ndash: "–",
-    mdash: "—",
-    hellip: "…",
-    copy: "©",
-  };
-  return value.replace(
-    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
-    (whole: string, key: string) => {
-      if (key[0] !== "#") return named[key.toLowerCase()] ?? whole;
-      const code =
-        key[1]?.toLowerCase() === "x"
-          ? parseInt(key.slice(2), 16)
-          : parseInt(key.slice(1), 10);
-      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
-        ? String.fromCodePoint(code)
-        : "�";
-    },
-  );
-}
-/** Text-only HTML tokenizer. Attributes are never interpreted as URLs or fetched. */
+/** HTML5 AST text only. Parsing never fetches resources or executes scripts. */
 function htmlText(html: string): string {
-  const stack: { tag: string; suppressed: boolean }[] = [];
+  if (Buffer.byteLength(html, "utf8") > 1048576)
+    throw new Error("body_size_limit");
+  let allocated = 0;
+  const allocate = (): void => {
+    if (++allocated > 20000) throw new Error("html_structure_limit");
+  };
+  const depth = (parent: DefaultTreeAdapterTypes.ParentNode): void => {
+    let n: DefaultTreeAdapterTypes.Node | null = parent,
+      level = 0;
+    while (n) {
+      if (++level > 100) throw new Error("html_structure_limit");
+      n = "parentNode" in n ? n.parentNode : null;
+    }
+  };
+  const adapter: TreeAdapter<DefaultTreeAdapterMap> = {
+    ...defaultTreeAdapter,
+    createElement(...args) {
+      allocate();
+      return defaultTreeAdapter.createElement(...args);
+    },
+    createCommentNode(data) {
+      allocate();
+      return defaultTreeAdapter.createCommentNode(data);
+    },
+    createDocumentFragment() {
+      allocate();
+      return defaultTreeAdapter.createDocumentFragment();
+    },
+    createTextNode(data) {
+      allocate();
+      return defaultTreeAdapter.createTextNode(data);
+    },
+    appendChild(parent, child) {
+      depth(parent);
+      defaultTreeAdapter.appendChild(parent, child);
+    },
+    insertBefore(parent, child, reference) {
+      depth(parent);
+      defaultTreeAdapter.insertBefore(parent, child, reference);
+    },
+    insertText(parent, text) {
+      const previous = parent.childNodes.at(-1);
+      if (!previous || !defaultTreeAdapter.isTextNode(previous)) allocate();
+      defaultTreeAdapter.insertText(parent, text);
+    },
+    insertTextBefore(parent, text, reference) {
+      const previous =
+        parent.childNodes[parent.childNodes.indexOf(reference) - 1];
+      if (!previous || !defaultTreeAdapter.isTextNode(previous)) allocate();
+      defaultTreeAdapter.insertTextBefore(parent, text, reference);
+    },
+  };
+  const document = parse(html, {
+    treeAdapter: adapter,
+    sourceCodeLocationInfo: true,
+    onParseError(error) {
+      if (
+        [
+          "non-void-html-element-start-tag-with-trailing-solidus",
+          "eof-in-element-that-can-contain-only-text",
+          "eof-in-script-html-comment-like-text",
+        ].includes(error.code)
+      )
+        throw new Error("malformed_suppressed_html");
+      if (
+        [
+          "eof-in-comment",
+          "eof-in-tag",
+          "eof-before-tag-name",
+          "invalid-first-character-of-tag-name",
+        ].includes(error.code)
+      )
+        throw new Error("malformed_html");
+    },
+  });
+  const suppressedTags = new Set([
+    "head",
+    "script",
+    "style",
+    "title",
+    "iframe",
+    "object",
+    "svg",
+    "math",
+    "noscript",
+    "template",
+  ]);
   const voidTags = new Set([
     "area",
     "base",
@@ -365,92 +431,81 @@ function htmlText(html: string): string {
     "article",
     "pre",
   ]);
-  let text = "";
-  for (let offset = 0; offset < html.length;) {
-    let end: number;
-    if (html[offset] !== "<") {
-      end = html.indexOf("<", offset);
-      if (end < 0) end = html.length;
-    } else if (html.startsWith("<!--", offset)) {
-      const close = html.indexOf("-->", offset + 4);
-      if (close < 0) throw new Error("malformed_html");
-      end = close + 3;
-    } else {
-      let quote = "";
-      for (end = offset + 1; end < html.length; end++) {
-        const char = html[end]!;
-        if (quote) {
-          if (char === quote) quote = "";
-        } else if (char === '"' || char === "'") quote = char;
-        else if (char === ">") break;
-        else if (char === "<") throw new Error("malformed_html");
-      }
-      if (end === html.length) throw new Error("malformed_html");
-      end++;
+  const quoteMarker =
+    /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature|divRplyFwdMsg)/i;
+  const attributes = (node: DefaultTreeAdapterTypes.Element): string =>
+    node.attrs.map((a) => a.name + "=" + a.value).join(" ");
+  const suppressed = (node: DefaultTreeAdapterTypes.Element): boolean =>
+    suppressedTags.has(node.tagName) ||
+    /(?:\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden)/i.test(
+      attributes(node),
+    );
+  const pending: { node: DefaultTreeAdapterTypes.Node; level: number }[] = [
+    { node: document, level: 0 },
+  ];
+  let visited = 0,
+    cutoff = html.length;
+  while (pending.length) {
+    const { node, level } = pending.pop()!;
+    if (++visited > 20000 || level > 100)
+      throw new Error("html_structure_limit");
+    if (defaultTreeAdapter.isElementNode(node)) {
+      const location = node.sourceCodeLocation;
+      if (node.tagName === "blockquote" || quoteMarker.test(attributes(node)))
+        cutoff = Math.min(cutoff, location?.startOffset ?? 0);
+      if (
+        suppressed(node) &&
+        location &&
+        !location.endTag &&
+        node.tagName !== "head" &&
+        !voidTags.has(node.tagName) &&
+        node.namespaceURI === "http://www.w3.org/1999/xhtml"
+      )
+        throw new Error("malformed_suppressed_html");
+      if (
+        node.tagName === "template" &&
+        node.namespaceURI === "http://www.w3.org/1999/xhtml"
+      )
+        pending.push({
+          node: defaultTreeAdapter.getTemplateContent(
+            node as DefaultTreeAdapterTypes.Template,
+          ),
+          level: level + 1,
+        });
     }
-    const token = html.slice(offset, end);
-    offset = end;
-    if (token.startsWith("<!--") || token.startsWith("<!")) continue;
-    if (token === "<") throw new Error("malformed_html");
-    if (!token.startsWith("<")) {
-      if (!stack.some((s) => s.suppressed)) text += entities(token);
-      continue;
-    }
-    let content = token.slice(1, -1).trimStart();
-    const closing = content.startsWith("/");
-    if (closing) content = content.slice(1).trimStart();
-    const match = /^([a-z][a-z0-9:-]*)\b([\s\S]*)$/i.exec(content);
-    if (!match) throw new Error("malformed_html");
-    const tag = match[1]!.toLowerCase(),
-      attrs = entities(match[2]!);
-    // Stop at a quotation/signature marker. Following unmarked text may still
-    // be part of a wrapped quoted reply, rather than newly authored evidence.
-    if (
-      !closing &&
-      (tag === "blockquote" ||
-        /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature|divRplyFwdMsg)/i.test(
-          attrs,
-        ))
-    )
-      return text;
-    const parentBlocked = stack.some((s) => s.suppressed);
-    if (closing) {
-      let index = stack.length - 1;
-      while (index >= 0 && stack[index]?.tag !== tag) index--;
-      if (index < 0) {
-        if (voidTags.has(tag)) continue;
-        throw new Error("malformed_html");
-      }
-      stack.splice(index);
-      if (blocks.has(tag) && !stack.some((s) => s.suppressed)) text += "\n";
-      continue;
-    }
-    const suppressed =
-      parentBlocked ||
-      [
-        "blockquote",
-        "script",
-        "style",
-        "head",
-        "title",
-        "iframe",
-        "object",
-        "svg",
-        "math",
-        "noscript",
-      ].includes(tag) ||
-      /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature)/i.test(
-        attrs,
-      ) ||
-      /(?:\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden)/i.test(attrs);
-    if (!suppressed && (blocks.has(tag) || tag === "br" || tag === "hr"))
-      text += "\n";
-    if (!voidTags.has(tag) && !/\/\s*$/.test(attrs))
-      stack.push({ tag, suppressed });
-    if (stack.length > 100) throw new Error("html_structure_limit");
+    if ("childNodes" in node)
+      for (const child of node.childNodes)
+        pending.push({ node: child, level: level + 1 });
   }
-  if (stack.some((s) => s.suppressed))
-    throw new Error("malformed_suppressed_html");
+  let text = "";
+  const render: { node: DefaultTreeAdapterTypes.Node; closing: boolean }[] = [
+    { node: document, closing: false },
+  ];
+  while (render.length) {
+    const { node, closing } = render.pop()!;
+    if (defaultTreeAdapter.isTextNode(node)) {
+      const location = node.sourceCodeLocation;
+      if (location && location.endOffset <= cutoff) text += node.value;
+      continue;
+    }
+    if (defaultTreeAdapter.isElementNode(node)) {
+      if (
+        suppressed(node) ||
+        (node.sourceCodeLocation?.startOffset ?? -1) >= cutoff
+      )
+        continue;
+      if (
+        blocks.has(node.tagName) ||
+        (!closing && ["br", "hr"].includes(node.tagName))
+      )
+        text += "\n";
+    }
+    if (!closing && "childNodes" in node) {
+      render.push({ node, closing: true });
+      for (let i = node.childNodes.length - 1; i >= 0; i--)
+        render.push({ node: node.childNodes[i]!, closing: false });
+    }
+  }
   return text;
 }
 function mimeText(
