@@ -690,7 +690,17 @@ export function normalizeLinkedInChange(
       );
     if (!["CREATE", "UPDATE", "PARTIAL_UPDATE"].includes(str(raw.method)))
       throw new Error("unsupported_method");
-    const a = obj(raw.processedActivity);
+    const rawActivity = !Object.hasOwn(raw, "processedActivity");
+    if (
+      rawActivity &&
+      !["SUCCESS", "SUCCESSFUL_REPLAY"].includes(String(raw.activityStatus))
+    )
+      throw new Error("provider_processing_failure");
+    const a = obj(rawActivity ? raw.activity : raw.processedActivity);
+    if (rawActivity) {
+      if (id(a.id) !== recordId) throw new Error("activity_resource_mismatch");
+      instant(a.createdAt, "milliseconds");
+    }
     if (
       raw.method !== "CREATE" &&
       a.createdAt === undefined &&
@@ -706,12 +716,19 @@ export function normalizeLinkedInChange(
     const actor = liIdentity(raw.actor);
     if (liIdentity(a.author) !== actor) throw new Error("actor_mismatch");
     const membership =
-      a["thread~"] === undefined ? undefined : obj(a["thread~"]).membership;
+      rawActivity || a["thread~"] === undefined
+        ? undefined
+        : obj(a["thread~"]).membership;
     const participants =
       membership === undefined
         ? [...new Set([context.owner_identity, actor])]
         : list(membership, 1000).map((m) => liMembershipIdentity(m));
     const content = obj(a.content);
+    if (rawActivity && content.format !== "TEXT")
+      throw new Error("unsupported_message_format");
+    const text = rawActivity
+      ? str(content.fallback, 262144)
+      : str(obj(content.content).string, 262144);
     return message(
       {
         source: "linkedin",
@@ -727,7 +744,7 @@ export function normalizeLinkedInChange(
             : raw.method === "CREATE"
               ? instant(raw.capturedAt, "milliseconds")
               : originalTime(context, recordId),
-        text: str(obj(content.content).string, 262144),
+        text,
         mode: "live",
       },
       context,

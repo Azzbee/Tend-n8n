@@ -1146,3 +1146,95 @@ it("expires authenticated old snapshots before identity attribution without hidi
     normalizeLinkedInSnapshot({ ...input, DATE: "not-a-date" }, liCtx).kind,
   ).toBe("quarantined");
 });
+
+describe("LinkedIn raw activity compatibility", () => {
+  const rawChange = () => {
+    const { processedActivity, ...event } = liChange();
+    return {
+      ...event,
+      activity: {
+        id: event.resourceId,
+        author: event.actor,
+        thread: processedActivity.thread,
+        createdAt: now.getTime() - 1000,
+        content: { format: "TEXT", fallback: "I'll call you." },
+      },
+    };
+  };
+  it("accepts authenticated complete raw TEXT activity only as unattributed context", () => {
+    const input = rawChange(),
+      a = accepted(normalizeLinkedInChange(input, liCtx));
+    expect(a.record.source_record_id).toBe(input.resourceId);
+    expect(a.record.actor_identity).toContain(input.actor);
+    expect(a.record.direction).toBe("received");
+    expect(a.record.body_text).toBe(input.activity.content.fallback);
+    expect(a.record.ingestion_mode).toBe("live");
+    expect(a.record.attribution).toBe("unknown");
+    expect(a.record.eligible_for_extraction).toBe(false);
+    expect(a.record.source_record_id).toBe(
+      accepted(normalizeLinkedInChange(input, liCtx)).record.source_record_id,
+    );
+    const claimedMembership = {
+      ...input,
+      activity: {
+        ...input.activity,
+        "thread~": {
+          membership: [
+            { identity: liCtx.owner_identity },
+            { identity: input.actor },
+          ],
+        },
+      },
+    };
+    expect(
+      accepted(normalizeLinkedInChange(claimedMembership, liCtx)).record
+        .eligible_for_extraction,
+    ).toBe(false);
+  });
+  it("never hides malformed processed data or weakens raw owner, author, ID, format and timestamp guards", () => {
+    const input = rawChange();
+    for (const patch of [
+      { owner: "urn:li:person:foreign" },
+      { activityStatus: "FAILURE" },
+      { activityStatus: undefined },
+      { resourceName: "connections" },
+      { processedActivity: null },
+      { processedActivity: { message: "Unable to process this event." } },
+      { activity: { ...input.activity, id: "different-resource" } },
+      { activity: { ...input.activity, author: "urn:li:person:foreign" } },
+      {
+        activity: {
+          ...input.activity,
+          content: { format: "HTML", fallback: "Unapproved rich text" },
+        },
+      },
+      {
+        activity: {
+          ...input.activity,
+          content: { format: "TEXT", fallback: null },
+        },
+      },
+      { activity: { ...input.activity, createdAt: now.getTime() + 1000 } },
+      { activity: { ...input.activity, createdAt: "not-a-time" } },
+      { activity: { ...input.activity, createdAt: undefined } },
+    ])
+      expect(normalizeLinkedInChange({ ...input, ...patch }, liCtx).kind).toBe(
+        "quarantined",
+      );
+    expect(
+      normalizeLinkedInChange(input, { ...liCtx, authenticated: null }).kind,
+    ).toBe("quarantined");
+    expect(
+      normalizeLinkedInChange(
+        {
+          ...input,
+          activity: {
+            ...input.activity,
+            createdAt: now.getTime() - 31 * 86400000,
+          },
+        },
+        liCtx,
+      ).kind,
+    ).toBe("expired");
+  });
+});

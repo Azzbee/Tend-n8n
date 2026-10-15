@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-15T13:12:21.210Z",
+  "checked_at": "2026-10-15T13:19:56.655Z",
   "scope": "Isolated n8n native-node tests with fictional Google provider and OAuth tokens. No real inbox or Calendar reads; no actual Google authorization claim.",
   "runtime": {
     "n8n": "2.43.4",
