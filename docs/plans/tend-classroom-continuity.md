@@ -1,6 +1,6 @@
 # Tend: free classroom continuity through 22 October
 
-Status: prepared for Adam review. Not approved or installed. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions, support messages or coursework submission.
+Status: approved by Adam in chat on 16 October 2026. Implementation and verification in progress. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions or coursework submission. Adam separately authorized sending the prepared free-extension request to Unipile.
 
 ## Findings
 
