@@ -545,7 +545,13 @@ export class PostgresStore implements LiveStore {
         if (state.cursor?.startsWith("li-change:")) {
           if (state.cursor !== resumeCursor)
             throw new Error("stale changelog resume cursor");
-        } else if (state.cursor !== null || state.status !== "current")
+        } else if (
+          state.cursor !== null ||
+          !(
+            state.status === "current" ||
+            (state.status === "partial" && state.pagination_complete === true)
+          )
+        )
           throw new Error("completed snapshot required before changes");
         if (
           !exactTimestamp(start) ||

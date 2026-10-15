@@ -677,6 +677,168 @@ describe.each(["sqlite", "postgres"] as const)(
         reason: "social_request_expired_or_consumed",
       });
     });
+    it("hands terminal partial LinkedIn snapshots to changes without erasing historical gaps", async () => {
+      const proof_id = await linkedIdentity();
+      let p = request(
+        await sessions.plan({ ...linked, phase: "snapshot", proof_id }),
+      );
+      expect(
+        await sessions.result({
+          request_id: p.request_id,
+          status: 200,
+          body: {
+            elements: [
+              {
+                snapshotDomain: "INBOX",
+                snapshotData: [
+                  {
+                    "CONVERSATION ID": "unattributed",
+                    DATE: "2026-10-13T12:00:00Z",
+                    FROM: "Unknown",
+                    TO: "Owner",
+                    CONTENT: "Unattributed historical evidence",
+                  },
+                ],
+              },
+            ],
+            paging: { start: 0, count: 10, links: [] },
+          },
+        }),
+      ).toMatchObject({ kind: "page", accepted: 0, quarantined: 1 });
+      p = request(
+        await sessions.plan({ ...linked, phase: "snapshot", proof_id }),
+      );
+      await sessions.result({
+        request_id: p.request_id,
+        status: 404,
+        body: {
+          status: 404,
+          message: "No data found for this domain and memberId.",
+        },
+      });
+      const before = (await store.sourceStatus(owner)).find(
+        (x) => x.source === "linkedin",
+      )!;
+      expect(before).toMatchObject({
+        status: "partial",
+        cursor: null,
+        pagination_complete: true,
+        evidence_incomplete: true,
+        last_success: null,
+      });
+      const changes = request(
+        await sessions.plan({ ...linked, phase: "changes", proof_id }),
+      );
+      const baseline = `li-change:${now.getTime() - 86400000}`;
+      expect(changes.plan.expected_cursor).toBe(baseline);
+      expect(
+        (await store.sourceStatus(owner)).find((x) => x.source === "linkedin"),
+      ).toMatchObject({
+        status: "partial",
+        cursor: baseline,
+        pagination_complete: false,
+        evidence_incomplete: true,
+        last_success: null,
+      });
+      expect(
+        await sessions.result({
+          request_id: changes.request_id,
+          status: 200,
+          body: { elements: [] },
+        }),
+      ).toMatchObject({ kind: "page", complete: false, gap_free: false });
+      expect(
+        (await store.sourceStatus(owner)).find((x) => x.source === "linkedin"),
+      ).toMatchObject({
+        status: "partial",
+        cursor: baseline,
+        evidence_incomplete: true,
+        last_success: null,
+      });
+      expect(
+        await sessions.result({
+          request_id: changes.request_id,
+          status: 200,
+          body: { elements: [] },
+        }),
+      ).toEqual({
+        kind: "blocked",
+        reason: "social_request_expired_or_consumed",
+      });
+      now = new Date(now.getTime() + 60000);
+      expect(
+        request(await sessions.plan({ ...linked, phase: "changes", proof_id }))
+          .plan.expected_cursor,
+      ).toBe(baseline);
+      expect(await store.quarantineCount(owner)).toBe(1);
+    });
+    it("rejects an unproven or revoked snapshot handoff in the store transaction", async () => {
+      const base = (await store.sourceStatus(owner)).find(
+        (x) => x.source === "linkedin",
+      )!;
+      let index = 0;
+      for (const patch of [
+        { status: "partial", cursor: null },
+        { status: "partial", cursor: null, pagination_complete: false },
+        {
+          status: "partial",
+          cursor: "li-snapshot:1",
+          pagination_complete: true,
+        },
+        { status: "stale", cursor: null, pagination_complete: true },
+        { status: "revoked", cursor: null, pagination_complete: true },
+      ]) {
+        const account_id = `urn:li:person:negative-${index++}`;
+        const next = { ...base, account_id, ...patch };
+        await store.seed([], [], [next]);
+        await expect(
+          Promise.resolve().then(() =>
+            store.prepareLiveSnapshot(
+              owner,
+              "linkedin",
+              account_id,
+              base.coverage_start,
+              base.coverage_end,
+              `li-change:${now.getTime() - 86400000}`,
+            ),
+          ),
+        ).rejects.toThrow();
+        expect(
+          (await store.sourceStatus(owner)).find(
+            (x) => x.account_id === account_id,
+          ),
+        ).toEqual(next);
+      }
+    });
+    it("rejects a stale terminal snapshot despite a still-fresh identity proof", async () => {
+      const proof_id = await linkedIdentity();
+      await completeLinkedSnapshot(proof_id);
+      await store.markLiveSyncError(
+        owner,
+        "linkedin",
+        linked.account_id,
+        false,
+        null,
+        500,
+      );
+      const before = (await store.sourceStatus(owner)).find(
+        (s) => s.source === "linkedin",
+      )!;
+      expect(before).toMatchObject({
+        status: "stale",
+        cursor: null,
+        pagination_complete: true,
+      });
+      expect(
+        await sessions.plan({ ...linked, phase: "changes", proof_id }),
+      ).toEqual({
+        available: false,
+        reason: "completed_snapshot_required_before_changes",
+      });
+      expect(
+        (await store.sourceStatus(owner)).find((s) => s.source === "linkedin"),
+      ).toEqual(before);
+    });
     it("requires completed LinkedIn snapshot then preserves changelog watermark across fresh windows", async () => {
       const proof_id = await linkedIdentity();
       expect(

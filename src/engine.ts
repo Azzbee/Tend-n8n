@@ -884,7 +884,12 @@ export class TendStore {
           !Number.isSafeInteger(watermark) ||
           (state.cursor?.startsWith("li-change:")
             ? state.cursor !== resumeCursor
-            : state.cursor !== null || state.status !== "current")
+            : state.cursor !== null ||
+              !(
+                state.status === "current" ||
+                (state.status === "partial" &&
+                  state.pagination_complete === true)
+              ))
         )
           throw new Error("stale or unproven live resume cursor");
       }

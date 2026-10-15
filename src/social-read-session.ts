@@ -191,7 +191,9 @@ export class SocialReadSessions {
           let resume: string;
           if (state.cursor?.startsWith("li-change:")) resume = state.cursor;
           else if (
-            state.status === "current" &&
+            (state.status === "current" ||
+              (state.status === "partial" &&
+                state.pagination_complete === true)) &&
             state.cursor === null &&
             proof.baseline_cursor
           )
