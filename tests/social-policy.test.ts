@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  validatedLinkedInProfileUrl,
   parseSocialPolicy,
   assertSocialRead,
   socialWindow,
@@ -268,4 +269,130 @@ describe("explicit Unipile Business binding", () => {
       }),
     ).toThrow();
   });
+});
+
+it("accepts provider-verified owner profile provenance but rejects inferred contact URNs", () => {
+  const owner = {
+    ...example.accounts[2],
+    profile_bindings: [
+      {
+        profile_url: "https://www.linkedin.com/in/fixture-owner/",
+        member_urn: "urn:li:person:owner",
+        verified_by: "provider",
+      },
+    ],
+  };
+  expect(
+    parseSocialPolicy({ window_days: 30, accounts: [owner] })?.accounts[0],
+  ).toMatchObject({ profile_bindings: [{ verified_by: "provider" }] });
+  for (const patch of [
+    { verified_by: "guessed" },
+    { verified_by: "provider", member_urn: "urn:li:person:other" },
+    { profile_url: "https://www.linkedin.com/in/owner\\suffix" },
+    { profile_url: " https://www.linkedin.com/in/owner" },
+    { profile_url: "https://www.linkedin.com/in/owner%2fother" },
+  ])
+    expect(() =>
+      parseSocialPolicy({
+        window_days: 30,
+        accounts: [
+          {
+            ...owner,
+            profile_bindings: [{ ...owner.profile_bindings[0], ...patch }],
+          },
+        ],
+      }),
+    ).toThrow();
+  expect(() =>
+    parseSocialPolicy({
+      window_days: 30,
+      accounts: [
+        {
+          ...owner,
+          profile_bindings: [
+            owner.profile_bindings[0],
+            {
+              ...owner.profile_bindings[0],
+              profile_url: "https://www.linkedin.com/in/fixture-owner",
+            },
+          ],
+        },
+      ],
+    }),
+  ).toThrow("duplicate profile binding");
+});
+
+it("rejects all raw and encoded ASCII controls and profile path aliases", () => {
+  const bad = [
+    ...Array.from(
+      { length: 33 },
+      (_, i) =>
+        `https://www.linkedin.com/in/fixture${String.fromCharCode(i === 32 ? 127 : i)}peer`,
+    ),
+    ...Array.from(
+      { length: 33 },
+      (_, i) =>
+        `https://www.linkedin.com/in/fixture%${(i === 32 ? 127 : i).toString(16).padStart(2, "0")}peer`,
+    ),
+    "https://www.linkedin.com/in/%61dam",
+    "https://www.linkedin.com/in/fixture%2epeer",
+    "https://www.linkedin.com/in/fixture%C2%85peer",
+    "https://www.linkedin.com/in/fixture%C2%9fpeer",
+    "https://www.linkedin.com/in/fixture%ffpeer",
+    "https://www.linkedin.com/a/../in/fixture-peer",
+    "https://www.linkedin.com/in/a/../fixture-peer",
+    "https://www.linkedin.com/in/%2e%2e/in/fixture-peer",
+    "https://www.linkedin.com/in/fixture-peer?query=1",
+    "https://www.linkedin.com/in/fixture-peer#fragment",
+    "https://www.linkedin.com:443/in/fixture-peer",
+    "https://user@www.linkedin.com/in/fixture-peer",
+  ];
+  for (const profile_url of bad) {
+    expect(() => validatedLinkedInProfileUrl(profile_url)).toThrow();
+    expect(() =>
+      parseSocialPolicy({
+        window_days: 30,
+        accounts: [
+          {
+            ...example.accounts[2],
+            profile_bindings: [
+              {
+                profile_url,
+                member_urn: "urn:li:person:owner",
+                verified_by: "provider",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+  }
+  expect(
+    validatedLinkedInProfileUrl("https://www.linkedin.com/in/fixture-peer/"),
+  ).toBe("https://www.linkedin.com/in/fixture-peer/");
+});
+
+it("allows only one independently provider-verified owner profile per account", () => {
+  expect(() =>
+    parseSocialPolicy({
+      window_days: 30,
+      accounts: [
+        {
+          ...example.accounts[2],
+          profile_bindings: [
+            {
+              profile_url: "https://www.linkedin.com/in/fixture-owner",
+              member_urn: "urn:li:person:owner",
+              verified_by: "provider",
+            },
+            {
+              profile_url: "https://www.linkedin.com/in/another-owner-url",
+              member_urn: "urn:li:person:owner",
+              verified_by: "provider",
+            },
+          ],
+        },
+      ],
+    }),
+  ).toThrow("multiple provider owner profiles");
 });

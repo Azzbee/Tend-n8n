@@ -25,7 +25,7 @@ export interface LinkedInAccount extends AccountBinding {
   profile_bindings: {
     profile_url: string;
     member_urn: string;
-    verified_by: "owner";
+    verified_by: "owner" | "provider";
   }[];
 }
 export type SocialAccount =
@@ -86,9 +86,36 @@ function providerBase(value: unknown): string {
     throw new Error("unapproved provider host");
   return url.origin;
 }
-function profile(value: unknown): string {
-  if (typeof value !== "string" || value.length > 2048)
+export function validatedLinkedInProfileUrl(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 2048 ||
+    /[\s\\]/u.test(value) ||
+    Array.from(value).some(
+      (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+    ) ||
+    /%(?:0[0-9a-f]|1[0-9a-f]|7f|2f|5c)/i.test(value) ||
+    !/^https:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9_.%~-]+\/?$/.test(value) ||
+    /%(?![0-9a-f]{2})/i.test(value)
+  )
     throw new Error("invalid profile URL");
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new Error("invalid profile URL");
+  }
+  if (
+    Array.from(decoded).some(
+      (char) => char.charCodeAt(0) >= 127 && char.charCodeAt(0) <= 159,
+    ) ||
+    Array.from(value.matchAll(/%([0-9a-f]{2})/gi)).some((match) =>
+      /^[A-Za-z0-9._~-]$/.test(
+        String.fromCharCode(Number.parseInt(match[1]!, 16)),
+      ),
+    )
+  )
+    throw new Error("noncanonical profile URL");
   let url: URL;
   try {
     url = new URL(value);
@@ -174,19 +201,26 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
       const profile_bindings = a.profile_bindings.map((inputBinding) => {
         const b = object(inputBinding);
         keys(b, ["profile_url", "member_urn", "verified_by"]);
-        if (b.verified_by !== "owner")
+        if (
+          b.verified_by !== "owner" &&
+          !(b.verified_by === "provider" && b.member_urn === owner_identity)
+        )
           throw new Error("profile verification required");
         return {
-          profile_url: profile(b.profile_url),
+          profile_url: validatedLinkedInProfileUrl(b.profile_url),
           member_urn: member(b.member_urn),
-          verified_by: "owner" as const,
+          verified_by: b.verified_by as "owner" | "provider",
         };
       });
       if (
-        new Set(profile_bindings.map((b) => b.profile_url)).size !==
-        profile_bindings.length
+        new Set(profile_bindings.map((b) => b.profile_url.replace(/\/$/, "")))
+          .size !== profile_bindings.length
       )
         throw new Error("duplicate profile binding");
+      if (
+        profile_bindings.filter((b) => b.verified_by === "provider").length > 1
+      )
+        throw new Error("multiple provider owner profiles");
       return { ...binding, source, provider: "linkedin", profile_bindings };
     }
     throw new Error("unapproved social provider/source");

@@ -335,3 +335,101 @@ it.each(["whatsapp_personal", "whatsapp_business"] as const)(
     }
   },
 );
+
+it("normalizes and replays1181LinkedIn URL rows inside the existing node budget", () => {
+  const owner = "https://www.linkedin.com/in/fixture-owner/";
+  const account = {
+    source: "linkedin",
+    provider: "linkedin",
+    account_id: "urn:li:person:owner",
+    owner_identity: "urn:li:person:owner",
+    owner_verified: true,
+    profile_bindings: [
+      {
+        profile_url: owner,
+        member_urn: "urn:li:person:owner",
+        verified_by: "owner",
+      },
+    ],
+  };
+  const p = parseSocialPolicy({ window_days: 30, accounts: [account] })!;
+  const r: SocialSyncRequest = {
+    ...request(),
+    source: "linkedin",
+    account_id: account.account_id,
+    format: "linkedin_snapshot",
+    items: Array.from({ length: 1181 }, (_, i) => ({
+      "CONVERSATION ID": `thread-${i}`,
+      "SENDER PROFILE URL": "https://www.linkedin.com/in/fixture-other/",
+      "RECIPIENT PROFILE URLS": owner,
+      FROM: "Mira",
+      TO: "Owner",
+      DATE: "2026-10-13T12:00:00Z",
+      CONTENT: "I'll send the report.",
+    })),
+  };
+  const ctx = {
+    ...context,
+    authenticated: {
+      provider: "linkedin" as const,
+      account_id: account.account_id,
+    },
+  };
+  const a = normalizeSocialBatch(p, r, ctx),
+    b = normalizeSocialBatch(p, r, ctx);
+  expect(a.batch.records).toHaveLength(1181);
+  expect(a.batch.quarantines).toHaveLength(0);
+  const store = new TendStore(":memory:", {
+    mode: "live",
+    principal: { owner_id: "owner", user_id: "u", chat_id: "c" },
+    clock: () => context.now,
+  });
+  try {
+    store.seed(
+      [],
+      [],
+      [
+        {
+          owner_id: "owner",
+          source: "linkedin",
+          account_id: account.account_id,
+          mode: "live",
+          last_success: null,
+          status: "partial",
+          coverage_start: r.coverage_start,
+          coverage_end: r.coverage_end,
+          cursor: null,
+        },
+      ],
+    );
+    a.batch.operation_hash = a.page_hash;
+    b.batch.operation_hash = b.page_hash;
+    expect(store.commitLiveBatch(a.batch)).toHaveLength(1181);
+    expect(store.commitLiveBatch(b.batch)).toHaveLength(0);
+    expect(store.sourceStatus("owner")[0]?.cursor).toBe(r.cursor);
+  } finally {
+    store.close();
+  }
+
+  expect(a.page_hash).toBe(b.page_hash);
+  expect(a.batch.records.map((x) => x.source_record_id)).toEqual(
+    b.batch.records.map((x) => x.source_record_id),
+  );
+  expect(() =>
+    normalizeSocialBatch(p, { ...r, items: Array(2001).fill({}) }, ctx),
+  ).toThrow("invalid social page");
+  expect(() =>
+    normalizeSocialBatch(
+      policy,
+      { ...request(), items: Array(1001).fill({}) },
+      context,
+    ),
+  ).toThrow("invalid social page");
+  expect(() =>
+    normalizeSocialBatch(
+      p,
+      { ...r, items: [{ extra: Array(20001).fill(0) }] },
+      ctx,
+    ),
+  ).toThrow("social page limit");
+});

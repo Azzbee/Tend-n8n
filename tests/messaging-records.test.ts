@@ -1017,3 +1017,132 @@ describe("provider-attested outgoing WhatsApp LIDs", () => {
     },
   );
 });
+
+describe("provider LinkedIn snapshot URL columns", () => {
+  const owner = "https://www.linkedin.com/in/fictional-owner/";
+  const other = "https://www.linkedin.com/in/fictional-mira/";
+  const row = () => ({
+    "CONVERSATION ID": "url-thread",
+    FROM: "Shared display name",
+    TO: "Shared display name",
+    "SENDER PROFILE URL": other,
+    "RECIPIENT PROFILE URLS": owner,
+    DATE: "2026-10-13 12:00:00 UTC",
+    CONTENT: "I'll send the report.",
+  });
+  const context = () => ({
+    ...liCtx,
+    linkedin_profile_bindings: { [owner]: liCtx.owner_identity },
+  });
+  it("uses provider URL identities separately from member URNs and display names", () => {
+    const a = accepted(normalizeLinkedInSnapshot(row(), context()));
+    expect(a.record.direction).toBe("received");
+    expect(a.record.attribution).toBe("direct");
+    expect(a.record.actor_identity).toContain("snapshot-profile:");
+    expect(a.contacts[0]?.name).toBe(other.replace(/\/$/, ""));
+    expect(a.record.actor_identity).not.toContain("urn:li:person:other");
+    expect(a.record.eligible_for_extraction).toBe(true);
+    expect(a.record.source_record_id).toBe(
+      accepted(
+        normalizeLinkedInSnapshot(
+          { ...row(), FROM: "Different name" },
+          context(),
+        ),
+      ).record.source_record_id,
+    );
+    expect(a.identities.some((x) => x.contact_id === "OWNER")).toBe(true);
+    const sent = accepted(
+      normalizeLinkedInSnapshot(
+        {
+          ...row(),
+          "SENDER PROFILE URL": owner,
+          "RECIPIENT PROFILE URLS": other,
+        },
+        context(),
+      ),
+    );
+    expect(sent.record.direction).toBe("sent");
+  });
+  it("keeps groups ineligible and ignores recipient order for stable keys", () => {
+    const group = {
+      ...row(),
+      "RECIPIENT PROFILE URLS":
+        owner + ", https://www.linkedin.com/in/fictional-third/",
+    };
+    const a = accepted(normalizeLinkedInSnapshot(group, context()));
+    expect(a.record.attribution).toBe("group");
+    expect(a.record.eligible_for_extraction).toBe(false);
+    const repeatedSender = accepted(
+      normalizeLinkedInSnapshot(
+        { ...row(), "RECIPIENT PROFILE URLS": owner + ", " + other },
+        context(),
+      ),
+    );
+    expect(repeatedSender.record.attribution).toBe("group");
+    expect(repeatedSender.record.eligible_for_extraction).toBe(false);
+    expect(repeatedSender.record.source_record_id).not.toBe(
+      accepted(normalizeLinkedInSnapshot(row(), context())).record
+        .source_record_id,
+    );
+    expect(a.record.source_record_id).toBe(
+      accepted(
+        normalizeLinkedInSnapshot(
+          {
+            ...group,
+            "RECIPIENT PROFILE URLS":
+              "https://www.linkedin.com/in/fictional-third/, " + owner,
+          },
+          context(),
+        ),
+      ).record.source_record_id,
+    );
+  });
+  it("requires independently verified owner and never falls back from malformed URL columns", () => {
+    expect(normalizeLinkedInSnapshot(row(), liCtx).kind).toBe("quarantined");
+    for (const patch of [
+      {
+        "SENDER PROFILE URL": "https://www.linkedin.com.evil.invalid/in/person",
+      },
+      { "SENDER PROFILE URL": "https://www.linkedin.com:444/in/person" },
+      { "SENDER PROFILE URL": "https://www.linkedin.com/in/person?x=1" },
+      { "SENDER PROFILE URL": " https://www.linkedin.com/in/person" },
+      { "SENDER PROFILE URL": "https://www.linkedin.com/in/person\\suffix" },
+      { "RECIPIENT PROFILE URLS": owner + ";" + other },
+      { "RECIPIENT PROFILE URLS": owner + "," },
+      { "RECIPIENT PROFILE URLS": other },
+      { "RECIPIENT PROFILE URLS": "" },
+    ])
+      expect(
+        normalizeLinkedInSnapshot(
+          { ...row(), ...patch, FROM: other, TO: owner },
+          context(),
+        ).kind,
+      ).toBe("quarantined");
+  });
+});
+
+it("expires authenticated old snapshots before identity attribution without hiding recent gaps", () => {
+  const input = {
+    "CONVERSATION ID": "old-unbound",
+    DATE: "2026-09-01T12:00:00Z",
+    CONTENT: "Private expired text",
+    FROM: "Name",
+    TO: "Other",
+    "SENDER PROFILE URL": "",
+    "RECIPIENT PROFILE URLS": "",
+  };
+  const old = normalizeLinkedInSnapshot(input, liCtx);
+  expect(old.kind).toBe("expired");
+  expect(JSON.stringify(old)).not.toContain("Private expired text");
+  expect(old).toEqual(normalizeLinkedInSnapshot(input, liCtx));
+  expect(
+    normalizeLinkedInSnapshot({ ...input, DATE: "2026-10-13T12:00:00Z" }, liCtx)
+      .kind,
+  ).toBe("quarantined");
+  expect(
+    normalizeLinkedInSnapshot(input, { ...liCtx, authenticated: null }).kind,
+  ).toBe("quarantined");
+  expect(
+    normalizeLinkedInSnapshot({ ...input, DATE: "not-a-date" }, liCtx).kind,
+  ).toBe("quarantined");
+});

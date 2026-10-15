@@ -342,14 +342,14 @@ describe("official read-only social plans", () => {
       mapSocialProviderResponse(p, 200, { ...body, extra: cyclic }),
     ).toEqual({ kind: "quarantined", reason: "invalid_provider_cycle" });
   });
-  it("keeps the INBOX thousand-row limit separate from CONNECTIONS", () => {
+  it("keeps the INBOX two-thousand-row limit separate from CONNECTIONS", () => {
     expect(
       mapSocialProviderResponse(plan("linkedin"), 200, {
         paging: { start: 0, count: 10, total: 1, links: [] },
         elements: [
           {
             snapshotDomain: "INBOX",
-            snapshotData: Array.from({ length: 1001 }, () => ({})),
+            snapshotData: Array.from({ length: 2001 }, () => ({})),
           },
         ],
       }),
@@ -834,4 +834,34 @@ describe("official read-only social plans", () => {
       ),
     ).toMatchObject({ kind: "webhook_only" });
   });
+});
+
+it("accepts the bounded 1181-row INBOX export without widening other budgets", () => {
+  const data = Array.from({ length: 1181 }, (_, i) => ({
+    "CONVERSATION ID": `thread-${i}`,
+    FROM: "Mira",
+    TO: "Owner",
+    "SENDER PROFILE URL": "https://www.linkedin.com/in/mira",
+    "RECIPIENT PROFILE URLS": "https://www.linkedin.com/in/owner",
+    DATE: "2026-10-13T10:00:00Z",
+    CONTENT: "Hello",
+    SUBJECT: "",
+    FOLDER: "INBOX",
+    "CONVERSATION TITLE": "",
+    extra: "",
+  }));
+  const body = {
+    ...page(),
+    elements: [{ snapshotDomain: "INBOX", snapshotData: data }],
+  };
+  expect(mapSocialProviderResponse(plan("linkedin"), 200, body)).toMatchObject({
+    kind: "page",
+    request: { items: data, cursor: "li-snapshot:1" },
+  });
+  expect(
+    mapSocialProviderResponse(plan("linkedin"), 200, {
+      ...body,
+      extra: Array(20001).fill(0),
+    }),
+  ).toMatchObject({ kind: "quarantined", reason: "provider_payload_limit" });
 });

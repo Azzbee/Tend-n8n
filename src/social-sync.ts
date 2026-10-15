@@ -142,7 +142,10 @@ export function normalizeSocialBatch(
     typeof request.complete !== "boolean" ||
     typeof request.reconcile !== "boolean" ||
     !Array.isArray(request.items) ||
-    request.items.length > 1000
+    request.items.length >
+      (request.source === "linkedin" && request.format === "linkedin_snapshot"
+        ? 2000
+        : 1000)
   )
     throw new Error("invalid social page");
   if (request.complete && request.cursor !== null)

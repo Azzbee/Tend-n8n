@@ -559,7 +559,7 @@ export function mapSocialProviderResponse(
         throw new Error("unexpected_snapshot_domain");
       const items = array(
           object(elements[0]).snapshotData,
-          plan.response_kind === "linkedin_connections" ? 10000 : 1000,
+          plan.response_kind === "linkedin_connections" ? 10000 : 2000,
         ),
         next = snapshotNext(plan, raw);
       return plan.response_kind === "linkedin_connections"

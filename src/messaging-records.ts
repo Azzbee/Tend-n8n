@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Contact, Identity } from "./engine.ts";
 import type { LiveRecord } from "./google-records.ts";
+import { validatedLinkedInProfileUrl } from "./social-policy.ts";
 import { authoredSpans } from "./authored-promises.ts";
 export type MessagingSource =
   "whatsapp_personal" | "whatsapp_business" | "linkedin";
@@ -735,25 +736,55 @@ export function normalizeLinkedInChange(
 }
 function boundProfile(value: unknown, context: MessagingContext): string {
   const v = str(value, 2048);
-  let url: URL;
-  try {
-    url = new URL(v);
-  } catch {
-    throw new Error("unverified_snapshot_identity");
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.hostname !== "www.linkedin.com" ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    !/^\/in\/[^/]+\/?$/.test(url.pathname)
-  )
-    throw new Error("unverified_snapshot_identity");
+  validatedLinkedInProfileUrl(v);
   const binding = context.linkedin_profile_bindings?.[v];
   if (!binding) throw new Error("unverified_snapshot_identity");
   return liIdentity(binding);
+}
+function snapshotProfile(value: unknown): string {
+  return validatedLinkedInProfileUrl(value).replace(/\/$/, "");
+}
+function snapshotUrlParticipants(
+  raw: Record<string, unknown>,
+  context: MessagingContext,
+): {
+  actor: string;
+  participants: string[];
+  group: boolean;
+  names: Record<string, string>;
+} {
+  const owners = new Set(
+    Object.entries(context.linkedin_profile_bindings ?? {})
+      .filter(([, member]) => member === context.owner_identity)
+      .map(([url]) => snapshotProfile(url)),
+  );
+  if (owners.size === 0) throw new Error("unverified_snapshot_owner");
+  const sender = snapshotProfile(raw["SENDER PROFILE URL"]);
+  const recipientValue = str(raw["RECIPIENT PROFILE URLS"], 65536);
+  if (!recipientValue || /[\r\n]/.test(recipientValue))
+    throw new Error("invalid_snapshot_recipients");
+  const parts = recipientValue.split(",");
+  if (parts.length > 100) throw new Error("invalid_snapshot_recipients");
+  const recipients = parts.map((part) => snapshotProfile(part.trim()));
+  if (new Set(recipients).size !== recipients.length)
+    throw new Error("invalid_snapshot_recipients");
+  const urls = [...new Set([sender, ...recipients])];
+  if (!urls.some((url) => owners.has(url)))
+    throw new Error("unverified_snapshot_owner");
+  const identityFor = (url: string): string =>
+    owners.has(url)
+      ? context.owner_identity
+      : `snapshot-profile:${hash([url])}`;
+  return {
+    actor: identityFor(sender),
+    participants: [...new Set(urls.map(identityFor))].sort(),
+    group: recipients.length > 1,
+    names: Object.fromEntries(
+      urls
+        .filter((url) => !owners.has(url))
+        .map((url) => [identityFor(url), url]),
+    ),
+  };
 }
 export function normalizeLinkedInSnapshot(
   input: unknown,
@@ -763,21 +794,45 @@ export function normalizeLinkedInSnapshot(
     authenticate(context, "linkedin");
     if (liIdentity(context.account_id) !== context.owner_identity)
       throw new Error("foreign_account");
-    const raw = obj(input),
-      actor = boundProfile(raw.FROM, context),
-      recipient = boundProfile(raw.TO, context),
+    const raw = obj(input);
+    const when = instant(raw.DATE);
+    if (when.getTime() < context.now.getTime() - 30 * 86400000)
+      return reject(
+        "linkedin",
+        context,
+        `expired-snapshot:${hash([raw])}`,
+        "outside_message_window",
+        "expired",
+      );
+    const actualColumns =
+      Object.hasOwn(raw, "SENDER PROFILE URL") ||
+      Object.hasOwn(raw, "RECIPIENT PROFILE URLS");
+    const membership = actualColumns
+      ? snapshotUrlParticipants(raw, context)
+      : {
+          actor: boundProfile(raw.FROM, context),
+          participants: [
+            boundProfile(raw.FROM, context),
+            boundProfile(raw.TO, context),
+          ],
+          group: false,
+          names: {},
+        };
+    const actor = membership.actor,
+      participants = membership.participants,
       threadId = id(raw["CONVERSATION ID"]),
-      when = instant(raw.DATE),
       text = str(raw.CONTENT, 262144);
     return message(
       {
         source: "linkedin",
         provider: "linkedin",
-        recordId: `snapshot:${hash([threadId, actor, recipient, when.toISOString(), text])}`,
+        recordId: `snapshot:${hash([threadId, actor, actualColumns ? [participants, membership.group] : participants[1], when.toISOString(), text])}`,
         threadId,
         actor,
-        participants: [actor, recipient],
+        participants,
         membershipKnown: true,
+        group: membership.group,
+        names: membership.names,
         when,
         text,
         mode: "snapshot",
