@@ -323,7 +323,6 @@ function inlineStyleHides(style: string): boolean {
     .filter(Boolean);
   if (declarations.length > 64) throw new Error("unsupported_css_visibility");
   let hidden = false;
-  const positiveLength = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%)$/;
   const spacing =
     /^(?:0|(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%))(?: (?:0|(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|em|rem|%))){0,3}$/;
   for (const declaration of declarations) {
@@ -354,13 +353,7 @@ function inlineStyleHides(style: string): boolean {
         /^(?:normal|bold|bolder|lighter|[1-9]00)$/.test(value)) ||
       (name === "font-style" && /^(?:normal|italic|oblique)$/.test(value)) ||
       (name === "font-family" && /^[\p{L}\p{N} ,"'-]+$/u.test(value)) ||
-      (name === "font-size" &&
-        positiveLength.test(value) &&
-        parseFloat(value) > 0) ||
-      (name === "line-height" &&
-        (value === "normal" ||
-          ((positiveLength.test(value) || /^\d+(?:\.\d+)?$/.test(value)) &&
-            parseFloat(value) > 0))) ||
+      (name === "line-height" && value === "normal") ||
       (name === "text-align" &&
         /^(?:left|right|center|justify|start|end)$/.test(value)) ||
       (name === "text-decoration" &&
@@ -473,6 +466,14 @@ function htmlText(html: string): string {
     "noembed",
     "noframes",
     "datalist",
+    "dialog",
+    "video",
+    "audio",
+    "canvas",
+    "rp",
+    "details",
+    "select",
+    "option",
   ]);
   const voidTags = new Set([
     "area",
@@ -598,8 +599,11 @@ function htmlText(html: string): string {
         node.attrs.some(
           (a) => ["class", "id"].includes(a.name) && quoteMarker.test(a.value),
         )
-      )
-        cutoff = Math.min(cutoff, location?.startOffset ?? 0);
+      ) {
+        if (!location || !Number.isSafeInteger(location.startOffset))
+          throw new Error("malformed_html");
+        cutoff = Math.min(cutoff, location.startOffset);
+      }
       if (
         suppressed &&
         location &&
@@ -719,14 +723,23 @@ function authoredText(text: string): { text: string; spans: AuthoredSpan[] } {
         [9, 10].includes(c.charCodeAt(0)),
     )
     .join("")
+    .replace(/^[^\S\n]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
     .split("\n");
   const kept: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!;
+    const replyHeader = /^\s*(?:From|De|Von)\s*:\s*\S/i.test(line);
+    let nextHeader = "";
+    if (replyHeader)
+      for (let ahead = 1; ahead <= 3; ahead++) {
+        nextHeader = lines[index + ahead] ?? "";
+        if (nextHeader.trim()) break;
+      }
     if (
       /^\s*_{10,}\s*$/.test(line) ||
-      (/^\s*(?:From|De|Von)\s*:\s*\S/i.test(line) &&
-        /^\s*(?:Sent|Envoyé|Envoye|Gesendet)\s*:/i.test(lines[index + 1] ?? ""))
+      (replyHeader &&
+        /^\s*(?:Sent|Envoyé|Envoye|Gesendet)\s*:/i.test(nextHeader))
     )
       break;
     if (
