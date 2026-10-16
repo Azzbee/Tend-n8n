@@ -1,6 +1,6 @@
 # Tend: free classroom continuity through 22 October
 
-Status: approved by Adam in chat on 16 October 2026. Implementation and verification in progress. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions or coursework submission. Adam separately authorized sending the prepared free-extension request to Unipile.
+Status: approved by Adam in chat on 16 October 2026. Implemented and locally verified on 16 October 2026. Google consent renewal, the provider extension and teacher acceptance remain external gates. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions or coursework submission. Adam separately authorized sending the prepared free-extension request to Unipile.
 
 ## Findings
 
@@ -21,3 +21,13 @@ The current Unipile dashboard shows five trial days remaining. Its API locks aft
 ## Gates outside local recovery
 
 Adam handles Google warnings/consent; both newly saved connections must then pass native read and renewal checks. Unipile must grant any requested free extension; no paid fallback is authorized. Teacher validates the declared scope and fictional fallback. The laptop must have power and a working network during class. None of these can be replaced by a claim of guaranteed uptime.
+
+## Installed result, 16 October 2026
+
+The existing encrypted n8n volume and canonical PostgreSQL cluster are preserved. Eight private user LaunchAgents are installed, including the 60-second recovery coordinator. The coordinator is restored and the classroom launcher passes after a controlled n8n restart. A real earlier host reboot was observed; the same services were restored afterward and the queued owner status command was delivered once. The controlled n8n restart preserved the current Telegram callback without changing its registration, with zero queued updates and no new owner delivery. The local native AI ran successfully afterward and left its cited candidate pending.
+
+The native Ollama app is reused after exact running-process, parent, account, argument, environment, loopback and code-signature checks. A stalled startup is reported after 120 seconds. Recovery never quits that app or changes its login or cloud settings. The fixed qwen3:0.6b model is present locally and the native local inference check passed. The coordinator and six service agents are on demand, not KeepAlive loops. Recovery expires at 23:59 Paris time on 22 October; the launcher offers only a bounded classroom awake session.
+
+The final source checks pass 734 tests across 28 files, including 105 focused recovery tests and 52 webhook-helper tests. Types, lint and formatting pass. The full native, local-AI and SQL checks have separate dated receipts. Fresh independent review and the other-vendor closing review are clear. Public release v15 and its source freeze remain unchanged.
+
+The authorized free-extension request and escalation were sent through the existing Unipile support chat. No extension has been granted. No payment, subscription, new data grant, contact message, course-register edit or submission was made. Adam still completes Google's same-account consent warnings, reviews and rehearses the demo, and obtains teacher acceptance of the declared scope and labelled fallback. Two genuine original-proposal proofs remain absent from current data: a verified person spanning all four source families and a later material Calendar edit/cancellation. The latest read-only Calendar comparison found zero material changes across 12 historical local checkpoints and 22 current records after whitespace normalization.
