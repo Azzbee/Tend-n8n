@@ -1,4 +1,7 @@
 Tend: one six-minute classroom rehearsal
+
+Provider update, 16 October 2026, 11:55 Paris: Clarissa at Unipile confirmed seven additional free trial days. The signed-in dashboard shows 12 days remaining, covering the 22 October demonstration. Fresh native Business and Personal WhatsApp identity and page reads each returned HTTP 200, with approved account/chat checks passing. Coverage remains partial. No payment or subscription was started. This supersedes earlier notes saying extension approval was pending. Gmail renewal is verified: its refresh token changed after the 15 October 22:07 UTC encrypted checkpoint, the approved read-only scope matches, and the approved account identity read returned HTTP 200. Calendar renewal still awaits the owner Google safety screen and consent completion.
+
 Status: 15 October 2026. Nothing submitted. Teacher acceptance and Adam's review remain pending.
 
 Choose the right evidence before starting

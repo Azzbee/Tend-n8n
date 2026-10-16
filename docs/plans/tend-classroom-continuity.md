@@ -1,6 +1,6 @@
 # Tend: free classroom continuity through 22 October
 
-Status: approved by Adam in chat on 16 October 2026. Implemented and locally verified on 16 October 2026. Google consent renewal, the provider extension and teacher acceptance remain external gates. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions or coursework submission. Adam separately authorized sending the prepared free-extension request to Unipile.
+Status: approved by Adam in chat on 16 October 2026. Implemented and locally verified on 16 October 2026. Calendar consent renewal and teacher acceptance remain external gates. Gmail renewal has passed its native token-change, account and read-only scope checks. Unipile has confirmed seven additional free trial days, and both native WhatsApp read checks passed. Continues production mode, existing accounts, data windows and owner-only output. No payments, new provider permissions or coursework submission. Adam separately authorized sending the prepared free-extension request to Unipile.
 
 ## Findings
 
@@ -31,3 +31,7 @@ The native Ollama app is reused after exact running-process, parent, account, ar
 The final source checks pass 734 tests across 28 files, including 105 focused recovery tests and 52 webhook-helper tests. Types, lint and formatting pass. The full native, local-AI and SQL checks have separate dated receipts. Fresh independent review and the other-vendor closing review are clear. Public release v15 and its source freeze remain unchanged.
 
 The authorized free-extension request and escalation were sent through the existing Unipile support chat. No extension has been granted. No payment, subscription, new data grant, contact message, course-register edit or submission was made. Adam still completes Google's same-account consent warnings, reviews and rehearses the demo, and obtains teacher acceptance of the declared scope and labelled fallback. Two genuine original-proposal proofs remain absent from current data: a verified person spanning all four source families and a later material Calendar edit/cancellation. The latest read-only Calendar comparison found zero material changes across 12 historical local checkpoints and 22 current records after whitespace normalization.
+
+## Provider follow-up, 16 October 2026
+
+Unipile support contact Clarissa granted seven additional free days. The signed-in dashboard shows 12 trial days remaining. Fresh native identity and selected-page reads succeeded for both approved WhatsApp accounts, including account and direct-chat checks. This closes the requested free-extension gate through the 22 October class; it does not establish complete message coverage or guarantee network availability. No payment, subscription or new account was created. Gmail renewal is verified against the pre-classroom encrypted checkpoint, with the correct read-only scope and account identity. Calendar still requires the owner safety screen and consent completion, followed by the same native verification.
