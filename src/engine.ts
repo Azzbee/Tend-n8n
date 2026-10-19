@@ -109,6 +109,21 @@ export function liveBatchCompletion(
   flags: Pick<SourceState, "evidence_incomplete" | "pagination_complete">;
 } {
   if (
+    state.mode === "snapshot" &&
+    (state.source !== "calendar" ||
+      batch.source !== "calendar" ||
+      batch.complete ||
+      batch.reconcile ||
+      batch.cursor !== null ||
+      batch.records.length !== 1 ||
+      batch.records[0]?.ingestion_mode !== "snapshot" ||
+      (batch.removed_record_ids?.length ?? 0) !== 0 ||
+      batch.seen_record_ids.length !== 1 ||
+      batch.seen_record_ids[0] !== batch.records[0].source_record_id ||
+      batch.evidence_incomplete !== true)
+  )
+    throw new Error("single partial calendar snapshot required");
+  if (
     batch.evidence_incomplete !== undefined &&
     typeof batch.evidence_incomplete !== "boolean"
   )
@@ -347,8 +362,7 @@ export function normalizeLiveRecord(
   parseRaw({ ...raw, body_text: raw.body_text || "(no authored text)" });
   if (
     !["live", "snapshot"].includes(raw.ingestion_mode) ||
-    !sources.includes(raw.source) ||
-    (raw.source === "calendar" && raw.ingestion_mode !== "live")
+    !sources.includes(raw.source)
   )
     throw new Error("live source required");
   const record = raw as LiveRecord;
@@ -650,6 +664,17 @@ export class TendStore {
     )
       throw new Error("unregistered account/mode");
     if (state.status === "revoked") throw new Error("source revoked");
+    if (
+      this.mode === "live" &&
+      state.mode === "snapshot" &&
+      raw.source !== "calendar"
+    )
+      throw new Error("calendar snapshot account required");
+    if (
+      raw.source === "calendar" &&
+      (raw.ingestion_mode === "snapshot") !== (state.mode === "snapshot")
+    )
+      throw new Error("calendar ingestion mode mismatch");
     const previous = this.db
       .prepare(
         "SELECT json_extract(data,'$.content_hash') AS content_hash FROM interactions WHERE owner_id=? AND record_key=?",
@@ -720,7 +745,11 @@ export class TendStore {
     const state = this.sourceStatus(batch.owner_id).find(
       (x) => x.source === batch.source && x.account_id === batch.account_id,
     );
-    if (!state || state.mode !== "live" || state.status === "revoked")
+    if (
+      !state ||
+      !["live", "snapshot"].includes(state.mode) ||
+      state.status === "revoked"
+    )
       throw new Error("unregistered live account");
     if (
       batch.operation_hash !== undefined &&
@@ -878,6 +907,34 @@ export class TendStore {
         (x) => x.source === source && x.account_id === accountId,
       );
       if (!state) throw new Error("unknown source");
+      if (state.mode === "snapshot") {
+        if (
+          source !== "calendar" ||
+          state.status === "revoked" ||
+          resumeCursor !== undefined ||
+          !exactTimestamp(start) ||
+          !exactTimestamp(end) ||
+          Date.parse(start) >= Date.parse(end)
+        )
+          throw new Error("invalid manual calendar snapshot window");
+        const next = {
+          ...state,
+          coverage_start: start,
+          coverage_end: end,
+          cursor: null,
+          status: "partial",
+          last_success: null,
+          evidence_incomplete: true,
+          pagination_complete: false,
+        };
+        this.db
+          .prepare(
+            "UPDATE live_sources SET data=? WHERE owner_id=? AND source=? AND account_id=?",
+          )
+          .run(JSON.stringify(next), owner, source, accountId);
+        this.db.exec("COMMIT");
+        return next;
+      }
       if (resumeCursor !== undefined) {
         const watermark = Number(resumeCursor.slice("li-change:".length));
         if (
@@ -1632,6 +1689,13 @@ export class TendStore {
             truncated: r.body_text.length > 2000,
             attribution: r.attribution ?? "direct",
             occurred_at: r.occurred_at,
+            ...(r.ingestion_mode === "snapshot"
+              ? {
+                  ingestion_mode: "snapshot",
+                  observed_at: r.observed_at,
+                  coverage: "partial manual snapshot",
+                }
+              : {}),
           })),
         commitments: this.commitments(owner).filter(
           (c) => c.contact_id === contact.contact_id,
@@ -1647,19 +1711,26 @@ export class TendStore {
       return {
         outbound_sent: false,
         mode,
-        meetings: this.interactions(owner).filter(
-          (record) =>
-            record.source === "calendar" &&
-            !record.cancelled &&
-            (this.mode === "live"
-              ? Date.parse(record.end_at ?? record.occurred_at) >
-                  Date.parse(window.start) &&
-                Date.parse(record.occurred_at) < Date.parse(window.end)
-              : Date.parse(record.occurred_at) >=
-                  Date.parse("2026-10-13T00:00:00Z") &&
-                Date.parse(record.occurred_at) <=
-                  Date.parse("2026-10-20T00:00:00Z")),
-        ),
+        meetings: this.interactions(owner)
+          .filter(
+            (record) =>
+              record.source === "calendar" &&
+              !record.cancelled &&
+              (this.mode === "live"
+                ? Date.parse(record.end_at ?? record.occurred_at) >
+                    Date.parse(window.start) &&
+                  Date.parse(record.occurred_at) < Date.parse(window.end)
+                : Date.parse(record.occurred_at) >=
+                    Date.parse("2026-10-13T00:00:00Z") &&
+                  Date.parse(record.occurred_at) <=
+                    Date.parse("2026-10-20T00:00:00Z")),
+          )
+          .map((record) => ({
+            ...record,
+            ...(record.ingestion_mode === "snapshot"
+              ? { coverage: "partial manual snapshot" }
+              : {}),
+          })),
         commitments: this.commitments(owner).filter(
           (c) =>
             c.status === "confirmed" &&

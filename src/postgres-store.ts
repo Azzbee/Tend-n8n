@@ -328,8 +328,12 @@ export class PostgresStore implements LiveStore {
     );
     const state = await this.state(raw.owner_id, raw.source, raw.account_id);
     if (
-      state.mode !== "live" ||
+      !["live", "snapshot"].includes(state.mode) ||
       !["live", "snapshot"].includes(raw.ingestion_mode) ||
+      (state.mode === "snapshot" &&
+        (raw.source !== "calendar" || raw.ingestion_mode !== "snapshot")) ||
+      (raw.source === "calendar" &&
+        (raw.ingestion_mode === "snapshot") !== (state.mode === "snapshot")) ||
       state.status === "revoked"
     )
       throw new Error("unregistered account/mode or source revoked");
@@ -428,7 +432,10 @@ export class PostgresStore implements LiveStore {
         !/^[a-f0-9]{64}$/.test(batch.operation_hash)
       )
         throw new Error("invalid operation hash");
-      if (state.mode !== "live" || state.status === "revoked")
+      if (
+        !["live", "snapshot"].includes(state.mode) ||
+        state.status === "revoked"
+      )
         throw new Error("unregistered live account");
       const completion = liveBatchCompletion(state, batch);
       if (state.last_batch_hash === hash) return [];
@@ -532,6 +539,29 @@ export class PostgresStore implements LiveStore {
     this.owner(owner);
     return this.run(async (s) => {
       const state = await s.state(owner, source, account);
+      if (state.mode === "snapshot") {
+        if (
+          source !== "calendar" ||
+          state.status === "revoked" ||
+          resumeCursor !== undefined ||
+          !exactTimestamp(start) ||
+          !exactTimestamp(end) ||
+          Date.parse(start) >= Date.parse(end)
+        )
+          throw new Error("invalid manual calendar snapshot window");
+        const next = {
+          ...state,
+          coverage_start: start,
+          coverage_end: end,
+          cursor: null,
+          status: "partial",
+          last_success: null,
+          evidence_incomplete: true,
+          pagination_complete: false,
+        };
+        await s.putState(next);
+        return next;
+      }
       if (resumeCursor !== undefined) {
         if (
           source !== "linkedin" ||
@@ -1063,6 +1093,13 @@ export class PostgresStore implements LiveStore {
               truncated: r.body_text.length > 2000,
               attribution: r.attribution ?? "direct",
               occurred_at: r.occurred_at,
+              ...(r.ingestion_mode === "snapshot"
+                ? {
+                    ingestion_mode: "snapshot",
+                    observed_at: r.observed_at,
+                    coverage: "partial manual snapshot",
+                  }
+                : {}),
             })),
           commitments: (await s.commitments(owner)).filter(
             (c) => c.contact_id === contact.contact_id,
@@ -1078,14 +1115,21 @@ export class PostgresStore implements LiveStore {
         return {
           outbound_sent: false,
           mode,
-          meetings: (await s.interactions(owner)).filter(
-            (r) =>
-              r.source === "calendar" &&
-              !r.cancelled &&
-              Date.parse(r.end_at ?? r.occurred_at) >
-                Date.parse(window.start) &&
-              Date.parse(r.occurred_at) < Date.parse(window.end),
-          ),
+          meetings: (await s.interactions(owner))
+            .filter(
+              (r) =>
+                r.source === "calendar" &&
+                !r.cancelled &&
+                Date.parse(r.end_at ?? r.occurred_at) >
+                  Date.parse(window.start) &&
+                Date.parse(r.occurred_at) < Date.parse(window.end),
+            )
+            .map((record) => ({
+              ...record,
+              ...(record.ingestion_mode === "snapshot"
+                ? { coverage: "partial manual snapshot" }
+                : {}),
+            })),
           commitments: commitments.filter(
             (c) =>
               c.status === "confirmed" &&

@@ -18,6 +18,11 @@ export interface VerifiedContactGroup {
 export interface LivePolicy {
   social?: SocialPolicy;
   verified_contact_groups?: VerifiedContactGroup[];
+  manual_calendar_snapshots?: {
+    calendar_id: string;
+    event_id: string;
+    capture_sha256: string;
+  }[];
   principal_id: string;
   account_email: string;
   verified_owner_emails: string[];
@@ -81,6 +86,7 @@ export function parseLivePolicy(input: unknown): LivePolicy {
   const keys = [
     "social",
     "verified_contact_groups",
+    "manual_calendar_snapshots",
     "principal_id",
     "account_email",
     "verified_owner_emails",
@@ -149,6 +155,40 @@ export function parseLivePolicy(input: unknown): LivePolicy {
       value.verified_contact_groups,
       policy,
     );
+  if (value.manual_calendar_snapshots !== undefined) {
+    if (
+      !Array.isArray(value.manual_calendar_snapshots) ||
+      value.manual_calendar_snapshots.length !== 1
+    )
+      throw new Error("one inspected calendar snapshot required");
+    policy.manual_calendar_snapshots = value.manual_calendar_snapshots.map(
+      (entry: unknown) => {
+        const raw = object(entry);
+        if (
+          Object.keys(raw).length !== 3 ||
+          Object.keys(raw).some(
+            (k) => !["calendar_id", "event_id", "capture_sha256"].includes(k),
+          )
+        )
+          throw new Error("invalid calendar snapshot policy fields");
+        const calendar_id = nonempty(raw.calendar_id),
+          event_id = nonempty(raw.event_id),
+          capture_sha256 = nonempty(raw.capture_sha256);
+        if (
+          !email.test(calendar_id) ||
+          calendar_id !== calendar_id.toLowerCase() ||
+          policy.calendar_ids.includes(calendar_id) ||
+          (calendar_id === account &&
+            policy.calendar_ids.includes("primary")) ||
+          event_id.length > 1024 ||
+          /\s/u.test(event_id) ||
+          !/^[a-f0-9]{64}$/.test(capture_sha256)
+        )
+          throw new Error("invalid inspected calendar snapshot binding");
+        return { calendar_id, event_id, capture_sha256 };
+      },
+    );
+  }
   return policy;
 }
 function parseContactGroups(

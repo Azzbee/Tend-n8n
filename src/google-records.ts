@@ -13,6 +13,7 @@ import {
   calendarWindow,
   gmailWindow,
   zonedLocalInstant,
+  validateLivePolicy,
   type LivePolicy,
 } from "./live-policy.ts";
 
@@ -962,6 +963,12 @@ export function normalizeCalendarEvent(
     "calendar.events.get",
     context.calendar_id,
   );
+  return normalizeCalendarFields(input, context);
+}
+function normalizeCalendarFields(
+  input: unknown,
+  context: NormalizationContext,
+): NormalizationResult {
   const window = calendarWindow(context.policy, context.now);
   try {
     const raw = object(input),
@@ -1110,4 +1117,135 @@ export function normalizeCalendarEvent(
       recordReason(error, "invalid_calendar_record"),
     );
   }
+}
+
+export function calendarSnapshotDigest(input: unknown): string {
+  const canonical = (value: unknown, depth: number): unknown => {
+    if (depth > 8) throw new Error("calendar snapshot nesting limit");
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "boolean"
+    )
+      return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (Array.isArray(value)) {
+      if (value.length > 32) throw new Error("calendar snapshot array limit");
+      return value.map((item) => canonical(item, depth + 1));
+    }
+    const raw = object(value);
+    return Object.fromEntries(
+      Object.keys(raw)
+        .sort()
+        .map((key) => [key, canonical(raw[key], depth + 1)]),
+    );
+  };
+  const text = JSON.stringify(canonical(input, 0));
+  if (Buffer.byteLength(text) > 262_144)
+    throw new Error("calendar snapshot size limit");
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Operator-inspected, exact-event capture; never evidence of a successful API read. */
+export function normalizeCalendarSnapshot(
+  input: unknown,
+  policy: LivePolicy,
+  now: Date,
+): NormalizationResult {
+  validateLivePolicy(policy);
+  const capture = object(input);
+  const exact = (value: Record<string, unknown>, fields: string[]): void => {
+    if (Object.keys(value).some((key) => !fields.includes(key)))
+      throw new Error("unsupported calendar snapshot field");
+  };
+  exact(capture, ["calendar_id", "event", "captured_at", "source_reference"]);
+  if (Object.keys(capture).length !== 4)
+    throw new Error("calendar snapshot capture proof required");
+  const raw = object(capture.event),
+    calendar_id = string(capture.calendar_id),
+    captured_at = string(capture.captured_at),
+    reference = new URL(string(capture.source_reference)),
+    binding = policy.manual_calendar_snapshots?.find(
+      (entry) => entry.calendar_id === calendar_id && entry.event_id === raw.id,
+    );
+  if (
+    !binding ||
+    binding.capture_sha256 !== calendarSnapshotDigest(capture) ||
+    reference.origin !== "https://calendar.google.com" ||
+    reference.username ||
+    reference.password ||
+    !/^\/calendar\/u\/\d+\/r$/.test(reference.pathname) ||
+    reference.hash ||
+    reference.searchParams.getAll("eid").length !== 1 ||
+    [...reference.searchParams.keys()].some((key) => key !== "eid") ||
+    Buffer.from(reference.searchParams.get("eid") ?? "", "base64url").toString(
+      "utf8",
+    ) !== `${String(raw.id)} ${calendar_id}` ||
+    !Number.isFinite(Date.parse(captured_at)) ||
+    new Date(captured_at).toISOString() !== captured_at ||
+    Date.parse(captured_at) > now.getTime() ||
+    now.getTime() - Date.parse(captured_at) > 3_600_000
+  )
+    throw new Error("unverified or stale calendar snapshot");
+  exact(raw, [
+    "id",
+    "summary",
+    "description",
+    "location",
+    "start",
+    "end",
+    "organizer",
+    "attendees",
+    "recurringEventId",
+  ]);
+  for (const time of [raw.start, raw.end])
+    exact(object(time), ["date", "dateTime", "timeZone"]);
+  const organizer = object(raw.organizer);
+  exact(organizer, ["email", "displayName"]);
+  const organizerEmail = canonicalEmail(string(organizer.email));
+  if (
+    !Array.isArray(raw.attendees) ||
+    raw.attendees.length < 2 ||
+    raw.attendees.length > 10
+  )
+    throw new Error("verified calendar snapshot guests required");
+  const guests = raw.attendees.map((value: unknown) => {
+    const guest = object(value);
+    exact(guest, ["email", "displayName", "responseStatus", "self"]);
+    const email = canonicalEmail(string(guest.email));
+    if (
+      guest.responseStatus !== "accepted" ||
+      (guest.self !== undefined && typeof guest.self !== "boolean") ||
+      (guest.self === true && email !== calendar_id)
+    )
+      throw new Error("unverified calendar snapshot guest");
+    return { email, self: guest.self === true };
+  });
+  if (
+    new Set(guests.map((g) => g.email)).size !== guests.length ||
+    guests.filter((g) => g.self && g.email === calendar_id).length !== 1 ||
+    !guests.some((g) => g.email === organizerEmail) ||
+    organizerEmail === calendar_id ||
+    policy.verified_owner_emails.includes(organizerEmail)
+  )
+    throw new Error("ambiguous calendar snapshot guests");
+  const result = normalizeCalendarFields(raw, {
+    policy: {
+      ...policy,
+      verified_owner_emails: [
+        ...new Set([...policy.verified_owner_emails, calendar_id]),
+      ],
+    },
+    now,
+    account_email: policy.account_email,
+    calendar_id,
+  });
+  if (result.kind === "accepted")
+    result.record = {
+      ...result.record,
+      ingestion_mode: "snapshot",
+      observed_at: captured_at,
+      evidence_reference: reference.href,
+    };
+  return result;
 }

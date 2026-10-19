@@ -21,6 +21,8 @@ import {
 import {
   normalizeGmailMessage,
   normalizeCalendarEvent,
+  normalizeCalendarSnapshot,
+  calendarSnapshotDigest,
   type LiveRecord,
 } from "./google-records.ts";
 
@@ -77,6 +79,19 @@ export function createLiveServer(options: LiveServerOptions): Server {
           coverage_end: cal.end,
           cursor: null,
         })),
+        ...(policy.manual_calendar_snapshots?.map(({ calendar_id }) => ({
+          owner_id: owner,
+          source: "calendar" as const,
+          account_id: calendar_id,
+          mode: "snapshot" as const,
+          last_success: null,
+          status: "partial",
+          coverage_start: cal.start,
+          coverage_end: cal.end,
+          cursor: null,
+          evidence_incomplete: true,
+          pagination_complete: false,
+        })) ?? []),
         ...(policy.social?.accounts.map((account) => ({
           owner_id: owner,
           source: account.source,
@@ -304,7 +319,11 @@ export function createLiveServer(options: LiveServerOptions): Server {
         if (source !== "gmail" && source !== "calendar")
           throw new Error("invalid source");
         const states = (await store.sourceStatus(owner)).filter(
-          (x) => x.source === source,
+          (x) =>
+            x.source === source &&
+            x.mode === "live" &&
+            (source !== "calendar" ||
+              policy.calendar_ids.includes(x.account_id)),
         );
         const available = states.filter(
           (x) =>
@@ -614,6 +633,53 @@ export function createLiveServer(options: LiveServerOptions): Server {
           status: "partial",
           message:
             "Fresh approved snapshot required; connection is not yet current.",
+        });
+        return;
+      }
+      if (url.pathname === "/api/live/calendar-snapshot") {
+        const inspectedAt = clock(),
+          range = calendarWindow(policy, inspectedAt);
+        const result = normalizeCalendarSnapshot(value, policy, inspectedAt);
+        if (result.kind !== "accepted")
+          throw new Error("calendar snapshot rejected");
+        const state = (await store.sourceStatus(owner)).find(
+          (entry) =>
+            entry.source === "calendar" &&
+            entry.account_id === result.record.account_id &&
+            entry.mode === "snapshot",
+        );
+        if (!state) throw new Error("manual calendar snapshot account missing");
+        await store.prepareLiveSnapshot(
+          owner,
+          "calendar",
+          result.record.account_id,
+          range.start,
+          range.end,
+        );
+        const stored = await store.commitLiveBatch({
+          owner_id: owner,
+          source: "calendar",
+          account_id: result.record.account_id,
+          records: [result.record],
+          contacts: result.contacts,
+          identities: result.identities,
+          cursor: null,
+          expected_cursor: null,
+          complete: false,
+          reconcile: false,
+          evidence_incomplete: true,
+          operation_hash: calendarSnapshotDigest(value),
+          coverage_start: range.start,
+          coverage_end: range.end,
+          seen_record_ids: [result.record.source_record_id],
+        });
+        respond(200, {
+          accepted: stored.length,
+          record_keys: stored.map((record) => record.record_key),
+          ingestion_mode: "snapshot",
+          observed_at: result.record.observed_at,
+          coverage: "partial manual snapshot",
+          provider_api_verified: false,
         });
         return;
       }
