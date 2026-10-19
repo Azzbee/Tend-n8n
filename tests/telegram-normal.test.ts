@@ -259,6 +259,8 @@ describe("normal owner read-only Telegram preparation", () => {
       policy: draftPolicy,
     });
     expect(inference).toHaveBeenCalledTimes(2);
+    expect(output.state_guard).toBeUndefined();
+    expect(output.ai_guard?.freshness?.recipient.contact.name).toBe("Mira Tan");
     expect(output.reply.preview).toBe(
       "Hi Mira, how is preparation for the presentation going?",
     );
@@ -414,8 +416,37 @@ describe("normal owner read-only Telegram preparation", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/api/chat");
     expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe("error");
     expect(
+      JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).keep_alive,
+    ).toBe(0);
+    expect(
       JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).options,
     ).toMatchObject({ num_predict: 512, num_ctx: 8192 });
+  });
+  it("unloads the fixed small model after extractive briefing as well as classification", async () => {
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ message: { content: '{"items":[]}' } })),
+      );
+    await localNormalModel(
+      {
+        model: "qwen3:0.6b",
+        think: false,
+        stream: false,
+        format: "json",
+        options: { temperature: 0 },
+        messages: [
+          { role: "system", content: "Select exact briefing excerpts only." },
+          { role: "user", content: '{"evidence":[]}' },
+        ],
+      },
+      new AbortController().signal,
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "qwen3:0.6b",
+      keep_alive: 0,
+      options: { num_ctx: 8192, num_predict: 512 },
+    });
   });
   it("rejects oversized streamed model responses", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -801,6 +832,32 @@ describe("bounded context search and requested priorities", () => {
     });
     expect(output.reply.priorities).toHaveLength(1);
     expect(output.record_guards[0]?.record_key).toBe("c".repeat(64));
+  });
+  it("preserves all-day and end-time metadata for priority presentation", async () => {
+    const meeting = record({
+      source: "calendar",
+      account_id: "demo-calendar",
+      kind: "meeting",
+      direction: "event",
+      occurred_at: "2026-10-19T22:00:00Z",
+      end_at: "2026-10-20T22:00:00Z",
+      all_day: true,
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([meeting]);
+    const output = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(output.reply.priorities).toMatchObject([
+      {
+        kind: "meeting",
+        date: meeting.occurred_at,
+        end_at: meeting.end_at,
+        all_day: true,
+      },
+    ]);
   });
   it("reports unavailable older obligation evidence without extending the approved window", async () => {
     const source = record({ occurred_at: "2026-08-01T10:00:00Z" });

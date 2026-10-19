@@ -5,10 +5,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pool } from "pg";
-import { TendStore, type LiveBatch, type AuthCommand } from "../src/engine.ts";
+import {
+  TendStore,
+  type LiveBatch,
+  type AuthCommand,
+  telegramAIContactScope,
+  telegramAIRecordSet,
+} from "../src/engine.ts";
 import { PostgresStore } from "../src/postgres-store.ts";
-import { prepareLiveAI, validateLiveAI } from "../src/live-ai.ts";
-import type { PreparedTelegramRead } from "../src/telegram-normal.ts";
+import {
+  prepareLiveAI,
+  validateLiveAI,
+  liveAIDependencies,
+} from "../src/live-ai.ts";
+import {
+  prepareNormalReply,
+  type PreparedTelegramRead,
+} from "../src/telegram-normal.ts";
 import {
   exampleLivePolicy,
   type VerifiedContactGroup,
@@ -123,6 +136,7 @@ describe("prepared normal-message ledger parity", () => {
     async function prepared(
       store: (typeof stores)[number],
       group?: VerifiedContactGroup,
+      scoped = false,
     ): Promise<PreparedTelegramRead> {
       const records = await store.interactions(principal.owner_id);
       const ai = prepareLiveAI({
@@ -148,16 +162,13 @@ describe("prepared normal-message ledger parity", () => {
         draft: { text: "Hi Friend, how is the report progressing?" },
       };
       const result = validateLiveAI(ai, output, records, group, clock());
-      return {
+      const value: PreparedTelegramRead = {
         reply: {
           outbound_sent: false,
           ai: result,
           preview: result.draft?.text,
         },
-        record_guards: ai.evidence.map(({ record_key, content_hash }) => ({
-          record_key,
-          content_hash,
-        })),
+        record_guards: liveAIDependencies(ai),
         state_guard: {
           contacts: await store.contacts(principal.owner_id),
           commitments: await store.commitments(principal.owner_id),
@@ -169,6 +180,31 @@ describe("prepared normal-message ledger parity", () => {
           ...(group ? { current_group: group } : {}),
         },
       };
+      if (scoped) {
+        const contacts = await store.contacts(principal.owner_id);
+        const accounts = (await store.sourceStatus(principal.owner_id)).map(
+          ({ source, account_id }) => ({ source, account_id }),
+        );
+        const recipient = telegramAIContactScope(
+          principal.owner_id,
+          ai.contact_id,
+          group,
+          contacts,
+        )!;
+        value.ai_guard!.freshness = {
+          recipient,
+          accounts,
+          records: telegramAIRecordSet(
+            principal.owner_id,
+            ai.contact_id,
+            group,
+            records,
+            accounts,
+          ),
+        };
+        delete value.state_guard;
+      }
+      return value;
     }
     const changed = (cancelled = false): LiveBatch => ({
       ...batch,
@@ -188,6 +224,9 @@ describe("prepared normal-message ledger parity", () => {
     });
     return {
       stores,
+      setClock: (value: string) => {
+        now = value;
+      },
       sqlite,
       pg,
       principal,
@@ -405,6 +444,397 @@ describe("prepared normal-message ledger parity", () => {
       await pool.end();
     }
   });
+  it("scoped AI accepts unrelated contact changes and sync checkpoints, attaching current coverage", async () => {
+    const f = await fixture();
+    for (const store of f.stores) {
+      const p = await f.prepared(store, undefined, true);
+      await store.commitLiveBatch({
+        ...f.batch,
+        records: [],
+        expected_cursor: "a",
+        cursor: "b",
+        seen_record_ids: [],
+      });
+      await store.seed(
+        [
+          {
+            owner_id: f.principal.owner_id,
+            contact_id: "unrelated",
+            name: "Another Person",
+          },
+        ],
+        [],
+        [],
+      );
+      const result = await store.commitTelegramReply(f.auth, "normal", 1, p);
+      expect(result.reply?.preview).toBe(
+        "Hi Friend, how is the report progressing?",
+      );
+      expect(result.reply?.coverage).toEqual(
+        await store.sourceStatus(f.principal.owner_id),
+      );
+      expect(result.reply?.coverage).not.toEqual(p.reply.coverage);
+    }
+  });
+  for (const field of ["name", "identity"] as const)
+    it(`scoped AI withdraws changed selected ${field} metadata`, async () => {
+      const f = await fixture();
+      for (const store of f.stores) {
+        const p = await f.prepared(store, undefined, true);
+        if (store === f.sqlite) {
+          const db = new DatabaseSync(f.path);
+          if (field === "name")
+            db.prepare(
+              "UPDATE contacts SET name=? WHERE owner_id=? AND contact_id='friend'",
+            ).run("Changed Name", f.principal.owner_id);
+          else
+            db.prepare(
+              "UPDATE identities SET identity=? WHERE owner_id=? AND contact_id='friend'",
+            ).run("changed@example.invalid", f.principal.owner_id);
+          db.close();
+        } else {
+          const pool = new Pool({ connectionString: runtime.connectionString });
+          try {
+            await pool.query(
+              field === "name"
+                ? "UPDATE live_contacts SET name=$2 WHERE owner_id=$1 AND contact_id='friend'"
+                : "UPDATE live_identities SET identity=$2 WHERE owner_id=$1 AND contact_id='friend'",
+              [
+                f.principal.owner_id,
+                field === "name" ? "Changed Name" : "changed@example.invalid",
+              ],
+            );
+          } finally {
+            await pool.end();
+          }
+        }
+        expect(
+          (await store.commitTelegramReply(f.auth, "normal", 1, p)).reply,
+        ).not.toHaveProperty("ai");
+      }
+    });
+  for (const target of [true, false])
+    it(`scoped AI ${target ? "withdraws a new target message" : "ignores an unrelated new message"}`, async () => {
+      const f = await fixture();
+      for (const store of f.stores) {
+        const p = await f.prepared(store, undefined, true);
+        await store.commitLiveBatch({
+          ...f.batch,
+          expected_cursor: "a",
+          cursor: "b",
+          records: [
+            {
+              ...f.record,
+              source_record_id: "new-message",
+              actor_identity: target
+                ? "friend@example.invalid"
+                : "other@example.invalid",
+              participant_identities: ["owner@example.invalid"],
+              contact_ids: [target ? "friend" : "other"],
+            },
+          ],
+          contacts: [
+            {
+              owner_id: f.principal.owner_id,
+              contact_id: target ? "friend" : "other",
+              name: target ? "Friend" : "Other",
+            },
+          ],
+          identities: [
+            {
+              owner_id: f.principal.owner_id,
+              identity: target
+                ? "friend@example.invalid"
+                : "other@example.invalid",
+              contact_id: target ? "friend" : "other",
+            },
+          ],
+        });
+        const result = await store.commitTelegramReply(f.auth, "normal", 1, p);
+        if (target) expect(result.reply).not.toHaveProperty("ai");
+        else
+          expect(result.reply?.preview).toBe(
+            "Hi Friend, how is the report progressing?",
+          );
+      }
+    });
+  it("scoped AI guards all relevant records beyond selected model evidence", async () => {
+    const f = await fixture();
+    for (const store of f.stores) {
+      await store.commitLiveBatch({
+        ...f.batch,
+        expected_cursor: "a",
+        cursor: "b",
+        records: Array.from({ length: 8 }, (_, index) => ({
+          ...f.record,
+          source_record_id: `extra-${index}`,
+        })),
+      });
+      const p = await f.prepared(store, undefined, true);
+      const unused = (await store.interactions(f.principal.owner_id)).find(
+        (record) =>
+          !p.record_guards.some(
+            (guard) => guard.record_key === record.record_key,
+          ),
+      )!;
+      expect(unused).toBeDefined();
+      await store.commitLiveBatch({
+        ...f.batch,
+        expected_cursor: "b",
+        cursor: "c",
+        records: [
+          {
+            ...f.record,
+            source_record_id: unused.source_record_id,
+            body_text: "Changed context",
+            authored_text: "Changed context",
+            authored_spans: [{ start: 0, end: 15, text: "Changed context" }],
+          },
+        ],
+      });
+      expect(
+        (await store.commitTelegramReply(f.auth, "normal", 1, p)).reply,
+      ).not.toHaveProperty("ai");
+    }
+  });
+  for (const scenario of ["edited", "cancelled", "revoked", "expired"] as const)
+    it(`scoped AI preserves ${scenario} dependency rejection`, async () => {
+      const f = await fixture();
+      for (const store of f.stores) {
+        f.resetClock();
+        const p = await f.prepared(store, undefined, true);
+        if (scenario === "revoked")
+          await store.revokeSource(f.principal.owner_id, "gmail");
+        else if (scenario === "expired") f.advance();
+        else await store.commitLiveBatch(f.changed(scenario === "cancelled"));
+        expect(
+          (await store.commitTelegramReply(f.auth, "normal", 1, p)).reply,
+        ).not.toHaveProperty("ai");
+      }
+    });
+  it("scoped AI guards recipient-specific style records as well as citations", async () => {
+    const f = await fixture();
+    const style = "Hey Friend, could you check this?";
+    for (const store of f.stores) {
+      await store.commitLiveBatch({
+        ...f.batch,
+        expected_cursor: "a",
+        cursor: "b",
+        records: [
+          {
+            ...f.record,
+            source_record_id: "style",
+            direction: "sent",
+            actor_identity: f.record.account_id,
+            participant_identities: ["friend@example.invalid"],
+            body_text: style,
+            authored_text: style,
+            authored_spans: [{ start: 0, end: style.length, text: style }],
+          },
+        ],
+      });
+      const p = await f.prepared(store, undefined, true);
+      expect(p.ai_guard?.prepared.draft_context?.style_basis).toBe(
+        "recipient_examples",
+      );
+      const styleRecord = (await store.interactions(f.principal.owner_id)).find(
+        (record) => record.source_record_id === "style",
+      )!;
+      expect(
+        p.record_guards.some(
+          (guard) => guard.record_key === styleRecord.record_key,
+        ),
+      ).toBe(true);
+      const changed = "Hello Friend, please check this.";
+      await store.commitLiveBatch({
+        ...f.batch,
+        expected_cursor: "b",
+        cursor: "c",
+        records: [
+          {
+            ...f.record,
+            source_record_id: "style",
+            direction: "sent",
+            actor_identity: f.record.account_id,
+            participant_identities: ["friend@example.invalid"],
+            body_text: changed,
+            authored_text: changed,
+            authored_spans: [{ start: 0, end: changed.length, text: changed }],
+          },
+        ],
+      });
+      expect(
+        (await store.commitTelegramReply(f.auth, "normal", 1, p)).reply,
+      ).not.toHaveProperty("ai");
+    }
+  });
+  it("scoped AI withdraws changed or removed verified group proof", async () => {
+    const f = await fixture();
+    const group: VerifiedContactGroup = {
+      id: "verified-friend",
+      name: "Friend",
+      verified_at: "2026-10-18T12:00:00Z",
+      proof_kind: "owner_confirmed",
+      proof_reference: "owner-reviewed",
+      members: [
+        {
+          contact_id: "friend",
+          source: "gmail",
+          account_id: f.record.account_id,
+          identity: "friend@example.invalid",
+        },
+      ],
+    };
+    for (const store of f.stores) {
+      const changed = await f.prepared(store, group, true);
+      changed.ai_guard!.current_group = {
+        ...group,
+        proof_reference: "changed-proof",
+      };
+      expect(
+        (await store.commitTelegramReply(f.auth, "normal", 1, changed)).reply,
+      ).not.toHaveProperty("ai");
+      const removed = await f.prepared(store, group, true);
+      removed.ai_guard!.current_group = null;
+      expect(
+        (await store.commitTelegramReply(f.auth, "normal", 2, removed)).reply,
+      ).not.toHaveProperty("ai");
+    }
+  });
+  it("scoped AI ignores unrelated expired-record cleanup during model time", async () => {
+    const f = await fixture();
+    for (const store of f.stores) {
+      f.resetClock();
+      await store.commitLiveBatch({
+        ...f.batch,
+        expected_cursor: "a",
+        cursor: "b",
+        records: [
+          {
+            ...f.record,
+            source_record_id: "old-unrelated",
+            occurred_at: "2026-09-19T12:00:05Z",
+            actor_identity: "other@example.invalid",
+            participant_identities: ["owner@example.invalid"],
+            contact_ids: ["other"],
+          },
+        ],
+        contacts: [
+          {
+            owner_id: f.principal.owner_id,
+            contact_id: "other",
+            name: "Other",
+          },
+        ],
+        identities: [
+          {
+            owner_id: f.principal.owner_id,
+            identity: "other@example.invalid",
+            contact_id: "other",
+          },
+        ],
+      });
+      const p = await f.prepared(store, undefined, true);
+      f.setClock("2026-10-19T12:00:06Z");
+      await store.expireLiveEvidence(
+        f.principal.owner_id,
+        "2026-09-19T12:00:06Z",
+        "2026-10-19T12:00:06Z",
+        "2026-10-26T12:00:06Z",
+      );
+      expect(
+        (await store.interactions(f.principal.owner_id)).some(
+          (record) => record.source_record_id === "old-unrelated",
+        ),
+      ).toBe(false);
+      expect(
+        (await store.commitTelegramReply(f.auth, "normal", 1, p)).reply
+          ?.preview,
+      ).toBe("Hi Friend, how is the report progressing?");
+    }
+  });
+  for (const initial of ["revoked", "missing"] as const)
+    it(`scoped AI notices new target evidence when an approved ${initial} account connects during inference`, async () => {
+      const f = await fixture();
+      for (const store of f.stores) {
+        const calendarState = {
+          owner_id: f.principal.owner_id,
+          source: "calendar" as const,
+          account_id: "primary",
+          mode: "live" as const,
+          last_success: null,
+          status: initial === "revoked" ? "revoked" : "partial",
+          coverage_start: "2026-10-19T12:00:00Z",
+          coverage_end: "2026-10-26T12:00:00Z",
+          cursor: null,
+        };
+        if (initial === "revoked") await store.seed([], [], [calendarState]);
+        let calls = 0;
+        const prepared = await prepareNormalReply({
+          auth: f.auth,
+          store,
+          clock: () => new Date("2026-10-19T12:00:00Z"),
+          policy: { ...exampleLivePolicy, principal_id: f.principal.owner_id },
+          model: async () => {
+            if (++calls === 1)
+              return { intent: "draft_preview", query: "friend" };
+            if (initial === "missing")
+              await store.seed([], [], [calendarState]);
+            await store.reconnectLiveSource(
+              f.principal.owner_id,
+              "calendar",
+              "primary",
+              calendarState.coverage_start,
+              calendarState.coverage_end,
+            );
+            const text = "Upcoming project meeting";
+            await store.commitLiveBatch({
+              ...f.batch,
+              source: "calendar",
+              account_id: "primary",
+              expected_cursor: null,
+              cursor: "calendar-next",
+              coverage_start: calendarState.coverage_start,
+              coverage_end: calendarState.coverage_end,
+              records: [
+                {
+                  ...f.record,
+                  source: "calendar",
+                  account_id: "primary",
+                  source_record_id: "new-target-meeting",
+                  kind: "meeting",
+                  direction: "event",
+                  occurred_at: "2026-10-19T13:00:00Z",
+                  end_at: "2026-10-19T14:00:00Z",
+                  body_text: text,
+                  authored_text: text,
+                  authored_spans: [{ start: 0, end: text.length, text }],
+                  eligible_for_extraction: false,
+                  coverage_start: calendarState.coverage_start,
+                  coverage_end: calendarState.coverage_end,
+                },
+              ],
+            });
+            return {
+              items: [{ evidence_id: "E1", quote: f.record.authored_text }],
+              draft: { text: "Hi Friend, how is the report progressing?" },
+            };
+          },
+        });
+        expect(calls).toBe(2);
+        expect(prepared.ai_guard?.freshness?.accounts).toContainEqual({
+          source: "calendar",
+          account_id: "primary",
+        });
+        expect(prepared.reply.preview).toBe(
+          "Hi Friend, how is the report progressing?",
+        );
+        expect(
+          (await store.commitTelegramReply(f.auth, "normal", 1, prepared))
+            .reply,
+        ).not.toHaveProperty("ai");
+      }
+    });
   it("existing source-change scrubbing clears the entire new reply shape", async () => {
     const f = await fixture();
     for (const store of f.stores) {

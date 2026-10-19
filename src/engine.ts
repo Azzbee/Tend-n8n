@@ -3,8 +3,12 @@ import { createHash } from "node:crypto";
 import { canonicalEmail, type LiveRecord } from "./google-records.ts";
 import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
 import { chmodSync } from "node:fs";
-import { validateLiveAI } from "./live-ai.ts";
-import type { PreparedTelegramRead } from "./telegram-normal.ts";
+import { validateLiveAI, liveAIRecordFingerprint } from "./live-ai.ts";
+import type { VerifiedContactGroup } from "./live-policy.ts";
+import type {
+  PreparedTelegramRead,
+  TelegramAIFreshness,
+} from "./telegram-normal.ts";
 import {
   eligiblePromiseSpans,
   isExplicitCommitment,
@@ -178,6 +182,101 @@ export interface Reply {
   outbound_sent: false;
   [key: string]: unknown;
 }
+export function telegramAIContactScope(
+  owner: string,
+  contactId: string,
+  group: VerifiedContactGroup | null | undefined,
+  contacts: (Contact & { emails: string[] })[],
+): TelegramAIFreshness["recipient"] | null {
+  const ids = new Set(
+    group ? group.members.map((member) => member.contact_id) : [contactId],
+  );
+  const members = contacts
+    .filter(
+      (contact) => contact.owner_id === owner && ids.has(contact.contact_id),
+    )
+    .map((contact) => ({ ...contact, emails: [...contact.emails].sort() }))
+    .sort((a, b) => a.contact_id.localeCompare(b.contact_id));
+  if (!group) {
+    const contact = members.find((member) => member.contact_id === contactId);
+    return contact
+      ? {
+          contact: {
+            owner_id: owner,
+            contact_id: contactId,
+            name: contact.name,
+          },
+          members,
+        }
+      : null;
+  }
+  if (group.id !== contactId) return null;
+  const named = [...group.members]
+    .sort((a, b) => Number(b.source === "gmail") - Number(a.source === "gmail"))
+    .map((member) =>
+      members.find(
+        (contact) =>
+          contact.contact_id === member.contact_id &&
+          contact.emails.some((identity) =>
+            member.source === "gmail"
+              ? identity.toLowerCase() === member.identity.toLowerCase()
+              : identity === member.identity,
+          ),
+      ),
+    )
+    .find(
+      (contact) =>
+        contact &&
+        contact.name.trim() &&
+        contact.name !== contact.contact_id &&
+        !contact.name.includes("@") &&
+        !/^\+?[\d\s]+$/u.test(contact.name),
+    );
+  return {
+    contact: {
+      owner_id: owner,
+      contact_id: contactId,
+      name: named?.name ?? "this contact",
+    },
+    members,
+  };
+}
+export function telegramAIRecordSet(
+  owner: string,
+  contactId: string,
+  group: VerifiedContactGroup | null | undefined,
+  records: readonly NormalizedRecord[],
+  accounts: TelegramAIFreshness["accounts"],
+): TelegramAIFreshness["records"] {
+  return records
+    .filter(
+      (record) =>
+        record.owner_id === owner &&
+        accounts.some(
+          (account) =>
+            account.source === record.source &&
+            account.account_id === record.account_id &&
+            (!account.record_ids ||
+              account.record_ids.includes(record.source_record_id)),
+        ) &&
+        (group
+          ? group.members.some(
+              (member) =>
+                member.source === record.source &&
+                member.account_id === record.account_id &&
+                record.contact_ids?.includes(member.contact_id) &&
+                (record.actor_identity === member.identity ||
+                  record.participant_identities.includes(member.identity)),
+            )
+          : record.contact_id === contactId ||
+            record.contact_ids?.includes(contactId)),
+    )
+    .map((record) => ({
+      record_key: record.record_key,
+      fingerprint: liveAIRecordFingerprint(record),
+    }))
+    .sort((a, b) => a.record_key.localeCompare(b.record_key));
+}
 export function validatePreparedTelegramReply(
   owner: string,
   prepared: PreparedTelegramRead,
@@ -207,6 +306,7 @@ export function validatePreparedTelegramReply(
   };
   if (prepared.reply.outbound_sent !== false) return fallback;
   if (
+    !prepared.ai_guard?.freshness &&
     prepared.state_guard &&
     canonical(prepared.state_guard) !==
       canonical({ contacts, commitments, sources: states })
@@ -217,6 +317,7 @@ export function validatePreparedTelegramReply(
     (record) =>
       record.owner_id === owner &&
       !record.cancelled &&
+      ["live", "snapshot"].includes(record.ingestion_mode) &&
       states.some(
         (state) =>
           state.owner_id === owner &&
@@ -225,8 +326,7 @@ export function validatePreparedTelegramReply(
           state.status !== "revoked",
       ) &&
       (record.source === "calendar"
-        ? Date.parse(record.end_at ?? record.occurred_at) >
-            Date.parse(window.start) &&
+        ? Date.parse(record.end_at ?? record.occurred_at) > now.getTime() &&
           Date.parse(record.occurred_at) < Date.parse(window.end)
         : Date.parse(record.occurred_at) >= now.getTime() - 30 * 86400000 &&
           Date.parse(record.occurred_at) <= now.getTime()),
@@ -244,6 +344,49 @@ export function validatePreparedTelegramReply(
     return fallback;
   if (prepared.ai_guard) {
     const guard = prepared.ai_guard;
+    if (guard.freshness) {
+      const group = guard.prepared.contact_group?.group;
+      if (
+        guard.prepared.draft_context &&
+        guard.prepared.draft_context.contact_name !==
+          guard.freshness.recipient.contact.name
+      )
+        return fallback;
+      if (
+        group?.members.some(
+          (member) =>
+            !states.some(
+              (state) =>
+                state.owner_id === owner &&
+                state.source === member.source &&
+                state.account_id === member.account_id &&
+                state.status !== "revoked",
+            ),
+        )
+      )
+        return fallback;
+      if (group && canonical(group) !== canonical(guard.current_group))
+        return fallback;
+      const recipient = telegramAIContactScope(
+        owner,
+        guard.prepared.contact_id,
+        group,
+        contacts,
+      );
+      if (
+        canonical(recipient) !== canonical(guard.freshness.recipient) ||
+        canonical(
+          telegramAIRecordSet(
+            owner,
+            guard.prepared.contact_id,
+            group,
+            current,
+            guard.freshness.accounts,
+          ),
+        ) !== canonical(guard.freshness.records)
+      )
+        return fallback;
+    } else if (!prepared.state_guard) return fallback;
     if (
       guard.prepared.owner_id !== owner ||
       canonical(
@@ -258,7 +401,12 @@ export function validatePreparedTelegramReply(
     )
       return fallback;
   }
-  return structuredClone(prepared.reply);
+  return {
+    ...structuredClone(prepared.reply),
+    ...(prepared.ai_guard?.freshness
+      ? { coverage: structuredClone(states) }
+      : {}),
+  };
 }
 export function exactTimestamp(s: string): boolean {
   if (

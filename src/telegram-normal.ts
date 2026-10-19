@@ -5,8 +5,10 @@ import type {
   NormalizedRecord,
   Reply,
   SourceState,
+  Source,
   TendStore,
 } from "./engine.ts";
+import { telegramAIContactScope, telegramAIRecordSet } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
   prepareLiveAI,
@@ -21,6 +23,11 @@ import {
   type VerifiedContactGroup,
 } from "./live-policy.ts";
 
+export interface TelegramAIFreshness {
+  recipient: { contact: Contact; members: (Contact & { emails: string[] })[] };
+  accounts: { source: Source; account_id: string; record_ids?: string[] }[];
+  records: { record_key: string; fingerprint: string }[];
+}
 export interface PreparedTelegramRead {
   reply: Reply;
   record_guards: { record_key: string; content_hash: string }[];
@@ -33,6 +40,7 @@ export interface PreparedTelegramRead {
     prepared: PreparedLiveAI;
     output: unknown;
     current_group?: VerifiedContactGroup | null;
+    freshness?: TelegramAIFreshness;
   };
 }
 export type NormalModelRequest = Omit<
@@ -156,7 +164,7 @@ export const localNormalModel: NormalModel = async (request, signal) => {
       ...request,
       think: false,
       stream: false,
-      ...(draft ? { keep_alive: 0 } : {}),
+      keep_alive: 0,
       options: {
         temperature: 0,
         num_predict: draft ? 1024 : 512,
@@ -390,13 +398,14 @@ export async function prepareNormalReply(input: {
   const read = (
     reply: Reply,
     records: NormalizedRecord[] = [],
+    scopedAI = false,
   ): PreparedTelegramRead => ({
     reply: { ...reply, warning: WARNING, outbound_sent: false },
     record_guards: records.map((r) => ({
       record_key: r.record_key,
       content_hash: r.content_hash,
     })),
-    state_guard: state,
+    ...(scopedAI ? {} : { state_guard: state }),
   });
   if (intent.intent === "status")
     return read({
@@ -580,6 +589,8 @@ export async function prepareNormalReply(input: {
           source: record.source,
           reference: record.evidence_reference,
           text: record.body_text.slice(0, 320),
+          all_day: record.all_day,
+          end_at: record.end_at,
         },
       })),
       ...suggestions.map((record) => ({
@@ -655,33 +666,49 @@ export async function prepareNormalReply(input: {
       lookup_note:
         "Names never merge identities; only existing verified identity groups may combine sources.",
     });
-  const namedMember = group?.members
-    .slice()
-    .sort((a, b) => Number(b.source === "gmail") - Number(a.source === "gmail"))
-    .map((member) =>
-      state.contacts.find(
-        (candidate) =>
-          candidate.contact_id === member.contact_id &&
-          candidate.emails.some(
-            (identity) => normalized(identity) === normalized(member.identity),
+  const recipient = telegramAIContactScope(
+    auth.owner_id,
+    group?.id ?? matches[0]!.contact_id,
+    group,
+    state.contacts,
+  );
+  if (!recipient)
+    return read({
+      outbound_sent: false,
+      normal_message:
+        "The selected contact changed. Choose an exact current identity.",
+    });
+  const contact = recipient.contact;
+  const accounts: TelegramAIFreshness["accounts"] = input.policy
+    ? [
+        { source: "gmail", account_id: policy.account_email },
+        ...policy.calendar_ids.map((account_id) => ({
+          source: "calendar" as const,
+          account_id,
+        })),
+        ...[
+          ...new Set(
+            policy.manual_calendar_snapshots?.map(
+              (snapshot) => snapshot.calendar_id,
+            ) ?? [],
           ),
-      ),
-    )
-    .find(
-      (candidate) =>
-        candidate &&
-        candidate.name.trim() &&
-        candidate.name !== candidate.contact_id &&
-        !candidate.name.includes("@") &&
-        !/^\+?[\d\s]+$/u.test(candidate.name),
-    );
-  const contact = group
-    ? {
-        owner_id: auth.owner_id,
-        contact_id: group.id,
-        name: namedMember?.name ?? "this contact",
-      }
-    : matches[0]!;
+        ]
+          .filter((account_id) => !policy.calendar_ids.includes(account_id))
+          .map((account_id) => ({
+            source: "calendar" as const,
+            account_id,
+            record_ids: policy
+              .manual_calendar_snapshots!.filter(
+                (snapshot) => snapshot.calendar_id === account_id,
+              )
+              .map((snapshot) => snapshot.event_id),
+          })),
+        ...(policy.social?.accounts.map(({ source, account_id }) => ({
+          source,
+          account_id,
+        })) ?? []),
+      ]
+    : state.sources.map(({ source, account_id }) => ({ source, account_id }));
   if (contact.name.length > 200)
     return read({
       outbound_sent: false,
@@ -754,8 +781,24 @@ export async function prepareNormalReply(input: {
         coverage: state.sources,
       },
       current.filter((r) => keys.has(r.record_key)),
+      true,
     ),
     record_guards: liveAIDependencies(prepared),
-    ai_guard: { prepared, output, current_group: currentGroup },
+    ai_guard: {
+      prepared,
+      output,
+      current_group: currentGroup,
+      freshness: {
+        recipient,
+        accounts,
+        records: telegramAIRecordSet(
+          auth.owner_id,
+          prepared.contact_id,
+          group,
+          records,
+          accounts,
+        ),
+      },
+    },
   };
 }

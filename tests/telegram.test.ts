@@ -157,6 +157,95 @@ describe("normal private Telegram entry and presentation", () => {
     expect(text).toContain("Check facts before sending");
     expect(text).toContain("Coverage is partial.");
   });
+  it("shows compact search excerpts with intact references and an honest count", () => {
+    const references = Array.from(
+      { length: 10 },
+      (_, i) => `tend-source:message-${i}-` + "x".repeat(90),
+    );
+    const result = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              normal_message: "Found imported messages",
+              search_results: references.map((reference, i) => ({
+                date: "2026-10-19T12:00:00Z",
+                source: "gmail",
+                attribution: "direct",
+                text: `Result ${i} ` + "<&>".repeat(170),
+                reference,
+              })),
+              coverage: [{ source: "gmail", status: "partial", mode: "live" }],
+            },
+          }),
+        },
+        $: () => ({ first: () => ({ json: { reply_chat_id: "424242" } }) }),
+      },
+    ) as { json: { text: string } }[];
+    const text = result[0]!.json.text;
+    const count = Number(
+      /Search: (\d+) of 10 ranked matches shown/.exec(text)?.[1],
+    );
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(10);
+    expect(
+      references.filter((reference) => text.includes("[" + reference + "]")),
+    ).toHaveLength(count);
+    expect(text).toContain("Narrow your search");
+    expect(text).toContain("Coverage: gmail: partial (live)");
+    expect(text).not.toContain("Reply shortened");
+    expect(text.length).toBeLessThanOrEqual(3800);
+    expect(text).toContain("&lt;&amp;&gt;");
+  });
+  it("formats priority times in Paris and preserves date-only and all-day meanings", () => {
+    const result = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              normal_message: "Priorities",
+              priorities: [
+                {
+                  kind: "meeting",
+                  reason: "Upcoming",
+                  date: "2026-10-22T12:00:00Z",
+                  text: "Timed",
+                  source: "calendar",
+                  reference: "tend-source:timed",
+                },
+                {
+                  kind: "meeting",
+                  reason: "Upcoming",
+                  date: "2026-10-22T00:00:00+02:00",
+                  end_at: "2026-10-23T00:00:00+02:00",
+                  all_day: true,
+                  text: "Whole day",
+                  source: "calendar",
+                  reference: "tend-source:day",
+                },
+                {
+                  kind: "confirmed_due",
+                  reason: "Due today",
+                  date: "2026-10-22",
+                  text: "Deadline",
+                  source: "gmail",
+                  reference: "tend-source:due",
+                },
+              ],
+            },
+          }),
+        },
+        $: () => ({ first: () => ({ json: { reply_chat_id: "424242" } }) }),
+      },
+    ) as { json: { text: string } }[];
+    const text = result[0]!.json.text;
+    expect(text).toContain("22 Oct 2026, 14:00 Europe/Paris");
+    expect(text).toContain("All-day 2026-10-22 (end-exclusive 2026-10-23)");
+    expect(text).toContain("Due today 2026-10-22 Deadline");
+    expect(text).not.toContain("12:00:00Z");
+  });
   it("labels ranked search and separates unconfirmed priority proposals", () => {
     const result = vm.runInNewContext(
       `(function(){${telegramLiveReplyCode}})()`,

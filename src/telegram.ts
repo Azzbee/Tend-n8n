@@ -141,7 +141,28 @@ const lines =`,
   )
   .replace(
     " if(Array.isArray(reply.evidence))",
-    " if(typeof reply.normal_message==='string'&&!record(reply.counts)&&(Array.isArray(reply.sources)||Array.isArray(reply.coverage))){const c=Array.isArray(reply.sources)?reply.sources:reply.coverage;lines.push('Coverage: '+c.filter(record).map(s=>string(s.source)+': '+string(s.status)+' ('+string(s.mode)+')').join('; ')+'. Ask for source status for full windows.');}\n if(typeof reply.priority_unavailable_count==='number'&&reply.priority_unavailable_count>0)lines.push(reply.priority_unavailable_count+' obligations/proposals have no eligible current evidence; review source status.');\n if(typeof reply.search_note==='string')lines.push(reply.search_note);\n if(Array.isArray(reply.search_results)){lines.push('Search results ('+reply.search_results.length+' of at most 10; imported coverage may be partial):');for(const item of reply.search_results.filter(record))lines.push(string(item.date)+' ['+string(item.source)+', '+string(item.attribution)+'] '+string(item.text)+' ['+string(item.reference)+']');}\n if(Array.isArray(reply.priorities)){lines.push('Priority review:');if(!reply.priorities.length)lines.push('No eligible priorities in the imported window; review unavailable-evidence warnings.');for(const item of reply.priorities.filter(record))lines.push(string(item.kind)+': '+string(item.reason)+' '+string(item.date)+' '+string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}\n if(Array.isArray(reply.priority_pending)){lines.push('Unconfirmed proposals (not deadlines): '+reply.priority_pending.length+' shown of '+reply.pending_total+'.');for(const item of reply.priority_pending.filter(record))lines.push(string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}\n if(Array.isArray(reply.evidence))",
+    ` if(typeof reply.priority_unavailable_count==='number'&&reply.priority_unavailable_count>0)lines.push(reply.priority_unavailable_count+' obligations/proposals have no eligible current evidence; review source status.');
+ if(typeof reply.search_note==='string')lines.push(reply.search_note);
+ if(Array.isArray(reply.search_results)){
+   const results=reply.search_results.filter(record);const shown=[];
+   const safeLength=value=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').length;
+   let budget=Math.max(0,2700-safeLength(lines.join('\\n')));
+   for(const item of results){
+     const raw=string(item.text).replace(/\\s+/g,' ').trim();const excerpt=Array.from(raw).slice(0,140).join('')+(Array.from(raw).length>140?'…':'');
+     const line=localTime(item.date)+' ['+string(item.source)+', '+string(item.attribution)+'] '+excerpt+' ['+string(item.reference)+']';
+     if(safeLength(line)+1>budget)break;shown.push(line);budget-=safeLength(line)+1;
+   }
+   lines.push('Search: '+shown.length+' of '+results.length+' ranked matches shown (up to 10 returned; imported coverage may be partial).',...shown);
+   if(shown.length<results.length)lines.push('Narrow your search to see the remaining matches.');
+ }
+ if(Array.isArray(reply.priorities)){lines.push('Priority review:');if(!reply.priorities.length)lines.push('No eligible priorities in the imported window; review unavailable-evidence warnings.');for(const item of reply.priorities.filter(record)){const date=item.all_day?'All-day '+localDate(item.date)+(item.end_at?' (end-exclusive '+localDate(item.end_at)+')':''):/^\\d{4}-\\d{2}-\\d{2}$/.test(string(item.date))?string(item.date):localTime(item.date);lines.push(string(item.kind)+': '+string(item.reason)+' '+date+' '+string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}}
+ if(Array.isArray(reply.priority_pending)){lines.push('Unconfirmed proposals (not deadlines): '+reply.priority_pending.length+' shown of '+reply.pending_total+'.');for(const item of reply.priority_pending.filter(record))lines.push(string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}
+ if(Array.isArray(reply.evidence))`,
+  )
+  .replace(
+    "let text = lines.join",
+    `if(typeof reply.normal_message==='string'&&!record(reply.counts)&&(Array.isArray(reply.sources)||Array.isArray(reply.coverage))){const c=Array.isArray(reply.sources)?reply.sources:reply.coverage;lines.push('Coverage: '+c.filter(record).map(s=>string(s.source)+': '+string(s.status)+' ('+string(s.mode)+')').join('; ')+'. Ask for source status for full windows.');}
+let text = lines.join`,
   )
   .replace(
     "string(source.mode) + '.'",

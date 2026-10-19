@@ -801,4 +801,967 @@ describe("personalised generated prose and retained prompt dependencies", () => 
       expect.arrayContaining([older.record_key, newest.record_key]),
     );
   });
+  it("constrains briefing selection to paired literal evidence choices", () => {
+    const source = record(),
+      prepared = prepare([source]);
+    expect(prepared.request.format).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["items"],
+    });
+    expect(prepared.briefing_choices).toEqual([
+      { evidence_id: "E1", quote: source.authored_text },
+    ]);
+    expect(
+      validateLiveAI(
+        prepared,
+        { items: [{ evidence_id: "E1", quote: source.authored_text }] },
+        [source],
+      ).status,
+    ).toBe("validated");
+    expect(
+      validateLiveAI(
+        prepared,
+        { items: [{ evidence_id: "E1", quote: "Friday" }] },
+        [source],
+      ).status,
+    ).toBe("fallback");
+    expect(
+      validateLiveAI(
+        prepared,
+        { items: [{ evidence_id: "E2", quote: source.authored_text }] },
+        [source],
+      ).status,
+    ).toBe("fallback");
+  });
+  it.each([
+    "Hi Mira, an update — could you send it?",
+    "Hi Mira, could we meet on 2026-12-31?",
+    "Hi Mira, see https://unrelated.example.invalid/private-doc",
+    "Hi Mira, can we revisit our September meeting at the research centre?",
+    "Hi Mira, can we pick up that meeting at the old venue?",
+  ])(
+    "withholds unsupported dates, links, stale invitations and forbidden punctuation: %s",
+    (text) => {
+      const source = record({
+        occurred_at: "2026-09-25T10:00:00Z",
+        body_text: "We could meet at the research centre next Wednesday.",
+        authored_text: "We could meet at the research centre next Wednesday.",
+      });
+      const prepared = draftPrepare([source]);
+      const result = validateLiveAI(
+        prepared,
+        {
+          items: [{ evidence_id: "E1", quote: source.authored_text }],
+          draft: { text },
+        },
+        [source],
+        undefined,
+        draftNow,
+      );
+      expect(result.status).toBe("fallback");
+      expect(result.draft).toBeNull();
+      const payload = JSON.parse(prepared.request.messages[1]!.content) as {
+        evidence: {
+          historical_reference_only: boolean;
+          temporal_use: string;
+        }[];
+      };
+      expect(payload.evidence[0]?.historical_reference_only).toBe(true);
+      expect(payload.evidence[0]?.temporal_use).toContain("old invitation");
+    },
+  );
+  it("permits only an owner-requested date/time supported by a current actual Calendar event", () => {
+    const source = record({
+      source: "calendar",
+      account_id: "primary",
+      kind: "meeting",
+      direction: "event",
+      record_key: "c".repeat(64),
+      body_text: "Prototype review",
+      authored_text: "",
+      occurred_at: "2026-10-20T12:00:00Z",
+      end_at: "2026-10-20T13:00:00Z",
+    });
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: draftNow.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Draft a note about our meeting on 2026-10-20 at 14:00.",
+        policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+      },
+    });
+    const result = validateLiveAI(
+      prepared,
+      {
+        items: [{ evidence_id: "E1", quote: source.body_text }],
+        draft: {
+          text: "Hi Mira, looking forward to our meeting on 2026-10-20 at 14:00.",
+        },
+      },
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("validated");
+    expect(result.draft?.pending_review).toBe(true);
+    expect(result.draft?.prose_fact_verified).toBe(false);
+    const wrong = validateLiveAI(
+      prepared,
+      {
+        items: [{ evidence_id: "E1", quote: source.body_text }],
+        draft: { text: "Hi Mira, our meeting is on 2026-10-21." },
+      },
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(wrong.draft).toBeNull();
+  });
+  it("allows a literal source URL without treating it as verified generated prose", () => {
+    const source = record({
+      body_text:
+        "The robotics presentation is on Friday. https://example.invalid/context",
+      authored_text:
+        "The robotics presentation is on Friday. https://example.invalid/context",
+    });
+    const prepared = draftPrepare([source]);
+    const result = validateLiveAI(
+      prepared,
+      generated(
+        "Hi Mira, could you share an update on https://example.invalid/context?",
+      ),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("validated");
+    expect(result.draft?.prose_fact_verified).toBe(false);
+  });
+  it("does not mix a requested date with another event’s time", () => {
+    const first = record({
+      source: "calendar",
+      account_id: "primary",
+      kind: "meeting",
+      direction: "event",
+      record_key: "c".repeat(64),
+      body_text: "First prototype review",
+      authored_text: "",
+      occurred_at: "2026-10-20T12:00:00Z",
+      end_at: "2026-10-20T13:00:00Z",
+    });
+    const second = {
+      ...first,
+      record_key: "d".repeat(64),
+      body_text: "Second prototype review",
+      occurred_at: "2026-10-21T14:00:00Z",
+      end_at: "2026-10-21T15:00:00Z",
+    };
+    const rows = [first, second];
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: rows,
+      draft_context: {
+        now: draftNow.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Draft a note about our meeting on 2026-10-20 at 16:00.",
+        policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+      },
+    });
+    const evidence = prepared.evidence.find(
+      (e) => e.record_key === first.record_key,
+    )!;
+    const result = validateLiveAI(
+      prepared,
+      {
+        items: [{ evidence_id: evidence.evidence_id, quote: first.body_text }],
+        draft: { text: "Hi Mira, our meeting is on 2026-10-20 at 16:00." },
+      },
+      rows,
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("fallback");
+    expect(result.draft).toBeNull();
+  });
+  it("enforces the final purpose-specific briefing prompt byte ceiling at boundary sizes", () => {
+    for (const count of [1, 2, 3, 4, 5, 6])
+      for (const length of [997, 1497, 1997, 2497, 2997, 3497]) {
+        const rows = Array.from({ length: count }, (_, i) =>
+          record({
+            record_key: i.toString(16).padStart(64, "0"),
+            authored_text:
+              "Current source context. " +
+              String.fromCharCode(92).repeat(length),
+          }),
+        );
+        const prepared = prepare(rows);
+        expect(prepared.request.messages[0]!.content).toContain(
+          "exact supplied choices",
+        );
+        expect(
+          Buffer.byteLength(JSON.stringify(prepared.request.messages)),
+        ).toBeLessThanOrEqual(6144);
+        expect(
+          Buffer.byteLength(JSON.stringify(prepared.request)),
+        ).toBeLessThanOrEqual(32768);
+        expect(prepared.briefing_choices?.length).toBe(
+          prepared.evidence.length,
+        );
+      }
+  });
+  it.each([
+    {
+      actual: "2026-10-20T12:00:00Z",
+      request: "Draft about our meeting on 2026-10-20 at 114:00.",
+      text: "Hi Mira, our meeting is on 2026-10-20 at 14:00.",
+    },
+    {
+      actual: "2026-10-20T12:00:00Z",
+      request: "Draft about our meeting on 2026-10-20 at 14:00.",
+      text: "Hi Mira, our meeting is on 2026-10-20 at 4:00.",
+    },
+    {
+      actual: "2026-10-20T12:00:00Z",
+      request: "Draft about our meeting on 2026-10-20 at 4:00.",
+      text: "Hi Mira, our meeting is on 2026-10-20 at 4:00.",
+    },
+    {
+      actual: "2026-10-21T12:00:00Z",
+      request: "Draft about our meeting on 21/10 at 14:00.",
+      text: "Hi Mira, our meeting is on 1/10 at 14:00.",
+    },
+    {
+      actual: "2026-10-21T12:00:00Z",
+      request: "Draft about our meeting on 1/10 at 14:00.",
+      text: "Hi Mira, our meeting is on 1/10 at 14:00.",
+    },
+  ])(
+    "rejects scheduling tokens that only occur inside a longer owner/event token: $text",
+    (testCase) => {
+      const source = record({
+        source: "calendar",
+        account_id: "primary",
+        kind: "meeting",
+        direction: "event",
+        record_key: "c".repeat(64),
+        body_text: "Prototype review",
+        authored_text: "",
+        occurred_at: testCase.actual,
+        end_at: new Date(Date.parse(testCase.actual) + 3600000).toISOString(),
+      });
+      const prepared = prepareLiveAI({
+        owner_id: "fictional-owner",
+        contact_id: "F17",
+        purpose: "draft",
+        records: [source],
+        draft_context: {
+          now: draftNow.toISOString(),
+          contact_name: "Mira",
+          owner_request: testCase.request,
+          policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+        },
+      });
+      const result = validateLiveAI(
+        prepared,
+        {
+          items: [{ evidence_id: "E1", quote: source.body_text }],
+          draft: { text: testCase.text },
+        },
+        [source],
+        undefined,
+        draftNow,
+      );
+      expect(result.status).toBe("fallback");
+      expect(result.draft).toBeNull();
+    },
+  );
+  it("normalizes whole French clock/date spellings without permitting substring matches", () => {
+    const source = record({
+      source: "calendar",
+      account_id: "primary",
+      kind: "meeting",
+      direction: "event",
+      record_key: "c".repeat(64),
+      body_text: "Prototype review",
+      authored_text: "",
+      occurred_at: "2026-10-21T12:00:00Z",
+      end_at: "2026-10-21T13:00:00Z",
+    });
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: draftNow.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Écris pour notre réunion le 21.10 à 14h00.",
+        policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+      },
+    });
+    const result = validateLiveAI(
+      prepared,
+      {
+        items: [{ evidence_id: "E1", quote: source.body_text }],
+        draft: { text: "Bonjour Mira, notre réunion est le 21/10 à 14:00." },
+      },
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("validated");
+    expect(result.draft?.pending_review).toBe(true);
+  });
+  it("instructs an original update request without inventing a deadline from historical Friday evidence", () => {
+    const source = record({
+      occurred_at: "2026-10-14T10:00:00Z",
+      body_text:
+        "The robotics presentation is scheduled for Friday. We discussed demonstration slides.",
+      authored_text:
+        "The robotics presentation is scheduled for Friday. We discussed demonstration slides.",
+    });
+    const prepared = draftPrepare(
+      [source],
+      "Prepare a short follow-up for Mira about the demonstration slides.",
+    );
+    expect(prepared.request.messages).toHaveLength(2);
+    expect(prepared.request.messages[0]!.content).toContain(
+      "Negative example, invented deadline",
+    );
+    expect(prepared.request.messages[0]!.content).toContain(
+      "Positive example for an update request",
+    );
+    expect(prepared.request.messages[0]!.content).toContain(
+      "without any added deadline",
+    );
+    expect(
+      Buffer.byteLength(JSON.stringify(prepared.request.messages)),
+    ).toBeLessThanOrEqual(6144);
+    const value = {
+      items: [{ evidence_id: "E1", quote: source.authored_text }],
+      draft: {
+        text: "Hi Mira, could you share any progress on the demonstration materials by tomorrow?",
+      },
+    };
+    expect(
+      validateLiveAI(prepared, value, [source], undefined, draftNow).draft,
+    ).toBeNull();
+    const safe = {
+      ...value,
+      draft: {
+        text: "Hi Mira, could you share an update on the demonstration slides?",
+      },
+    };
+    expect(
+      validateLiveAI(prepared, safe, [source], undefined, draftNow).draft
+        ?.pending_review,
+    ).toBe(true);
+  });
+  it.each([
+    "Could you send an update by5pm?",
+    "Could you send an update at 3 pm?",
+    "Could you send an update bythe20th?",
+    "Could you send an update Oct23?",
+    "Could you send an update beforeFri?",
+    "Pourrais-tu envoyer un point à 14 h 30 ?",
+    "Could you send an update by end of week?",
+    "Peux-tu envoyer un point la semaine prochaine ?",
+    "Could you send an update ASAP?",
+    "Could you share the times for our meetings?",
+    "Could you share the times for our calls?",
+    "Pourrais-tu préciser nos réunions ?",
+    "Could you send an update at ３ ｐｍ?",
+  ])("withholds a known unsupported scheduling/meeting form: %s", (text) => {
+    const source = record(),
+      prepared = draftPrepare([source]);
+    const result = validateLiveAI(
+      prepared,
+      generated(text),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("fallback");
+    expect(result.draft).toBeNull();
+  });
+  it.each([
+    {
+      request: "Write about our meeting at 15:00.",
+      text: "Hi Mira, our meeting is at 3 pm.",
+      clock: "2026-10-21T13:00:00Z",
+    },
+    {
+      request: "Écris pour notre réunion à 14h30.",
+      text: "Bonjour Mira, notre réunion est à 14 h 30.",
+      clock: "2026-10-21T12:30:00Z",
+    },
+  ])(
+    "matches a supported whole current Calendar clock after normalizing $text",
+    (testCase) => {
+      const source = record({
+        source: "calendar",
+        account_id: "primary",
+        kind: "meeting",
+        direction: "event",
+        record_key: "c".repeat(64),
+        body_text: "Prototype review",
+        authored_text: "",
+        occurred_at: testCase.clock,
+        end_at: new Date(Date.parse(testCase.clock) + 3600000).toISOString(),
+      });
+      const prepared = prepareLiveAI({
+        owner_id: "fictional-owner",
+        contact_id: "F17",
+        purpose: "draft",
+        records: [source],
+        draft_context: {
+          now: draftNow.toISOString(),
+          contact_name: "Mira",
+          owner_request: testCase.request,
+          policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+        },
+      });
+      const result = validateLiveAI(
+        prepared,
+        {
+          items: [{ evidence_id: "E1", quote: source.body_text }],
+          draft: { text: testCase.text },
+        },
+        [source],
+        undefined,
+        draftNow,
+      );
+      expect(result.status).toBe("validated");
+      expect(result.draft?.pending_review).toBe(true);
+    },
+  );
+  it("withholds an unsupported bare domain/path in generated prose", () => {
+    const source = record(),
+      prepared = draftPrepare([source]);
+    const result = validateLiveAI(
+      prepared,
+      generated("Hi Mira, please review example.com/private-doc."),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("fallback");
+    expect(result.draft).toBeNull();
+  });
+  it("requires whole source URL tokens rather than a prefix of another host or path", () => {
+    const source = record({
+      authored_text:
+        "The robotics presentation is on Friday. See https://example.com.evil/private-doc and https://example.org/document-long.",
+      body_text:
+        "The robotics presentation is on Friday. See https://example.com.evil/private-doc and https://example.org/document-long.",
+    });
+    const prepared = draftPrepare([source]);
+    for (const text of [
+      "Hi Mira, please review https://example.com.",
+      "Hi Mira, please review https://example.org/document.",
+    ]) {
+      const result = validateLiveAI(
+        prepared,
+        generated(text),
+        [source],
+        undefined,
+        draftNow,
+      );
+      expect(result.status).toBe("fallback");
+      expect(result.draft).toBeNull();
+    }
+  });
+  it.each([
+    {
+      text: "Notre réunion est le20-11.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the20-11.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21-10-26.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 20-10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21-10-2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21-10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 2026/11.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 2026.11.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 2026.11.10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le20-Nov-2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 21.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 21 à 15h.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the 21.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 20.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on the 20.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le21.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the21.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21-Oct-2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21-Oct.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 20-Oct-2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on Oct-20-2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 20-Oct.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 2026/11/10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 20/10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le 20.10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is at the 3 pm.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est à le 15h.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 2026-1-5.",
+      event: "2026-01-05T12:00:00Z",
+      now: "2026-01-04T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 2026-10-20T14:00.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the 10th.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the 14th.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the 30th.",
+      event: "2026-10-20T12:30:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 1er.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 2026-11-05T10:00.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 2026-11-5.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on the 20th.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 2026-10-20.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 2026-10-5.",
+      event: "2026-10-05T12:00:00Z",
+      now: "2026-10-04T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le 1er.",
+      event: "2026-11-01T12:00:00Z",
+      now: "2026-10-31T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le 1er novembre 2026.",
+      event: "2026-11-01T12:00:00Z",
+      now: "2026-10-31T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 21 of October 2026.",
+      event: "2026-10-21T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 21 Oct 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21 Sept.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 21 oct. 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 1er octobre 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 21 of October 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on Monday 26.",
+      event: "2026-10-19T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est lundi 26.",
+      event: "2026-10-19T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 11/2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 11.2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 2026-11.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is next week.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is at noon.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est à midi.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 20 Oct 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on Oct. 20, 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le 20 oct. 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 20th of October 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on Monday 19.",
+      event: "2026-10-19T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est lundi 19.",
+      event: "2026-10-19T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is in 10/2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is in 10.2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is in 2026-10.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T10:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 21 October 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on October 21, 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Notre réunion est le 21 octobre 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 20 October 2027.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is in 2027.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 5 May.",
+      event: "2026-05-15T12:00:00Z",
+      now: "2026-05-14T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 10/20.",
+      event: "2026-10-05T12:00:00Z",
+      now: "2026-10-04T12:00:00Z",
+      accepted: false,
+    },
+    {
+      text: "Our meeting is on 20 October 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on October 20, 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Notre réunion est le 20 octobre 2026.",
+      event: "2026-10-20T12:00:00Z",
+      now: "2026-10-19T12:00:00Z",
+      accepted: true,
+    },
+    {
+      text: "Our meeting is on 15 May.",
+      event: "2026-05-15T12:00:00Z",
+      now: "2026-05-14T12:00:00Z",
+      accepted: true,
+    },
+  ])(
+    "validates complete named dates and whole Calendar tokens: $text",
+    (testCase) => {
+      const source = record({
+        source: "calendar",
+        account_id: "primary",
+        kind: "meeting",
+        direction: "event",
+        record_key: "c".repeat(64),
+        body_text: "Prototype review",
+        authored_text: "",
+        occurred_at: testCase.event,
+        end_at: new Date(Date.parse(testCase.event) + 3600000).toISOString(),
+      });
+      const prepared = prepareLiveAI({
+        owner_id: "fictional-owner",
+        contact_id: "F17",
+        purpose: "draft",
+        records: [source],
+        draft_context: {
+          now: testCase.now,
+          contact_name: "Mira",
+          owner_request: `Draft this: ${testCase.text}`,
+          policy: { ...exampleLivePolicy, calendar_ids: ["primary"] },
+        },
+      });
+      const result = validateLiveAI(
+        prepared,
+        {
+          items: [{ evidence_id: "E1", quote: source.body_text }],
+          draft: { text: testCase.text },
+        },
+        [source],
+        undefined,
+        new Date(testCase.now),
+      );
+      expect(result.status).toBe(testCase.accepted ? "validated" : "fallback");
+      if (testCase.accepted) expect(result.draft?.pending_review).toBe(true);
+      else expect(result.draft).toBeNull();
+    },
+  );
 });

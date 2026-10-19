@@ -46,6 +46,7 @@ const server = createLiveServer({
   clock: () => now,
 });
 const paths: string[] = [];
+let cleanupError: Error | null = null;
 server.prependListener("request", (req) =>
   paths.push((req.url ?? "").split("?")[0]!),
 );
@@ -315,6 +316,23 @@ try {
     "Native result item missing",
   );
   const result = recordMap(finalData.main[0][0], "json");
+  writeFileSync(
+    resolve(`.scratch/live-ai-native-attempt-${name}.json`),
+    JSON.stringify(
+      {
+        checked_at: new Date().toISOString(),
+        purpose,
+        live_ai_source_sha256: liveAISourceHash,
+        scope:
+          "Isolated fictional native execution. Preserved before validation assertions.",
+        model_output: chainOutput,
+        result,
+      },
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600, flag: "wx" },
+  );
   assert(
     ["validated", "fallback"].includes(String(result.status)),
     "Native result was neither validated nor fallback",
@@ -445,4 +463,34 @@ try {
     await new Promise<void>((ok) => server.close(() => ok()));
   store.close();
   rmSync(scratch, { recursive: true, force: true });
+  // Native model nodes otherwise retain their model while the next cold check runs.
+  try {
+    const response = await fetch("http://127.0.0.1:11434/api/generate", {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: draftCheck ? "qwen3:4b" : "qwen3:0.6b",
+        keep_alive: 0,
+      }),
+    });
+    const status: unknown = await response.json();
+    assert(
+      response.ok &&
+        isRecord(status) &&
+        status.done === true &&
+        status.done_reason === "unload",
+      "Native check model unload was not acknowledged",
+    );
+  } catch (error: unknown) {
+    console.error(
+      "Native check model unload failed:",
+      error instanceof Error ? error.message : "Unknown error",
+    );
+    cleanupError =
+      error instanceof Error ? error : new Error("Unknown model unload error");
+  }
 }
+
+if (cleanupError) throw cleanupError;
