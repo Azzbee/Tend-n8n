@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-19T09:50:06.450Z",
+  "checked_at": "2026-10-19T13:13:53.674Z",
   "pass": true,
   "scope": "Fictional source data only; isolated native n8n container and in-memory private API. Actual local Ollama execution, no real-data claim.",
   "runtime": {

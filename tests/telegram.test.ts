@@ -35,6 +35,91 @@ const run = (
   vm.runInNewContext(`(function(){${code}})()`, {
     $input: { first: () => ({ json: input }) },
   });
+describe("normal private Telegram entry and presentation", () => {
+  const guard = configuredLiveGuard(
+    "424242",
+    "424242",
+    "private-owner",
+    "private-control",
+  );
+  it("admits normal owner text only in the live private guard", () => {
+    for (const text of [
+      "Explain all your features",
+      "Quels rendez-vous ai-je aujourd’hui ?",
+    ]) {
+      const message = { ...update, message: { ...update.message, text } };
+      expect(run(message)).toEqual([]);
+      expect(run(message, guard)).toEqual([
+        expect.objectContaining({
+          json: expect.objectContaining({
+            help: false,
+            command: expect.objectContaining({ text }),
+          }),
+        }),
+      ]);
+      expect(
+        run(
+          {
+            ...message,
+            message: {
+              ...message.message,
+              chat: { id: 424242, type: "group" },
+            },
+          },
+          guard,
+        ),
+      ).toEqual([]);
+      expect(
+        run(
+          {
+            ...message,
+            message: { ...message.message, from: { id: 999, is_bot: false } },
+          },
+          guard,
+        ),
+      ).toEqual([]);
+    }
+    expect(
+      run({ ...update, message: { ...update.message, text: "   " } }, guard),
+    ).toEqual([]);
+    expect(
+      run(
+        { ...update, message: { ...update.message, text: "x".repeat(501) } },
+        guard,
+      ),
+    ).toEqual([]);
+  });
+  it("escapes normal replies, states zero pending proposals and retains the enrolled destination", () => {
+    const result = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              outbound_sent: false,
+              normal_message: "Your <private> agenda & promises",
+              commitments: [],
+              pending: [],
+              chat_id: "foreign",
+              warning: "Coverage is partial.",
+            },
+          }),
+        },
+        $: () => ({
+          first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+        }),
+      },
+    ) as { json: { chat_id: string; text: string } }[];
+    expect(result[0]!.json.chat_id).toBe("424242");
+    expect(result[0]!.json.text).toContain(
+      "Your &lt;private&gt; agenda &amp; promises",
+    );
+    expect(result[0]!.json.text).toContain(
+      "Confirmed obligations: 0. Pending proposals: 0.",
+    );
+    expect(result[0]!.json.text).toContain("Coverage is partial.");
+  });
+});
 describe("Telegram owner boundary", () => {
   it("fails closed until both owner IDs are configured", () =>
     expect(run(update, telegramGuardCode)).toEqual([]));
@@ -329,7 +414,7 @@ describe("private Google Telegram boundary", () => {
       "Unvalidated extraction attempts needing review: 2.",
     );
     expect(text).toContain("Promises with unavailable evidence: 1.");
-    expect(text).toContain("Private Gmail and Calendar summary");
+    expect(text).toContain("Tend • private assistant");
     expect(text).toContain("a@example.invalid");
     expect(text).toContain("Unavailable source records needing review: 3");
     expect(text).toContain("All-day 2026-10-14 (end-exclusive 2026-10-15)");

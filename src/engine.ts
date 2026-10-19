@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { canonicalEmail, type LiveRecord } from "./google-records.ts";
 import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
 import { chmodSync } from "node:fs";
+import { validateLiveAI } from "./live-ai.ts";
+import type { PreparedTelegramRead } from "./telegram-normal.ts";
 import {
   eligiblePromiseSpans,
   isExplicitCommitment,
@@ -175,6 +177,87 @@ export interface AuthCommand {
 export interface Reply {
   outbound_sent: false;
   [key: string]: unknown;
+}
+export function validatePreparedTelegramReply(
+  owner: string,
+  prepared: PreparedTelegramRead,
+  records: readonly NormalizedRecord[],
+  contacts: (Contact & { emails: string[] })[],
+  commitments: Commitment[],
+  states: SourceState[],
+  now: Date,
+): Reply {
+  const fallback: Reply = {
+    outbound_sent: false,
+    warning:
+      "Source evidence changed while preparing this reply. Ask again for current evidence.",
+  };
+  const canonical = (value: unknown): string => {
+    const ordered = (item: unknown): unknown =>
+      Array.isArray(item)
+        ? item.map(ordered)
+        : isRecord(item)
+          ? Object.fromEntries(
+              Object.keys(item)
+                .sort()
+                .map((key) => [key, ordered(item[key])]),
+            )
+          : item;
+    return JSON.stringify(ordered(value));
+  };
+  if (prepared.reply.outbound_sent !== false) return fallback;
+  if (
+    prepared.state_guard &&
+    canonical(prepared.state_guard) !==
+      canonical({ contacts, commitments, sources: states })
+  )
+    return fallback;
+  const window = calendarWindow(exampleLivePolicy, now);
+  const current = records.filter(
+    (record) =>
+      record.owner_id === owner &&
+      !record.cancelled &&
+      states.some(
+        (state) =>
+          state.owner_id === owner &&
+          state.source === record.source &&
+          state.account_id === record.account_id &&
+          state.status !== "revoked",
+      ) &&
+      (record.source === "calendar"
+        ? Date.parse(record.end_at ?? record.occurred_at) >
+            Date.parse(window.start) &&
+          Date.parse(record.occurred_at) < Date.parse(window.end)
+        : Date.parse(record.occurred_at) >= now.getTime() - 30 * 86400000 &&
+          Date.parse(record.occurred_at) <= now.getTime()),
+  );
+  if (
+    prepared.record_guards.some(
+      (guard) =>
+        !current.some(
+          (record) =>
+            record.record_key === guard.record_key &&
+            record.content_hash === guard.content_hash,
+        ),
+    )
+  )
+    return fallback;
+  if (prepared.ai_guard) {
+    const guard = prepared.ai_guard;
+    if (
+      guard.prepared.owner_id !== owner ||
+      canonical(
+        validateLiveAI(
+          guard.prepared,
+          guard.output,
+          current,
+          guard.current_group,
+        ),
+      ) !== canonical(prepared.reply.ai)
+    )
+      return fallback;
+  }
+  return structuredClone(prepared.reply);
 }
 export function exactTimestamp(s: string): boolean {
   if (
@@ -1546,6 +1629,58 @@ export class TendStore {
             JSON.stringify(reply),
             "reply_pending",
           );
+      this.db.exec("COMMIT");
+      return { accepted: true, reply };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  commitTelegramReply(
+    auth: AuthCommand,
+    channelId: string,
+    updateId: number,
+    prepared: PreparedTelegramRead,
+    signal?: AbortSignal,
+  ): { accepted: boolean; reply?: Reply } {
+    signal?.throwIfAborted();
+    this.authorizeCommand(auth);
+    this.validateTelegramKey(channelId, updateId);
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior = this.db
+        .prepare(
+          "SELECT 1 FROM live_telegram_updates WHERE owner_id=? AND channel_id=? AND update_id=?",
+        )
+        .get(auth.owner_id, channelId, updateId);
+      if (prior) {
+        this.db.exec("COMMIT");
+        return { accepted: false };
+      }
+      const reply = validatePreparedTelegramReply(
+        auth.owner_id,
+        prepared,
+        this.interactions(auth.owner_id),
+        this.contacts(auth.owner_id),
+        this.commitments(auth.owner_id),
+        this.sourceStatus(auth.owner_id),
+        this.clock(),
+      );
+      signal?.throwIfAborted();
+      this.db
+        .prepare(
+          "INSERT INTO live_telegram_updates(owner_id,channel_id,update_id,payload_hash,reply_data,status) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          auth.owner_id,
+          channelId,
+          updateId,
+          createHash("sha256").update(auth.text).digest("hex"),
+          JSON.stringify(reply),
+          "reply_pending",
+        );
+      signal?.throwIfAborted();
       this.db.exec("COMMIT");
       return { accepted: true, reply };
     } catch (error) {

@@ -25,6 +25,7 @@ export type LiveStoreMethod =
   | "revokeSource"
   | "command"
   | "telegramCommand"
+  | "commitTelegramReply"
   | "pendingTelegramReply"
   | "acknowledgeTelegramReply"
   | "close";

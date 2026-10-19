@@ -27,12 +27,18 @@ import {
 } from "./google-records.ts";
 
 import type { LiveStore } from "./live-store.ts";
+import {
+  prepareNormalReply,
+  type NormalModel,
+  type PreparedTelegramRead,
+} from "./telegram-normal.ts";
 
 export interface LiveServerOptions {
   policy: LivePolicy;
   auth: InternalAuth;
   store: TendStore | LiveStore;
   clock?: () => Date;
+  normalModel?: NormalModel;
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
@@ -135,6 +141,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
       })
     : null;
   let calendarTurn = 0;
+  const normalInFlight = new Set<string>();
   const pendingAI = new Map<
     string,
     { prepared: PreparedLiveAI; expires: number }
@@ -179,6 +186,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
   };
   return createServer(async (req, res) => {
     const respond = (status: number, data: unknown) => {
+      if (res.destroyed || res.writableEnded) return;
       res.writeHead(status, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
@@ -865,7 +873,114 @@ export function createLiveServer(options: LiveServerOptions): Server {
           typeof value.telegram_update_id !== "number"
         )
           throw new Error("update key required");
-        if (url.pathname.endsWith("/command"))
+        if (
+          url.pathname.endsWith("/command") &&
+          !envelope.text.trim().startsWith("/")
+        ) {
+          const channel = value.telegram_channel_id;
+          const update = value.telegram_update_id;
+          if (
+            !/^[a-z0-9-]{1,80}$/.test(channel) ||
+            !Number.isSafeInteger(update) ||
+            update < 0 ||
+            !envelope.text.trim()
+          )
+            throw new Error("Invalid normal Telegram update");
+          const key = JSON.stringify([owner, channel, update]);
+          if (normalInFlight.has(key)) {
+            respond(503, { accepted: false, retryable: true });
+            return;
+          }
+          const busy = normalInFlight.size >= 4;
+          normalInFlight.add(key);
+          const disconnected = new AbortController();
+          const abortDisconnected = () => {
+            if (!res.writableEnded)
+              disconnected.abort(new Error("Telegram request disconnected"));
+          };
+          res.once("close", abortDisconnected);
+          const fallback = (message: string): PreparedTelegramRead => ({
+            reply: {
+              outbound_sent: false,
+              normal_message: message,
+              warning:
+                "No obligation was changed and no contact was messaged. Use /status, /today or /help for explicit requests.",
+            },
+            record_guards: [],
+          });
+          try {
+            let prepared: PreparedTelegramRead;
+            if (busy)
+              prepared = fallback(
+                "I am processing several requests. Please try again shortly.",
+              );
+            else {
+              try {
+                prepared = await prepareNormalReply({
+                  auth: envelope,
+                  store,
+                  ...(options.normalModel
+                    ? { model: options.normalModel }
+                    : {}),
+                  clock,
+                  policy,
+                  signal: AbortSignal.any([
+                    disconnected.signal,
+                    AbortSignal.timeout(45000),
+                  ]),
+                  async resolveGroup(query) {
+                    const direct = await resolveGroup(query);
+                    if (direct) return direct;
+                    const contacts = await store.contacts(owner);
+                    const matches = contacts.filter(
+                      (contact) =>
+                        contact.contact_id === query ||
+                        contact.emails.some(
+                          (email) =>
+                            email.toLowerCase() === query.toLowerCase(),
+                        ) ||
+                        contact.name.toLowerCase() === query.toLowerCase(),
+                    );
+                    if (matches.length !== 1) return null;
+                    const groups = policy.verified_contact_groups?.filter(
+                      (group) =>
+                        group.members.some(
+                          (member) =>
+                            member.contact_id === matches[0]!.contact_id,
+                        ),
+                    );
+                    return groups?.length === 1
+                      ? ((await resolveGroup(groups[0]!.id)) ?? null)
+                      : null;
+                  },
+                });
+              } catch {
+                if (disconnected.signal.aborted) return;
+                prepared = fallback(
+                  "The local interpreter could not finish this request. Please try a narrower question or an explicit command.",
+                );
+              }
+            }
+            if (disconnected.signal.aborted || res.destroyed) return;
+            await enforceRetention();
+            if (prepared.ai_guard?.prepared.contact_group)
+              prepared.ai_guard.current_group =
+                (await resolveGroup(prepared.ai_guard.prepared.contact_id)) ??
+                null;
+            if (disconnected.signal.aborted || res.destroyed) return;
+            const result = await store.commitTelegramReply(
+              envelope,
+              channel,
+              update,
+              prepared,
+              disconnected.signal,
+            );
+            if (!res.destroyed) respond(200, result);
+          } finally {
+            normalInFlight.delete(key);
+            res.removeListener("close", abortDisconnected);
+          }
+        } else if (url.pathname.endsWith("/command"))
           respond(
             200,
             await store.telegramCommand(

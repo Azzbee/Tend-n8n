@@ -16,6 +16,9 @@ const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep
 return [{json:{reply_chat_id:allowedChatId,help,telegram_update_id:update.update_id,telegram_channel_id:'tend-course-control',command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
 `;
 export const telegramLiveGuardCode = telegramGuardCode
+  .replace("if (!text.startsWith('/')) return [];", "if (!text) return [];")
+  .replace("const help =", "const help = text.startsWith('/') && (")
+  .replace(".test(text);", ".test(text));")
   .replace(
     "status|today|prep|draft|confirm|done|cancel",
     "status|today|contacts|prep|draft|confirm|done|cancel",
@@ -91,17 +94,14 @@ export function configuredLiveGuard(
     .replaceAll("CONFIGURE_LIVE_CHANNEL_ID", channelId);
 }
 export const telegramLiveReplyCode = telegramReplyCode
-  .replace(
-    "['Course demo • fictional data']",
-    "['Private Gmail and Calendar summary']",
-  )
+  .replace("['Course demo • fictional data']", "['Tend • private assistant']")
   .replace(
     "Commands: /status, /today, /prep F17,",
     "Commands: /status, /today, /contacts query, /prep email-or-ID,",
   )
   .replace(
     "Your private control chat uses fictional evidence only. No personal inbox history is imported.",
-    "Approved scope: recent Gmail and selected upcoming calendars. Replies stay in your enrolled private control chat; no contact receives an action.",
+    "You can also ask normal messages about imported source status, meetings, promises, contact briefings and held drafts. Approved source coverage may be partial. Replies stay in your enrolled private control chat; no contact receives an action.",
   )
   .replace(
     "const lines =",
@@ -110,6 +110,10 @@ const localTime=value=>{const date=new Date(value);return Number.isFinite(date.g
 const lines =`,
   )
   .replace("Fixture clock:", "Clock:")
+  .replace(
+    " if(record(reply.counts))",
+    " if(typeof reply.normal_message==='string'){lines.push(reply.normal_message);if(Array.isArray(reply.commitments)&&Array.isArray(reply.pending))lines.push('Confirmed obligations: '+reply.commitments.length+'. Pending proposals: '+reply.pending.length+'.');}\n if(record(reply.counts))",
+  )
   .replace(
     "string(item.occurred_at) + ': ' + string(item.body_text)",
     "(item.all_day ? 'All-day '+localDate(item.occurred_at)+' (end-exclusive '+localDate(item.end_at)+')' : localTime(item.occurred_at)+(item.end_at?' to '+localTime(item.end_at):'')) + ': ' + string(item.body_text) + (item.evidence_reference?' ['+string(item.evidence_reference)+']':'')",

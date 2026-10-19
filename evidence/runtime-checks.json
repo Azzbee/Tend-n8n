@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-19T09:49:41.675Z",
+  "checked_at": "2026-10-19T13:13:41.501Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -14,7 +14,7 @@
     "11-google-gmail-readonly.json": "09052c99e7b745cc35e35c25e500a344219b77e77aced5bdfaea43648a98a3fc",
     "12-google-calendar-readonly.json": "0986cdb6b3cdf7c04bea86c9d2edff447d02d47132ade18fa977dcf92d8842c6",
     "13-google-normalize-store.json": "2e97ad270c12b370da19deebaa49d6d3789121f5976f9e21c3fc538e8d121692",
-    "14-google-telegram-private.json": "70d1adb0d75177c3ca8e7ed7541d1f27b5ec28198e65e453a314b7282e8ef605",
+    "14-google-telegram-private.json": "5535ab1470a6a8815c736851cd67b6e5090b07772126b752044eaac7f4c39013",
     "15-google-extract-commitments.json": "098318be83ce2b26c0687b47494f8e6b35e20308b93d8bd8855296b91cb95909",
     "16-live-ai-review.json": "bf9e3abe5eaf707f58bc86bc22bbe762b7725cda47783b600d1b71a98b830668",
     "17-personal-whatsapp-readonly.json": "ee669d8b8f5fb3f3bc5c6faa0473662eb66c43d2d6555fbe107feb152c544a11",
@@ -22,9 +22,9 @@
     "19-business-whatsapp-readonly.json": "66b18e9a0c96f31ec17fa62e29ff1c1f8b6d50d31c8a2ba03589d18a1bcfd155"
   },
   "source_sha256": {
-    "engine.ts": "383021242ea8b394469f7d30dea1278e1b59359caefe038a83c8702816e185de",
+    "engine.ts": "cfae8bf20af257e2e1c2901f952c1aa54f7dc714f00ffce426618743bed20714",
     "server.ts": "931fe5270f0206d118081c47d0febeda2aa07fe59d8fa886b730f4e07af79c94",
-    "build-workflows.ts": "d64ac53412bce8b23506224cefcd37d7269d7c1719109bc2dec199cc43db0afd",
+    "build-workflows.ts": "aedb1ed632cb9ddc35950a3659d3475272a4b49b7a5453a309cc06cd1b5b17b7",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
     "integration.ts": "6e1545d11faa5274ff00cbf3c74f1e6d2ae70eab675edeb9a4a107264c6b756f"
   },

@@ -23,7 +23,9 @@ import {
   normalizeLiveRecord,
   liveBatchCompletion,
   resetLiveCompleteness,
+  validatePreparedTelegramReply,
 } from "./engine.ts";
+import type { PreparedTelegramRead } from "./telegram-normal.ts";
 import type { LiveRecord } from "./google-records.ts";
 import { canonicalEmail } from "./google-records.ts";
 import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
@@ -965,6 +967,52 @@ export class PostgresStore implements LiveStore {
           "reply_pending",
         ],
       );
+      return { accepted: true, reply };
+    });
+  }
+  async commitTelegramReply(
+    auth: AuthCommand,
+    channel: string,
+    update: number,
+    prepared: PreparedTelegramRead,
+    signal?: AbortSignal,
+  ): Promise<{ accepted: boolean; reply?: Reply }> {
+    signal?.throwIfAborted();
+    this.authorize(auth);
+    this.telegramKey(channel, update);
+    return this.run(async (s) => {
+      signal?.throwIfAborted();
+      if (
+        (
+          await s.q(
+            "SELECT 1 FROM live_reply_ledger WHERE owner_id=$1 AND channel_id=$2 AND update_id=$3",
+            [auth.owner_id, channel, update],
+          )
+        ).length
+      )
+        return { accepted: false };
+      const reply = validatePreparedTelegramReply(
+        auth.owner_id,
+        prepared,
+        await s.interactions(auth.owner_id),
+        await s.contacts(auth.owner_id),
+        await s.commitments(auth.owner_id),
+        await s.sourceStatus(auth.owner_id),
+        s.clock(),
+      );
+      signal?.throwIfAborted();
+      await s.q(
+        "INSERT INTO live_reply_ledger(owner_id,channel_id,update_id,payload_hash,reply_data,status) VALUES($1,$2,$3,$4,$5,$6)",
+        [
+          auth.owner_id,
+          channel,
+          update,
+          createHash("sha256").update(auth.text).digest("hex"),
+          JSON.stringify(reply),
+          "reply_pending",
+        ],
+      );
+      signal?.throwIfAborted();
       return { accepted: true, reply };
     });
   }

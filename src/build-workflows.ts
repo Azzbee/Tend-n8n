@@ -943,6 +943,7 @@ const googleTelegram = structuredClone(liveTelegram);
 googleTelegram.id = "TendGoogle14";
 googleTelegram.name = "Tend 14: Private approved Google owner control";
 googleTelegram.settings.saveManualExecutions = false;
+googleTelegram.settings.executionTimeout = 90;
 googleTelegram.versionId = "00000000-0000-4000-8000-000000000014";
 for (const n of googleTelegram.nodes) {
   if (n.credentials?.telegramApi)
@@ -965,6 +966,8 @@ for (const n of googleTelegram.nodes) {
       genericAuthType: "httpHeaderAuth",
     };
     n.credentials = internalCredential;
+    if (n.name === "Read or change fictional demo state")
+      n.parameters.options = { timeout: 60000 };
   }
   if (n.name === "Format private owner reply")
     n.parameters.jsCode = telegramLiveReplyCode;
