@@ -101,7 +101,7 @@ export const telegramLiveReplyCode = telegramReplyCode
   )
   .replace(
     "Your private control chat uses fictional evidence only. No personal inbox history is imported.",
-    "You can also ask normal messages about imported source status, meetings, promises, contact briefings and held drafts. Approved source coverage may be partial. Replies stay in your enrolled private control chat; no contact receives an action.",
+    "You can also ask normal messages about imported source status, meetings, promises, contact briefings, held drafts, conversation search and priority briefings. Approved source coverage may be partial. Replies stay in your enrolled private control chat; no contact receives an action.",
   )
   .replace(
     "const lines =",
@@ -112,7 +112,7 @@ const lines =`,
   .replace("Fixture clock:", "Clock:")
   .replace(
     " if(record(reply.counts))",
-    " if(typeof reply.normal_message==='string'){lines.push(reply.normal_message);if(Array.isArray(reply.commitments)&&Array.isArray(reply.pending))lines.push('Confirmed obligations: '+reply.commitments.length+'. Pending proposals: '+reply.pending.length+'.');}\n if(record(reply.counts))",
+    " if(typeof reply.normal_message==='string'){if(!(record(reply.ai)&&record(reply.ai.draft)&&reply.normal_message===reply.ai.draft.label))lines.push(reply.normal_message);if(record(reply.ai)&&record(reply.ai.draft)){const d=reply.ai.draft;lines.push(string(d.label)+'. Nothing sent to a contact.',record(d.recipient)?'For: '+string(d.recipient.name):'',string(d.text),d.style_basis==='recipient_examples'?'Writing style: your messages to this contact.':'Writing style: neutral.');}else if(typeof reply.preview==='string')lines.push('Private draft preview only. Nothing sent to a contact.',reply.preview);if(Array.isArray(reply.commitments)&&Array.isArray(reply.pending))lines.push('Confirmed obligations: '+reply.commitments.length+'. Pending proposals: '+reply.pending.length+'.');}\n if(record(reply.counts))",
   )
   .replace(
     "string(item.occurred_at) + ': ' + string(item.body_text)",
@@ -130,6 +130,18 @@ const lines =`,
   .replace(
     " if(record(reply.contact))",
     " if(Array.isArray(reply.contacts)){lines.push('Contacts ('+reply.contacts.length+' of '+reply.contacts_total+' matches):');for(const c of reply.contacts.filter(record))lines.push(string(c.name)+' ('+string(c.contact_id)+') '+(Array.isArray(c.emails)?c.emails.map(string).join(', '):''));if(typeof reply.lookup_note==='string')lines.push(reply.lookup_note);}\n if(record(reply.contact))",
+  )
+  .replace(
+    "if(Array.isArray(reply.sources) || Array.isArray(reply.coverage))",
+    "if((Array.isArray(reply.sources) || Array.isArray(reply.coverage)) && (record(reply.counts) || typeof reply.normal_message!=='string'))",
+  )
+  .replace(
+    " if(typeof reply.preview === 'string')",
+    " if(typeof reply.normal_message!=='string' && typeof reply.preview === 'string')",
+  )
+  .replace(
+    " if(Array.isArray(reply.evidence))",
+    " if(typeof reply.normal_message==='string'&&!record(reply.counts)&&(Array.isArray(reply.sources)||Array.isArray(reply.coverage))){const c=Array.isArray(reply.sources)?reply.sources:reply.coverage;lines.push('Coverage: '+c.filter(record).map(s=>string(s.source)+': '+string(s.status)+' ('+string(s.mode)+')').join('; ')+'. Ask for source status for full windows.');}\n if(typeof reply.priority_unavailable_count==='number'&&reply.priority_unavailable_count>0)lines.push(reply.priority_unavailable_count+' obligations/proposals have no eligible current evidence; review source status.');\n if(typeof reply.search_note==='string')lines.push(reply.search_note);\n if(Array.isArray(reply.search_results)){lines.push('Search results ('+reply.search_results.length+' of at most 10; imported coverage may be partial):');for(const item of reply.search_results.filter(record))lines.push(string(item.date)+' ['+string(item.source)+', '+string(item.attribution)+'] '+string(item.text)+' ['+string(item.reference)+']');}\n if(Array.isArray(reply.priorities)){lines.push('Priority review:');if(!reply.priorities.length)lines.push('No eligible priorities in the imported window; review unavailable-evidence warnings.');for(const item of reply.priorities.filter(record))lines.push(string(item.kind)+': '+string(item.reason)+' '+string(item.date)+' '+string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}\n if(Array.isArray(reply.priority_pending)){lines.push('Unconfirmed proposals (not deadlines): '+reply.priority_pending.length+' shown of '+reply.pending_total+'.');for(const item of reply.priority_pending.filter(record))lines.push(string(item.text)+' ['+string(item.source)+': '+string(item.reference)+']');}\n if(Array.isArray(reply.evidence))",
   )
   .replace(
     "string(source.mode) + '.'",

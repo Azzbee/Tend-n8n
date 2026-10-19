@@ -116,6 +116,7 @@ if want "."; then
   step "root: format" . bun run format:check
   slow "root: n8n runtime" . bun run integration
   slow "root: native cited AI" . bun run integration:live-ai
+  slow "root: native generated draft" . node --experimental-strip-types src/integration-live-ai.ts --draft
   slow "root: SQL schema" . bun run schema:check
 fi
 # <<< project_gate checks

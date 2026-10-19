@@ -1126,7 +1126,7 @@ reviewInput.parameters.url =
   "={{ 'http://host.docker.internal:18768/api/live/ai/input?contact_id=' + encodeURIComponent($json.contact_id) + '&purpose=' + encodeURIComponent($json.purpose) }}";
 const reviewReady = code(
   "Check bounded current AI request",
-  "const x=$input.first().json;if(x.eligible!==true)return [{json:{eligible:false}}];if(typeof x.request_id!=='string'||x.request_id.length<16||x.request_id.length>256||!x.request||!Array.isArray(x.request.messages)||x.request.messages.length!==2||x.request.messages[0].role!=='system'||x.request.messages[1].role!=='user'||x.request.messages.some(m=>typeof m.content!=='string')||Buffer.byteLength(JSON.stringify(x.request),'utf8')>32768)throw new Error('Invalid or oversized private AI request');return [{json:{...x,eligible:true}}];",
+  "const x=$input.first().json;if(x.eligible!==true)return [{json:{eligible:false}}];if(typeof x.request_id!=='string'||x.request_id.length<16||x.request_id.length>256||!x.request||!['qwen3:0.6b','qwen3:4b'].includes(x.request.model)||!Array.isArray(x.request.messages)||x.request.messages.length!==2||x.request.messages[0].role!=='system'||x.request.messages[1].role!=='user'||x.request.messages.some(m=>typeof m.content!=='string')||Buffer.byteLength(JSON.stringify(x.request),'utf8')>32768)throw new Error('Invalid or oversized private AI request');return [{json:{...x,eligible:true}}];",
   1000,
 );
 const reviewBranch = condition(
@@ -1144,35 +1144,19 @@ const reviewModel = structuredClone(model);
 reviewModel.name = "Local review Ollama Chat Model";
 reviewModel.id = "local-review-ollama-chat-model";
 reviewModel.position = [1500, 260];
+reviewModel.parameters.model =
+  "={{ $('Check bounded current AI request').first().json.request.model }}";
 reviewModel.parameters.options = {
   temperature: 0,
-  format: {
-    type: "object",
-    properties: {
-      items: {
-        type: "array",
-        maxItems: 3,
-        items: {
-          type: "object",
-          properties: {
-            evidence_id: { type: "string", pattern: "^E[1-6]$" },
-            quote: { type: "string", minLength: 1 },
-          },
-          required: ["evidence_id", "quote"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["items"],
-    additionalProperties: false,
-  },
+  format:
+    "={{ $('Check bounded current AI request').first().json.request.format }}",
   think: false,
   numCtx: 8192,
   numPredict: 1024,
 };
 const reviewOutput = code(
   "Bound cited review output before validation",
-  "const x=$input.first().json;const input=$('Check bounded current AI request').first().json;const clock=$('Validate explicit private AI selection').first().json.started_at;if(!Number.isFinite(clock)||Date.now()-clock>110000)throw new Error('Private AI review exceeded its deadline');const candidate=typeof x.text==='string'?x.text:Object.keys(x).length===1&&Array.isArray(x.items)?JSON.stringify(x):null;const output=typeof candidate==='string'&&Buffer.byteLength(candidate,'utf8')<=8192?candidate:null;return [{json:{request_id:input.request_id,output}}];",
+  "const x=$input.first().json;const input=$('Check bounded current AI request').first().json;const clock=$('Validate explicit private AI selection').first().json.started_at;if(!Number.isFinite(clock)||Date.now()-clock>110000)throw new Error('Private AI review exceeded its deadline');const candidate=typeof x.text==='string'?x.text:Object.keys(x).every(k=>['items','draft'].includes(k))&&Array.isArray(x.items)?JSON.stringify(x):null;const output=typeof candidate==='string'&&Buffer.byteLength(candidate,'utf8')<=8192?candidate:null;return [{json:{request_id:input.request_id,output}}];",
   1750,
 );
 const reviewValidate = liveHttp(
@@ -1210,7 +1194,7 @@ const reviewLocalResult = code(
 reviewLocalResult.position = [3000, 500];
 const reviewDeliveryFormat = code(
   "Prepare bounded validated owner review",
-  String.raw`const c=$('Validate explicit private AI selection').first().json;const x=$('Return review only without delivery').first().json;const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).every(k=>keys.includes(k));if(c.deliver_to_owner!==true||typeof c.owner_chat_id!=='string'||!/^[1-9]\d{0,15}$/.test(c.owner_chat_id)||c.owner_chat_id!==c.owner_user_id||!exact(x,['status','purpose','items','draft','outbound_sent','warning'])||x.status!=='validated'||x.outbound_sent!==false||!['briefing','draft'].includes(x.purpose)||x.purpose!==c.purpose||!Array.isArray(x.items)||x.items.length<1||x.items.length>3||x.items.some(i=>!exact(i,['record_key','content_hash','quote','source','evidence_reference'])||['record_key','content_hash','quote','source','evidence_reference'].some(k=>typeof i[k]!=='string'||!i[k])||!['gmail','calendar','whatsapp_personal','whatsapp_business','linkedin'].includes(i.source))||(x.purpose==='briefing'?x.draft!==null:!exact(x.draft,['text','pending_review'])||x.draft.pending_review!==true||typeof x.draft.text!=='string'||!x.draft.text))throw new Error('Only validated pending review output may reach the enrolled owner');const text='Tend '+(x.purpose==='draft'?'draft. Pending your review.':'cited briefing.')+'\n\n'+x.items.map(i=>'['+i.source+'] '+i.quote+'\nSource: '+i.evidence_reference).join('\n\n')+(x.draft?'\n\n'+x.draft.text:'');const escaped=text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');if(escaped.length>3900)throw new Error('Owner review exceeds Telegram reply limit; use local review');return [{json:{text:escaped}}];`,
+  String.raw`const c=$('Validate explicit private AI selection').first().json;const x=$('Return review only without delivery').first().json;const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).every(k=>keys.includes(k));if(c.deliver_to_owner!==true||typeof c.owner_chat_id!=='string'||!/^[1-9]\d{0,15}$/.test(c.owner_chat_id)||c.owner_chat_id!==c.owner_user_id||!exact(x,['status','purpose','items','draft','outbound_sent','warning'])||x.status!=='validated'||x.outbound_sent!==false||!['briefing','draft'].includes(x.purpose)||x.purpose!==c.purpose||!Array.isArray(x.items)||x.items.length<1||x.items.length>3||x.items.some(i=>!exact(i,['record_key','content_hash','quote','source','evidence_reference'])||['record_key','content_hash','quote','source','evidence_reference'].some(k=>typeof i[k]!=='string'||!i[k])||!['gmail','calendar','whatsapp_personal','whatsapp_business','linkedin'].includes(i.source))||(x.purpose==='briefing'?x.draft!==null:!exact(x.draft,['text','pending_review','label','model','recipient','style_basis','prose_fact_verified'])||x.draft.label!=='AI-written draft. Check facts before sending'||x.draft.model!=='qwen3:4b'||!exact(x.draft.recipient,['contact_id','name'])||x.draft.recipient.contact_id!==c.contact_id||typeof x.draft.recipient.name!=='string'||!['neutral','recipient_examples'].includes(x.draft.style_basis)||x.draft.prose_fact_verified!==false||x.draft.pending_review!==true||typeof x.draft.text!=='string'||!x.draft.text))throw new Error('Only validated pending review output may reach the enrolled owner');const text='Tend '+(x.purpose==='draft'?'AI-written draft. Check facts before sending. Pending your review.':'cited briefing.')+(x.draft?'\nFor: '+x.draft.recipient.name+'\n\n'+x.draft.text:'')+'\n\n'+x.items.map(i=>'['+i.source+'] '+i.quote+'\nSource: '+i.evidence_reference).join('\n\n');const escaped=text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');if(escaped.length>3900)throw new Error('Owner review exceeds Telegram reply limit; use local review');return [{json:{text:escaped}}];`,
   3000,
 );
 const reviewDelivery = {

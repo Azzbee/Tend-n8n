@@ -139,6 +139,29 @@ describe("private AI evidence API", () => {
       await x.close();
     }
   });
+  it("drops all pending draft memory during LinkedIn withdrawal", async () => {
+    const x = await setup();
+    try {
+      const input = (await (
+        await x.get("/api/live/ai/input?contact_id=P1&purpose=draft")
+      ).json()) as { request_id: string };
+      const response = await x.post("/api/live/linkedin-withdraw", {
+        confirm: "REMOVE_ALL_LOCAL_LINKEDIN_EVIDENCE",
+      });
+      expect(response.status).toBe(200);
+      expect(
+        (
+          await x.post("/api/live/ai/validate", {
+            request_id: input.request_id,
+            output: {},
+          })
+        ).status,
+      ).toBe(400);
+      expect(x.store.interactions(policy.principal_id)).toHaveLength(1);
+    } finally {
+      await x.close();
+    }
+  });
   it("does not retain a generated claim after a source edit and rejects stale promises", async () => {
     const x = await setup();
     try {
@@ -336,9 +359,11 @@ describe("protected verified group AI API", () => {
       const response = await x.post("/api/live/ai/validate", {
         request_id: input.request_id,
         output: {
-          items: [x.normalized, x.wa].map((r) => ({
-            record_key: r.record_key,
-            content_hash: r.content_hash,
+          draft: {
+            text: "Hi, what would be the best next step for the notes?",
+          },
+          items: [x.normalized, x.wa].map((r, i) => ({
+            evidence_id: `E${i + 1}`,
             quote: r.body_text,
           })),
         },
@@ -358,59 +383,71 @@ describe("protected verified group AI API", () => {
       await x.close();
     }
   });
-  it.each(["proof", "withdraw", "revoke", "identity", "future", "principal"])(
-    "withdraws pending excerpts after %s changes",
-    async (change) => {
-      const p = groupPolicy(),
-        x = await setupGroup(p);
-      try {
-        const input = (await (
-          await x.get(
-            "/api/live/ai/input?contact_id=group:fictional&purpose=draft",
-          )
-        ).json()) as { request_id: string };
-        if (change === "proof")
-          p.verified_contact_groups![0]!.proof_reference =
-            "owner-confirmation:replacement";
-        if (change === "withdraw") delete p.verified_contact_groups;
-        if (change === "principal") p.principal_id = "changed-owner";
-        if (change === "revoke")
-          x.store.revokeSource(p.principal_id, "whatsapp_personal");
-        if (change === "future")
-          p.verified_contact_groups![0]!.verified_at =
-            "2099-10-14T10:00:00.000Z";
-        if (change === "identity") {
-          const contacts = x.store.contacts.bind(x.store);
-          x.store.contacts = (owner, query) =>
-            contacts(owner, query).map((contact) =>
-              contact.contact_id === x.wa.contact_ids?.[0]
-                ? { ...contact, emails: [] }
-                : contact,
-            );
-        }
-        const response = await x.post("/api/live/ai/validate", {
-          request_id: input.request_id,
-          output: {
-            items: [
-              {
-                record_key: x.wa.record_key,
-                content_hash: x.wa.content_hash,
-                quote: x.wa.body_text,
-              },
-            ],
-          },
-        });
-        expect(await response.json()).toMatchObject({
-          status: "fallback",
-          items: [],
-          draft: null,
-          outbound_sent: false,
-        });
-      } finally {
-        await x.close();
+  it.each([
+    "proof",
+    "withdraw",
+    "revoke",
+    "identity",
+    "future",
+    "principal",
+    "rename",
+  ])("withdraws pending excerpts after %s changes", async (change) => {
+    const p = groupPolicy(),
+      x = await setupGroup(p);
+    try {
+      const input = (await (
+        await x.get(
+          "/api/live/ai/input?contact_id=group:fictional&purpose=draft",
+        )
+      ).json()) as { request_id: string };
+      if (change === "proof")
+        p.verified_contact_groups![0]!.proof_reference =
+          "owner-confirmation:replacement";
+      if (change === "withdraw") delete p.verified_contact_groups;
+      if (change === "principal") p.principal_id = "changed-owner";
+      if (change === "rename") {
+        const contacts = x.store.contacts.bind(x.store);
+        x.store.contacts = (owner, query) =>
+          contacts(owner, query).map((contact) => ({
+            ...contact,
+            name: contact.name + " renamed",
+          }));
       }
-    },
-  );
+      if (change === "revoke")
+        x.store.revokeSource(p.principal_id, "whatsapp_personal");
+      if (change === "future")
+        p.verified_contact_groups![0]!.verified_at = "2099-10-14T10:00:00.000Z";
+      if (change === "identity") {
+        const contacts = x.store.contacts.bind(x.store);
+        x.store.contacts = (owner, query) =>
+          contacts(owner, query).map((contact) =>
+            contact.contact_id === x.wa.contact_ids?.[0]
+              ? { ...contact, emails: [] }
+              : contact,
+          );
+      }
+      const response = await x.post("/api/live/ai/validate", {
+        request_id: input.request_id,
+        output: {
+          items: [
+            {
+              record_key: x.wa.record_key,
+              content_hash: x.wa.content_hash,
+              quote: x.wa.body_text,
+            },
+          ],
+        },
+      });
+      expect(await response.json()).toMatchObject({
+        status: "fallback",
+        items: [],
+        draft: null,
+        outbound_sent: false,
+      });
+    } finally {
+      await x.close();
+    }
+  });
   it("rejects unresolved or different exact identity bindings and client-supplied scopes", async () => {
     const p = groupPolicy();
     p.verified_contact_groups![0]!.members[1]!.contact_id = "P1";

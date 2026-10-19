@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TendStore, type NormalizedRecord } from "../src/engine.ts";
+import {
+  TendStore,
+  type NormalizedRecord,
+  type Commitment,
+} from "../src/engine.ts";
 import {
   demoAuth,
   fixtureContacts,
@@ -12,7 +16,22 @@ import {
   prepareNormalReply,
   type NormalModel,
 } from "../src/telegram-normal.ts";
+import { exampleLivePolicy, type LivePolicy } from "../src/live-policy.ts";
 let store: TendStore;
+const draftPolicy: LivePolicy = {
+  ...exampleLivePolicy,
+  principal_id: demoAuth.owner_id,
+  calendar_ids: ["demo-calendar"],
+};
+function approvedGmail(): void {
+  vi.spyOn(store, "sourceStatus").mockReturnValue(
+    fixtureSources.map((source) =>
+      source.source === "gmail"
+        ? { ...source, account_id: draftPolicy.account_email, mode: "live" }
+        : source,
+    ),
+  );
+}
 const now = () => new Date("2026-10-19T12:00:00Z");
 const auth = (text: string) => ({ ...demoAuth, text });
 const model = (output: unknown): NormalModel => vi.fn(async () => output);
@@ -214,7 +233,8 @@ describe("normal owner read-only Telegram preparation", () => {
     expect(output.record_guards).toHaveLength(1);
   });
   it("runs at most two calls, validates exact quotations and returns held draft", async () => {
-    const source = record();
+    const source = record({ account_id: draftPolicy.account_email });
+    approvedGmail();
     vi.spyOn(store, "interactions").mockReturnValue([source]);
     const contact = store
       .contacts(demoAuth.owner_id)
@@ -227,19 +247,31 @@ describe("normal owner read-only Telegram preparation", () => {
       })
       .mockResolvedValueOnce({
         items: [{ evidence_id: "E1", quote: source.authored_text }],
+        draft: {
+          text: "Hi Mira, how is preparation for the presentation going?",
+        },
       });
     const output = await prepareNormalReply({
       auth: auth("Prepare a draft for F17"),
       store,
       model: inference,
       clock: now,
+      policy: draftPolicy,
     });
     expect(inference).toHaveBeenCalledTimes(2);
-    expect(output.reply.preview).toContain("Review-only draft");
+    expect(output.reply.preview).toBe(
+      "Hi Mira, how is preparation for the presentation going?",
+    );
+    expect(vi.mocked(inference).mock.calls[1]?.[0].model).toBe("qwen3:4b");
     expect(output.reply.ai).toMatchObject({
       status: "validated",
       outbound_sent: false,
-      draft: { pending_review: true },
+      draft: {
+        pending_review: true,
+        style_basis: "neutral",
+        prose_fact_verified: false,
+        recipient: { name: "Mira Tan" },
+      },
     });
     expect(output.record_guards).toEqual([
       { record_key: source.record_key, content_hash: source.content_hash },
@@ -382,8 +414,8 @@ describe("normal owner read-only Telegram preparation", () => {
     expect(fetcher.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11434/api/chat");
     expect(fetcher.mock.calls[0]?.[1]?.redirect).toBe("error");
     expect(
-      JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).options.num_predict,
-    ).toBe(512);
+      JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)).options,
+    ).toMatchObject({ num_predict: 512, num_ctx: 8192 });
   });
   it("rejects oversized streamed model responses", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -402,5 +434,518 @@ describe("normal owner read-only Telegram preparation", () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow("too large");
+  });
+});
+
+describe("bounded context search and requested priorities", () => {
+  function promise(
+    source: NormalizedRecord,
+    patch: Partial<Commitment> = {},
+  ): Commitment {
+    return {
+      owner_id: demoAuth.owner_id,
+      contact_id: "F17",
+      commitment_id: source.record_key,
+      source: source.source,
+      record_key: source.record_key,
+      quote: source.body_text,
+      action: "Review project",
+      suggested_due: "2026-10-20",
+      due_date: "2026-10-19",
+      direction: "owed_by_me",
+      status: "confirmed",
+      evidence_valid: true,
+      ...patch,
+    };
+  }
+  it("accepts only literal owner search keywords and a closed digest intent", () => {
+    expect(
+      parseNormalIntent(
+        { intent: "search", query: "Secure Horizons" },
+        "Find messages about Secure Horizons",
+      ),
+    ).toEqual({ intent: "search", query: "Secure Horizons" });
+    expect(
+      parseNormalIntent(
+        { intent: "search", query: "private passwords" },
+        "Find messages about Secure Horizons",
+      ),
+    ).toBeNull();
+    expect(
+      parseNormalIntent({ intent: "digest" }, "What should I focus on?"),
+    ).toEqual({ intent: "digest" });
+    expect(
+      parseNormalIntent({ intent: "digest", send: true }, "Daily briefing"),
+    ).toBeNull();
+  });
+  it("ranks matching keywords then recency, caps ten results and leaves identities separate", async () => {
+    const records = Array.from({ length: 12 }, (_, i) =>
+      record({
+        record_key: String(i).padStart(64, "0"),
+        contact_id: i % 2 ? "F17" : "F18",
+        contact_ids: [i % 2 ? "F17" : "F18"],
+        occurred_at: `2026-10-19T${String(i).padStart(2, "0")}:00:00Z`,
+        body_text:
+          i === 0
+            ? "Secure Horizons Secure Horizons Secure Horizons"
+            : "Secure Horizons project",
+        attribution: i === 10 ? "group" : "direct",
+      }),
+    );
+    vi.spyOn(store, "interactions").mockReturnValue(records);
+    const inference = model({ intent: "search", query: "Secure Horizons" });
+    const output = await prepareNormalReply({
+      auth: auth("Find Secure Horizons"),
+      store,
+      model: inference,
+      clock: now,
+    });
+    const results = output.reply.search_results as {
+      text: string;
+      date: string;
+      attribution: string;
+    }[];
+    expect(results).toHaveLength(10);
+    expect(results[0]!.text).toBe(records[0]!.body_text);
+    expect(results[1]!.date).toBe(records[11]!.occurred_at);
+    expect(results.some((entry) => entry.attribution === "group")).toBe(true);
+    expect(output.record_guards).toHaveLength(10);
+    expect(output.reply).not.toHaveProperty("contact");
+    expect(output.reply.search_note).toContain("Not complete semantic search");
+    expect(inference).toHaveBeenCalledTimes(1);
+  });
+  it("filters foreign owners, unapproved accounts, old, future and cancelled search records", async () => {
+    approvedGmail();
+    const good = record({
+      account_id: draftPolicy.account_email,
+      body_text: "Secure Horizons",
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([
+      good,
+      { ...good, owner_id: "another-owner" },
+      { ...good, account_id: "unapproved@example.invalid" },
+      { ...good, occurred_at: "2026-09-01T10:00:00Z" },
+      { ...good, occurred_at: "2026-10-20T10:00:00Z" },
+      { ...good, cancelled: true },
+    ]);
+    const output = await prepareNormalReply({
+      auth: auth("Find Secure Horizons"),
+      store,
+      model: model({ intent: "search", query: "Secure Horizons" }),
+      clock: now,
+      policy: draftPolicy,
+    });
+    expect(output.reply.search_results).toHaveLength(1);
+    expect(output.record_guards).toHaveLength(1);
+  });
+  it("keeps approved cross-source hits distinct and unknown attribution visible", async () => {
+    const first = record({
+      body_text: "Secure Horizons",
+      attribution: "unknown",
+      contact_ids: [],
+    });
+    const second = record({
+      body_text: "Secure Horizons",
+      source: "whatsapp_business",
+      account_id: "demo-whatsapp_business",
+      record_key: "c".repeat(64),
+      contact_id: "another-channel",
+      contact_ids: ["another-channel"],
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([first, second]);
+    const output = await prepareNormalReply({
+      auth: auth("Find Secure Horizons"),
+      store,
+      model: model({ intent: "search", query: "Secure Horizons" }),
+      clock: now,
+    });
+    expect(output.reply.search_results).toMatchObject([
+      { source: "gmail", attribution: "unknown" },
+      { source: "whatsapp_business", attribution: "direct" },
+    ]);
+    expect(output.reply).not.toHaveProperty("contacts");
+    expect(output.reply).not.toHaveProperty("commitments");
+  });
+  it("says no imported match rather than claiming the accounts contain none", async () => {
+    vi.spyOn(store, "interactions").mockReturnValue([record()]);
+    const output = await prepareNormalReply({
+      auth: auth("Find Secure Horizons"),
+      store,
+      model: model({ intent: "search", query: "Secure Horizons" }),
+      clock: now,
+    });
+    expect(output.reply.search_results).toEqual([]);
+    expect(output.reply.normal_message).toContain("No imported keyword match");
+    expect(output.reply.normal_message).toContain("does not establish absence");
+  });
+  it("ranks confirmed due items before meetings and labels received suggestions without urgency", async () => {
+    const overdue = record({ record_key: "a".repeat(64) });
+    const due = record({ record_key: "c".repeat(64) });
+    const meeting = record({
+      record_key: "d".repeat(64),
+      source: "calendar",
+      account_id: "demo-calendar",
+      kind: "meeting",
+      direction: "event",
+      occurred_at: "2026-10-19T16:00:00Z",
+      end_at: "2026-10-19T17:00:00Z",
+    });
+    const message = record({ record_key: "e".repeat(64) });
+    const pending = record({
+      record_key: "f".repeat(64),
+      attribution: "direct",
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([
+      message,
+      pending,
+      meeting,
+      due,
+      overdue,
+    ]);
+    vi.spyOn(store, "commitments").mockReturnValue([
+      promise(due),
+      promise(overdue, { due_date: "2026-10-18" }),
+      promise(pending, { status: "pending", due_date: null }),
+    ]);
+    const command = vi.spyOn(store, "command");
+    const inference = model({ intent: "digest" });
+    const output = await prepareNormalReply({
+      auth: auth("What should I focus on?"),
+      store,
+      model: inference,
+      clock: now,
+    });
+    expect(output.reply.priorities).toMatchObject([
+      { kind: "confirmed_overdue" },
+      { kind: "confirmed_due" },
+      { kind: "meeting" },
+      {
+        kind: "review_suggestion",
+        reason: expect.stringContaining("not verified urgency"),
+      },
+    ]);
+    expect(output.reply.priority_pending).toMatchObject([
+      { kind: "unconfirmed_proposal", date: null },
+    ]);
+    expect(output.reply).not.toHaveProperty("pending");
+    expect(output.record_guards).toHaveLength(5);
+    expect(command.mock.calls.map(([request]) => request.text)).toEqual([
+      "/status",
+    ]);
+    expect(inference).toHaveBeenCalledTimes(1);
+  });
+  it("caps priority and unconfirmed entries at five and omits old/group/owner-authored suggestions", async () => {
+    const records = Array.from({ length: 8 }, (_, i) =>
+      record({ record_key: i.toString(16).repeat(64) }),
+    );
+    vi.spyOn(store, "interactions").mockReturnValue(records);
+    vi.spyOn(store, "commitments").mockReturnValue(
+      records.map((source) => promise(source)),
+    );
+    const output = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(output.reply.priorities).toHaveLength(5);
+    expect(output.reply.priority_pending).toEqual([]);
+    expect(output.record_guards).toHaveLength(5);
+    vi.mocked(store.commitments).mockReturnValue([]);
+    vi.mocked(store.interactions).mockReturnValue([
+      record({ attribution: "group" }),
+      record({ attribution: "unknown" }),
+      record({ direction: "sent" }),
+      record({ occurred_at: "2026-10-15T10:00:00Z" }),
+      record({ owner_id: "other" }),
+    ]);
+    const excluded = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(excluded.reply.priorities).toEqual([]);
+  });
+  it("binds personalised prose to a real email-member display name and guards style dependencies", async () => {
+    approvedGmail();
+    const source = record({ account_id: draftPolicy.account_email });
+    const style = record({
+      account_id: draftPolicy.account_email,
+      record_key: "c".repeat(64),
+      content_hash: "d".repeat(64),
+      direction: "sent",
+      actor_identity: draftPolicy.account_email,
+      body_text: "Salut Mira, comment tu vas ?",
+      authored_text: "Salut Mira, comment tu vas ?",
+      authored_spans: [
+        { start: 0, end: 27, text: "Salut Mira, comment tu vas ?" },
+      ],
+      participant_identities: ["mira@example.invalid"],
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([source, style]);
+    const group = {
+      id: "verified-group",
+      name: "Owner-confirmed identity",
+      verified_at: "2026-10-19T10:00:00Z",
+      proof_kind: "owner_confirmed" as const,
+      proof_reference: "reviewed",
+      members: [
+        {
+          contact_id: "F17",
+          source: "gmail" as const,
+          account_id: draftPolicy.account_email,
+          identity: "mira@example.invalid",
+        },
+      ],
+    };
+    const inference = vi
+      .fn<NormalModel>()
+      .mockResolvedValueOnce({ intent: "draft_preview", query: group.id })
+      .mockResolvedValueOnce({
+        items: [{ evidence_id: "E1", quote: source.authored_text }],
+        draft: {
+          text: "Salut Mira, comment avance ta préparation pour la présentation ?",
+        },
+      });
+    const output = await prepareNormalReply({
+      auth: auth("Prépare un brouillon pour verified-group"),
+      store,
+      model: inference,
+      clock: now,
+      policy: draftPolicy,
+      resolveGroup: () => group,
+    });
+    expect(output.reply.preview).toBe(
+      "Salut Mira, comment avance ta préparation pour la présentation ?",
+    );
+    expect(output.reply.ai).toMatchObject({
+      draft: {
+        style_basis: "recipient_examples",
+        recipient: { contact_id: "verified-group", name: "Mira Tan" },
+        prose_fact_verified: false,
+      },
+    });
+    expect(output.reply.normal_message).toBe(
+      "AI-written draft. Check facts before sending",
+    );
+    expect(output.record_guards).toEqual(
+      expect.arrayContaining([
+        { record_key: source.record_key, content_hash: source.content_hash },
+        { record_key: style.record_key, content_hash: style.content_hash },
+      ]),
+    );
+    expect(inference).toHaveBeenCalledTimes(2);
+  });
+  it("does not present a generated draft when no approved policy was supplied", async () => {
+    vi.spyOn(store, "interactions").mockReturnValue([record()]);
+    const inference = vi
+      .fn<NormalModel>()
+      .mockResolvedValueOnce({ intent: "draft_preview", query: "F17" })
+      .mockResolvedValueOnce({
+        items: [{ evidence_id: "E1", quote: record().authored_text }],
+      });
+    const output = await prepareNormalReply({
+      auth: auth("Draft for F17"),
+      store,
+      model: inference,
+      clock: now,
+    });
+    expect(output.reply.preview).toBeUndefined();
+    expect(output.reply.ai).toMatchObject({ draft: null });
+  });
+  it("labels promises owed to the owner separately from promises owed by the owner", async () => {
+    const source = record();
+    vi.spyOn(store, "interactions").mockReturnValue([source]);
+    vi.spyOn(store, "commitments").mockReturnValue([
+      promise(source, { direction: "owed_to_me" }),
+    ]);
+    const output = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(output.reply.priorities).toMatchObject([
+      {
+        direction: "owed_to_me",
+        reason: expect.stringContaining("owed to you"),
+      },
+    ]);
+  });
+  it("omits ended meetings while preserving ongoing and upcoming meetings", async () => {
+    vi.spyOn(store, "interactions").mockReturnValue([
+      record({
+        source: "calendar",
+        account_id: "demo-calendar",
+        kind: "meeting",
+        direction: "event",
+        occurred_at: "2026-10-19T09:00:00Z",
+        end_at: "2026-10-19T10:00:00Z",
+      }),
+      record({
+        record_key: "c".repeat(64),
+        source: "calendar",
+        account_id: "demo-calendar",
+        kind: "meeting",
+        direction: "event",
+        occurred_at: "2026-10-19T11:00:00Z",
+        end_at: "2026-10-19T13:00:00Z",
+      }),
+    ]);
+    const output = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(output.reply.priorities).toHaveLength(1);
+    expect(output.record_guards[0]?.record_key).toBe("c".repeat(64));
+  });
+  it("reports unavailable older obligation evidence without extending the approved window", async () => {
+    const source = record({ occurred_at: "2026-08-01T10:00:00Z" });
+    vi.spyOn(store, "interactions").mockReturnValue([source]);
+    vi.spyOn(store, "commitments").mockReturnValue([promise(source)]);
+    const output = await prepareNormalReply({
+      auth: auth("Daily briefing"),
+      store,
+      model: model({ intent: "digest" }),
+      clock: now,
+    });
+    expect(output.reply.priorities).toEqual([]);
+    expect(output.reply.priority_unavailable_count).toBe(1);
+    expect(output.reply.normal_message).toContain("No eligible priorities");
+    expect(output.reply.normal_message).toContain("does not establish");
+    expect(output.record_guards).toEqual([]);
+  });
+  it("clarifies an oversized stored display name and rejects a 600-character owner request", async () => {
+    const contacts = store.contacts(demoAuth.owner_id);
+    vi.spyOn(store, "contacts").mockReturnValue(
+      contacts.map((contact) =>
+        contact.contact_id === "F17"
+          ? { ...contact, name: "M".repeat(201) }
+          : contact,
+      ),
+    );
+    const inference = model({ intent: "draft_preview", query: "F17" });
+    const output = await prepareNormalReply({
+      auth: auth("Draft for F17"),
+      store,
+      model: inference,
+      clock: now,
+      policy: draftPolicy,
+    });
+    expect(output.reply.normal_message).toContain("display name needs review");
+    expect(output.reply.preview).toBeUndefined();
+    expect(inference).toHaveBeenCalledTimes(1);
+    await expect(
+      prepareNormalReply({
+        auth: auth("x".repeat(600)),
+        store,
+        model: inference,
+      }),
+    ).rejects.toThrow("Invalid normal message");
+    expect(inference).toHaveBeenCalledTimes(1);
+  });
+  it("uses a named verified social member or neutral wording instead of a generic group label", async () => {
+    const source = record({
+      source: "whatsapp_business",
+      account_id: "demo-whatsapp_business",
+      actor_identity: "peer-identity",
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([source]);
+    const contacts = vi.spyOn(store, "contacts").mockReturnValue([
+      {
+        owner_id: demoAuth.owner_id,
+        contact_id: "F17",
+        name: "Mira Tan",
+        emails: ["peer-identity"],
+      },
+    ]);
+    const group = {
+      id: "verified-group",
+      name: "Owner-confirmed identity",
+      verified_at: "2026-10-19T10:00:00Z",
+      proof_kind: "owner_confirmed" as const,
+      proof_reference: "reviewed",
+      members: [
+        {
+          contact_id: "F17",
+          source: "whatsapp_business" as const,
+          account_id: "demo-whatsapp_business",
+          identity: "peer-identity",
+        },
+      ],
+    };
+    const makeModel = () =>
+      vi
+        .fn<NormalModel>()
+        .mockResolvedValueOnce({ intent: "briefing", query: "verified-group" })
+        .mockResolvedValueOnce({
+          items: [{ evidence_id: "E1", quote: source.authored_text }],
+        });
+    const named = await prepareNormalReply({
+      auth: auth("Brief verified-group"),
+      store,
+      model: makeModel(),
+      clock: now,
+      resolveGroup: () => group,
+    });
+    expect(named.reply.contact).toMatchObject({ name: "Mira Tan" });
+    contacts.mockReturnValue([
+      {
+        owner_id: demoAuth.owner_id,
+        contact_id: "F17",
+        name: "+33600000000",
+        emails: ["peer-identity"],
+      },
+    ]);
+    const neutral = await prepareNormalReply({
+      auth: auth("Brief verified-group"),
+      store,
+      model: makeModel(),
+      clock: now,
+      resolveGroup: () => group,
+    });
+    expect(neutral.reply.contact).toMatchObject({ name: "this contact" });
+  });
+  it("uses fixed context, token and lifetime bounds for the approved local writing model", async () => {
+    const fetcher = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ message: { content: "{}" } })),
+      );
+    await localNormalModel(
+      {
+        model: "qwen3:4b",
+        think: false,
+        stream: false,
+        format: "json",
+        options: { temperature: 0 },
+        messages: [],
+      },
+      new AbortController().signal,
+    );
+    const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      keep_alive: 0,
+      think: false,
+      stream: false,
+      options: { num_ctx: 8192, num_predict: 1024, temperature: 0 },
+    });
+    await expect(
+      localNormalModel(
+        {
+          model: "remote-model" as "qwen3:4b",
+          think: false,
+          stream: false,
+          format: "json",
+          options: { temperature: 0 },
+          messages: [],
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("Unapproved");
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

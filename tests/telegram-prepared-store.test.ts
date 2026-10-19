@@ -9,7 +9,10 @@ import { TendStore, type LiveBatch, type AuthCommand } from "../src/engine.ts";
 import { PostgresStore } from "../src/postgres-store.ts";
 import { prepareLiveAI, validateLiveAI } from "../src/live-ai.ts";
 import type { PreparedTelegramRead } from "../src/telegram-normal.ts";
-import type { VerifiedContactGroup } from "../src/live-policy.ts";
+import {
+  exampleLivePolicy,
+  type VerifiedContactGroup,
+} from "../src/live-policy.ts";
 import { postgresTestRuntime } from "./postgres-test-runtime.ts";
 
 describe("prepared normal-message ledger parity", () => {
@@ -58,8 +61,8 @@ describe("prepared normal-message ledger parity", () => {
       source_record_id: "r",
       source_thread_id: "t",
       kind: "message",
-      direction: "sent" as const,
-      actor_identity: state.account_id,
+      direction: "received" as const,
+      actor_identity: "friend@example.invalid",
       participant_identities: ["friend@example.invalid"],
       occurred_at: "2026-10-18T12:00:00Z",
       observed_at: now,
@@ -126,11 +129,25 @@ describe("prepared normal-message ledger parity", () => {
         owner_id: principal.owner_id,
         contact_id: group?.id ?? "friend",
         purpose: "draft",
+        draft_context: {
+          now,
+          contact_name: "Friend",
+          owner_request: "Ask about the report",
+          policy: {
+            ...exampleLivePolicy,
+            principal_id: principal.owner_id,
+            account_email: state.account_id,
+            verified_owner_emails: [state.account_id],
+          },
+        },
         records,
         ...(group ? { contact_group: group } : {}),
       });
-      const output = { items: [{ evidence_id: "E1", quote: text }] };
-      const result = validateLiveAI(ai, output, records, group);
+      const output = {
+        items: [{ evidence_id: "E1", quote: text }],
+        draft: { text: "Hi Friend, how is the report progressing?" },
+      };
+      const result = validateLiveAI(ai, output, records, group, clock());
       return {
         reply: {
           outbound_sent: false,
@@ -180,6 +197,9 @@ describe("prepared normal-message ledger parity", () => {
       record,
       changed,
       path,
+      resetClock: () => {
+        now = "2026-10-19T12:00:00Z";
+      },
       advance: () => {
         now = "2026-11-19T12:00:00Z";
       },
@@ -261,6 +281,7 @@ describe("prepared normal-message ledger parity", () => {
     it(`scrubs ${scenario} evidence between preparation and commit`, async () => {
       const f = await fixture();
       for (const store of f.stores) {
+        f.resetClock();
         const p = await f.prepared(store);
         if (scenario === "revoked")
           await store.revokeSource(f.principal.owner_id, "gmail");
@@ -390,14 +411,14 @@ describe("prepared normal-message ledger parity", () => {
       const p = await f.prepared(store);
       await store.commitTelegramReply(f.auth, "normal", 1, p);
       expect(await store.cachedReplyText(f.principal.owner_id)).toContain(
-        "Review-only draft",
+        "Hi Friend, how is the report progressing?",
       );
       await store.commitLiveBatch(f.changed());
       expect(
         await store.pendingTelegramReply(f.principal.owner_id, "normal", 1),
       ).toBeNull();
       expect(await store.cachedReplyText(f.principal.owner_id)).not.toContain(
-        "Review-only draft",
+        "Hi Friend, how is the report progressing?",
       );
     }
   });

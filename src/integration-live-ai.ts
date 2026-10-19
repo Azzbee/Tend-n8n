@@ -15,6 +15,11 @@ import { InternalAuth, verificationHash } from "./internal-auth.ts";
 import { createLiveServer } from "./live-api.ts";
 import { exampleLivePolicy, gmailWindow } from "./live-policy.ts";
 
+const draftCheck = process.argv[2] === "--draft";
+if (process.argv.length > 3 || (process.argv[2] !== undefined && !draftCheck))
+  throw new Error("Use only --draft or no options");
+const purpose = draftCheck ? "draft" : "briefing";
+const outputSuffix = draftCheck ? "-draft" : "";
 const image =
   "docker.n8n.io/n8nio/n8n@sha256:c34ee9107a42b837e25cec0c8a927ab90a45b776aa2ccbf15e5b9cda466fad2c";
 const name = `tend-ai16-fictional-${randomUUID().slice(0, 8)}`;
@@ -172,7 +177,7 @@ try {
       for (const assignment of assignments.assignments) {
         assert(isRecord(assignment), "Invalid assignment");
         if (assignment.name === "contact_id") assignment.value = "P1";
-        if (assignment.name === "purpose") assignment.value = "briefing";
+        if (assignment.name === "purpose") assignment.value = purpose;
       }
     }
     if (
@@ -316,7 +321,16 @@ try {
   );
   assert(
     result.outbound_sent === false &&
-      result.draft === null &&
+      (draftCheck
+        ? result.status === "validated" &&
+          isRecord(result.draft) &&
+          result.draft.pending_review === true &&
+          result.draft.model === "qwen3:4b" &&
+          result.draft.prose_fact_verified === false &&
+          typeof result.draft.text === "string" &&
+          result.draft.text.length > 0 &&
+          result.draft.text !== text
+        : result.draft === null) &&
       Array.isArray(result.items) &&
       result.items.length > 0,
     "Native review result violated delivery boundary",
@@ -372,7 +386,12 @@ try {
     pass: true,
     scope:
       "Fictional source data only; isolated native n8n container and in-memory private API. Actual local Ollama execution, no real-data claim.",
-    runtime: { n8n: version, image, model: "qwen3:0.6b" },
+    runtime: {
+      n8n: version,
+      image,
+      model: draftCheck ? "qwen3:4b" : "qwen3:0.6b",
+    },
+    purpose,
     workflow_sha256: createHash("sha256").update(workflowText).digest("hex"),
     live_ai_source_sha256: liveAISourceHash,
     model_node_executed: true,
@@ -384,7 +403,7 @@ try {
   };
   mkdirSync(resolve(".scratch"), { recursive: true });
   writeFileSync(
-    resolve(".scratch/live-ai-native-fictional-output.json"),
+    resolve(`.scratch/live-ai-native-fictional-output${outputSuffix}.json`),
     JSON.stringify(
       { scope: "Fictional integration source only", chain_output: chainOutput },
       null,
@@ -392,19 +411,19 @@ try {
     ) + "\n",
   );
   writeFileSync(
-    resolve(".scratch/live-ai-native-check.json"),
+    resolve(`.scratch/live-ai-native-check${outputSuffix}.json`),
     JSON.stringify(report, null, 2) + "\n",
   );
   mkdirSync(resolve("evidence"), { recursive: true });
   writeFileSync(
-    resolve("evidence/live-ai-runtime-checks.json"),
+    resolve(`evidence/live-ai-runtime-checks${outputSuffix}.json`),
     JSON.stringify(report, null, 2) + "\n",
   );
   console.log(JSON.stringify(report));
 } catch (error: unknown) {
   mkdirSync(resolve(".scratch"), { recursive: true });
   writeFileSync(
-    resolve(".scratch/live-ai-native-last-failure.json"),
+    resolve(`.scratch/live-ai-native-last-failure${outputSuffix}.json`),
     JSON.stringify(
       {
         checked_at: new Date().toISOString(),

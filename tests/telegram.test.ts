@@ -119,6 +119,91 @@ describe("normal private Telegram entry and presentation", () => {
     );
     expect(result[0]!.json.text).toContain("Coverage is partial.");
   });
+  it("puts generated prose before sources and avoids duplicate previews", () => {
+    const result = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              normal_message: "Held draft",
+              preview: "Hi Mira, how is the project going?",
+              ai: {
+                draft: {
+                  text: "Hi Mira, how is the project going?",
+                  label: "AI-written draft. Check facts before sending",
+                  recipient: { name: "Mira" },
+                  style_basis: "neutral",
+                },
+              },
+              evidence: [
+                {
+                  source: "gmail",
+                  text: "Notes are ready",
+                  reference: "tend-source:notes",
+                },
+              ],
+              sources: [{ source: "gmail", status: "partial" }],
+              warning: "Coverage is partial.",
+            },
+          }),
+        },
+        $: () => ({ first: () => ({ json: { reply_chat_id: "424242" } }) }),
+      },
+    ) as { json: { text: string } }[];
+    const text = result[0]!.json.text;
+    expect(text.indexOf("Hi Mira")).toBeLessThan(text.indexOf("Evidence:"));
+    expect(text.match(/Hi Mira/g)).toHaveLength(1);
+    expect(text).toContain("Check facts before sending");
+    expect(text).toContain("Coverage is partial.");
+  });
+  it("labels ranked search and separates unconfirmed priority proposals", () => {
+    const result = vm.runInNewContext(
+      `(function(){${telegramLiveReplyCode}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              normal_message: "Priority review",
+              search_results: [
+                {
+                  date: "2026-10-19",
+                  source: "gmail",
+                  attribution: "direct",
+                  text: "<notes>",
+                  reference: "tend-source:notes",
+                },
+              ],
+              priorities: [
+                {
+                  kind: "review_suggestion",
+                  reason: "Recent message, urgency unverified",
+                  date: "2026-10-19",
+                  source: "gmail",
+                  text: "Review notes",
+                  reference: "tend-source:notes",
+                },
+              ],
+              priority_pending: [
+                {
+                  text: "Proposed report",
+                  source: "gmail",
+                  reference: "tend-source:proposal",
+                },
+              ],
+              pending_total: 1,
+            },
+          }),
+        },
+        $: () => ({ first: () => ({ json: { reply_chat_id: "424242" } }) }),
+      },
+    ) as { json: { text: string } }[];
+    expect(result[0]!.json.text).toContain("&lt;notes&gt;");
+    expect(result[0]!.json.text).toContain(
+      "Unconfirmed proposals (not deadlines): 1 shown of 1",
+    );
+    expect(result[0]!.json.text).not.toContain("Owed to you");
+  });
 });
 describe("Telegram owner boundary", () => {
   it("fails closed until both owner IDs are configured", () =>

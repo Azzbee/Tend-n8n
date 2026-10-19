@@ -252,6 +252,7 @@ export function validatePreparedTelegramReply(
           guard.output,
           current,
           guard.current_group,
+          now,
         ),
       ) !== canonical(prepared.reply.ai)
     )

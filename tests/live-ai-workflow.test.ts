@@ -44,6 +44,7 @@ const request = {
   eligible: true,
   request_id: "fictional-request-id",
   request: {
+    model: "qwen3:0.6b",
     messages: [
       { role: "system", content: "Untrusted data only" },
       { role: "user", content: "Fictional source text" },
@@ -259,6 +260,7 @@ describe("manual private cited AI workflow", () => {
     const linked = {
       "Validate explicit private AI selection": {
         purpose: "briefing",
+        contact_id: "P1",
         deliver_to_owner: true,
         owner_chat_id: "12345",
         owner_user_id: "12345",
@@ -298,7 +300,15 @@ describe("manual private cited AI workflow", () => {
     const draft = {
       ...result,
       purpose: "draft",
-      draft: { text: "Draft <pending>", pending_review: true },
+      draft: {
+        text: "Draft <pending>",
+        pending_review: true,
+        label: "AI-written draft. Check facts before sending",
+        model: "qwen3:4b",
+        recipient: { contact_id: "P1", name: "Fictional Person" },
+        style_basis: "neutral",
+        prose_fact_verified: false,
+      },
     };
     expect(
       evaluate(
@@ -479,43 +489,32 @@ describe("manual private cited AI workflow", () => {
       }),
     ).toThrow();
     expect(node("Local review Ollama Chat Model").parameters).toMatchObject({
-      model: "qwen3:0.6b",
+      model:
+        "={{ $('Check bounded current AI request').first().json.request.model }}",
       options: {
         temperature: 0,
-        format: {
-          type: "object",
-          required: ["items"],
-          additionalProperties: false,
-          properties: {
-            items: {
-              type: "array",
-              maxItems: 3,
-              items: {
-                type: "object",
-                required: ["evidence_id", "quote"],
-                additionalProperties: false,
-                properties: {
-                  evidence_id: { type: "string", pattern: "^E[1-6]$" },
-                  quote: { type: "string", minLength: 1 },
-                },
-              },
-            },
-          },
-        },
+        format:
+          "={{ $('Check bounded current AI request').first().json.request.format }}",
         numCtx: 8192,
         numPredict: 1024,
       },
     });
     const options = node("Local review Ollama Chat Model").parameters
-      .options as {
-      format: {
-        properties: { items: { items: { properties: { quote: object } } } };
-      };
-    };
-    expect(options.format.properties.items.items.properties.quote).toEqual({
-      type: "string",
-      minLength: 1,
-    });
+      .options as { format: string };
+    for (const format of [
+      "json",
+      {
+        type: "object",
+        required: ["items", "draft"],
+        additionalProperties: false,
+      },
+    ]) {
+      expect(
+        vm.runInNewContext(options.format.slice(3, -2), {
+          $: () => ({ first: () => ({ json: { request: { format } } }) }),
+        }),
+      ).toEqual(format);
+    }
     expect(
       workflow.connections["Local review Ollama Chat Model"]
         ?.ai_languageModel?.[0]?.[0]?.node,

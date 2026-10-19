@@ -144,7 +144,11 @@ export function createLiveServer(options: LiveServerOptions): Server {
   const normalInFlight = new Set<string>();
   const pendingAI = new Map<
     string,
-    { prepared: PreparedLiveAI; expires: number }
+    {
+      prepared: PreparedLiveAI;
+      expires: number;
+      contacts: { contact_id: string; name: string }[];
+    }
   >();
   const resolveGroup = async (
     id: string,
@@ -416,11 +420,37 @@ export function createLiveServer(options: LiveServerOptions): Server {
           if (contact.contact_id !== contactId)
             throw new Error("Use exact contact ID");
         }
+        const contactGuards = await Promise.all(
+          (
+            group?.members.map((member) => member.contact_id) ?? [contactId]
+          ).map(async (id) => {
+            const contact = await store.resolveContact(owner, id);
+            return { contact_id: contact.contact_id, name: contact.name };
+          }),
+        );
+        const display = contactGuards.find(
+          (contact) =>
+            contact.name.trim() &&
+            contact.name !== contact.contact_id &&
+            !contact.name.includes("@") &&
+            !/^\+?[\d\s]+$/u.test(contact.name),
+        );
         const prepared = prepareLiveAI({
           owner_id: owner,
           contact_id: contactId,
           ...(group ? { contact_group: group } : {}),
           purpose: purpose as "briefing" | "draft",
+          ...(purpose === "draft"
+            ? {
+                draft_context: {
+                  now: clock().toISOString(),
+                  contact_name: (display?.name ?? "this contact").slice(0, 200),
+                  owner_request:
+                    "Prepare a short follow-up for this contact using the current conversation context. Do not invent a reason to contact them.",
+                  policy,
+                },
+              }
+            : {}),
           records: (await store.interactions(owner)).sort((a, b) =>
             b.occurred_at.localeCompare(a.occurred_at),
           ),
@@ -438,6 +468,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const request_id = randomUUID();
         pendingAI.set(request_id, {
           prepared,
+          contacts: contactGuards,
           expires: clock().getTime() + 120000,
         });
         respond(200, {
@@ -529,6 +560,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         await store.revokeSource(owner, "linkedin");
         for (const [id, entry] of pendingAI)
           if (
+            entry.prepared.draft_context !== undefined ||
             entry.prepared.evidence.some((item) => item.source === "linkedin")
           )
             pendingAI.delete(id);
@@ -557,6 +589,27 @@ export function createLiveServer(options: LiveServerOptions): Server {
         pendingAI.delete(value.request_id);
         if (!entry || entry.expires <= clock().getTime())
           throw new Error("AI request expired or already consumed");
+        const currentContacts = await store.contacts(owner);
+        if (
+          entry.contacts.some(
+            (expected) =>
+              !currentContacts.some(
+                (current) =>
+                  current.contact_id === expected.contact_id &&
+                  current.name === expected.name,
+              ),
+          )
+        ) {
+          respond(200, {
+            status: "fallback",
+            purpose: entry.prepared.purpose,
+            items: [],
+            draft: null,
+            outbound_sent: false,
+            warning: "Selected contact changed; prepare a fresh review.",
+          });
+          return;
+        }
         respond(
           200,
           validateLiveAI(
@@ -566,6 +619,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
             entry.prepared.contact_group
               ? await resolveGroup(entry.prepared.contact_id)
               : undefined,
+            clock(),
           ),
         );
         return;
