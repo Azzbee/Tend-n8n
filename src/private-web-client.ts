@@ -1093,7 +1093,7 @@ export function mountPrivateWorkspace(): void {
           details.append(
             node(
               "p",
-              "These records stay out of AI outputs until their original content can be read safely.",
+              "These source-wide counts include incremental and historical review entries. These records stay out of AI outputs until their original content can be read safely.",
               "small",
             ),
           );

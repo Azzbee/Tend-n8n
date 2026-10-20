@@ -275,6 +275,13 @@ export function createHistoryAPI(options: Options) {
         });
         contacts.push(...result.contacts);
         identities.push(...result.identities);
+      } else if (
+        source === "gmail" &&
+        stableId &&
+        result.kind === "quarantined" &&
+        ["unsent_draft", "excluded_mail_label"].includes(result.reason)
+      ) {
+        removed.push(stableId);
       } else if (result.kind === "quarantined") {
         quarantined++;
         if (

@@ -824,3 +824,64 @@ it("reports only retained records when the store rejects normalized older observ
     store.close();
   }
 });
+
+it.each(["DRAFT", "SPAM", "TRASH"])(
+  "excludes policy label %s without leaving a permanent content-review entry",
+  async (label) => {
+    const store = await setup();
+    try {
+      const api = createHistoryAPI({
+        store,
+        policy,
+        clock: now,
+        resources: async () => ({
+          free_bytes: 3 * 1024 ** 3,
+          database_bytes: 0,
+          index_bytes: 0,
+        }),
+      });
+      const state = await api.state("gmail");
+      store.commitHistoryBackfill({
+        owner_id: policy.principal_id,
+        source: "gmail",
+        account_id: policy.account_email,
+        version: 1,
+        watermark: String(state.watermark),
+        expected_cursor: null,
+        cursor: null,
+        advance: false,
+        operation_hash: "a".repeat(64),
+        complete: false,
+        records: [],
+        quarantines: [
+          {
+            source_record_id: "policy-excluded",
+            reason: "body_size_limit",
+            observed_at: now().toISOString(),
+            original_reference: `tend-source:gmail/${encodeURIComponent(policy.account_email)}/policy-excluded`,
+          },
+        ],
+      });
+      const result = await api.commit({
+        ...state,
+        profile_account_email: policy.account_email,
+        records: [
+          { id: "policy-excluded", threadId: "thread", labelIds: [label] },
+        ],
+        previous_cursor: null,
+        cursor: null,
+        complete: true,
+      });
+      expect(result).toMatchObject({
+        accepted: 0,
+        quarantined: 0,
+        complete: true,
+        content_complete: true,
+      });
+      expect(store.quarantineCount(policy.principal_id)).toBe(0);
+      expect(store.interactions(policy.principal_id)).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  },
+);
