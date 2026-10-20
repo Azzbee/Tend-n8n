@@ -72,6 +72,14 @@ export class EmbeddingContextError extends Error {
     this.name = "EmbeddingContextError";
   }
 }
+class SemanticRecordError extends Error {
+  readonly reason: "input_bound" | "context_limit";
+  constructor(reason: "input_bound" | "context_limit", message: string) {
+    super(message);
+    this.name = "SemanticRecordError";
+    this.reason = reason;
+  }
+}
 export interface EmbeddingClient {
   embed(text: string, signal?: AbortSignal): Promise<number[]>;
 }
@@ -214,7 +222,10 @@ export async function embedPassages(
   signal: AbortSignal,
 ): Promise<EmbeddedPassage[]> {
   if (text.length > 1_048_576)
-    throw new Error("semantic record exceeds input bound");
+    throw new SemanticRecordError(
+      "input_bound",
+      "semantic record exceeds input bound",
+    );
   const pending = splitSemanticPassages(text),
     result: EmbeddedPassage[] = [];
   while (pending.length) {
@@ -242,9 +253,10 @@ export async function embedPassages(
         throw error;
       const points = Array.from(passage.text);
       if (points.length < 2)
-        throw new Error("embedding context cannot fit one code point", {
-          cause: error,
-        });
+        throw new SemanticRecordError(
+          "context_limit",
+          "embedding context cannot fit one code point",
+        );
       const left = points.slice(0, Math.floor(points.length / 2)).join(""),
         middle = passage.start + left.length;
       pending.unshift(
@@ -354,6 +366,7 @@ export interface SemanticProgress {
   pending: number;
   passages: number;
   partial?: number;
+  failed?: number;
   state: "not_started" | "indexing" | "complete" | "paused";
   reason: string | null;
 }
@@ -552,7 +565,7 @@ export class SemanticSearchService {
           await client.query<NormalizedRecord>(
             `SELECT r.* FROM live_records r LEFT JOIN live_semantic_snapshot_records s ON s.owner_id=r.owner_id AND s.record_key=r.record_key
           WHERE r.owner_id=$1 AND r.record_key>$2 AND r.observed_at<=$3
-          AND (s.record_key IS NULL OR s.content_hash<>r.content_hash OR s.status='withdrawn' OR NOT EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND c.expires_at>$3::timestamptz))
+          AND (s.record_key IS NULL OR s.content_hash<>r.content_hash OR s.status='withdrawn' OR (s.status<>'failed' AND NOT EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND c.expires_at>$3::timestamptz)))
           ORDER BY r.record_key LIMIT 500 FOR SHARE OF r`,
             [owner, after, now.toISOString()],
           )
@@ -566,19 +579,20 @@ export class SemanticSearchService {
           )
             continue;
           await client.query(
-            "INSERT INTO live_semantic_snapshot_records(owner_id,record_key,content_hash,status) VALUES($1,$2,$3,'pending') ON CONFLICT(owner_id,record_key) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='pending'",
+            "INSERT INTO live_semantic_snapshot_records(owner_id,record_key,content_hash,status) VALUES($1,$2,$3,'pending') ON CONFLICT(owner_id,record_key) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='pending',failure_reason=NULL",
             [owner, record.record_key, record.content_hash],
           );
         }
       }
       await client.query(
-        "UPDATE live_semantic_snapshot_records s SET status='withdrawn' WHERE s.owner_id=$1 AND s.status='complete' AND NOT EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=s.owner_id AND c.record_key=s.record_key AND c.expires_at>$2)",
+        "UPDATE live_semantic_snapshot_records s SET status='withdrawn',failure_reason=NULL WHERE s.owner_id=$1 AND s.status='complete' AND NOT EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=s.owner_id AND c.record_key=s.record_key AND c.expires_at>$2)",
         [owner, now.toISOString()],
       );
       await client.query(
-        "UPDATE live_semantic_snapshots SET total_records=(SELECT count(*) FROM live_semantic_snapshot_records WHERE owner_id=$1),state=CASE WHEN EXISTS(SELECT 1 FROM live_semantic_snapshot_records WHERE owner_id=$1 AND status='pending') THEN 'indexing' ELSE 'complete' END,reason=NULL WHERE owner_id=$1",
+        "UPDATE live_semantic_snapshots SET total_records=(SELECT count(*) FROM live_semantic_snapshot_records WHERE owner_id=$1) WHERE owner_id=$1",
         [owner],
       );
+      await this.updateProgressState(client, owner);
     });
     return this.progress(owner);
   }
@@ -595,11 +609,13 @@ export class SemanticSearchService {
         pending: string;
         passages: string;
         partial: string;
+        failed: string;
       }>(
         `SELECT s.watermark,s.state,s.reason,s.total_records,
       (SELECT count(*) FROM live_semantic_snapshot_records r WHERE r.owner_id=s.owner_id AND r.status='complete' AND EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND c.expires_at>$2)) AS complete,
       (SELECT count(*) FROM live_semantic_snapshot_records r WHERE r.owner_id=s.owner_id AND (r.status='withdrawn' OR (r.status='complete' AND NOT EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND c.expires_at>$2)))) AS withdrawn,
       (SELECT count(*) FROM live_semantic_snapshot_records r WHERE r.owner_id=s.owner_id AND r.status='pending') AS pending,
+      (SELECT count(*) FROM live_semantic_snapshot_records r WHERE r.owner_id=s.owner_id AND r.status='failed') AS failed,
       (SELECT count(*) FROM live_semantic_chunks c WHERE c.owner_id=s.owner_id AND c.expires_at>$2) AS passages,
       (SELECT count(*) FROM live_semantic_snapshot_records r WHERE r.owner_id=s.owner_id AND r.status='pending' AND EXISTS(SELECT 1 FROM live_semantic_chunks c WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND c.expires_at>$2)) AS partial
       FROM live_semantic_snapshots s WHERE s.owner_id=$1`,
@@ -614,6 +630,7 @@ export class SemanticSearchService {
         withdrawn: 0,
         pending: 0,
         passages: 0,
+        failed: 0,
         state: "not_started",
         reason: null,
       };
@@ -625,9 +642,19 @@ export class SemanticSearchService {
       pending: Number(result.pending),
       passages: Number(result.passages),
       partial: Number(result.partial),
+      failed: Number(result.failed),
       state: result.state,
       reason: result.reason,
     };
+  }
+  private async updateProgressState(
+    client: Pool | PoolClient,
+    owner: string,
+  ): Promise<void> {
+    await client.query(
+      "UPDATE live_semantic_snapshots SET state=CASE WHEN EXISTS(SELECT 1 FROM live_semantic_snapshot_records WHERE owner_id=$1 AND status='pending') THEN 'indexing' WHEN EXISTS(SELECT 1 FROM live_semantic_snapshot_records WHERE owner_id=$1 AND status='failed') THEN 'paused' ELSE 'complete' END,reason=CASE WHEN EXISTS(SELECT 1 FROM live_semantic_snapshot_records WHERE owner_id=$1 AND status='failed') THEN 'semantic records require review' ELSE NULL END WHERE owner_id=$1",
+      [owner],
+    );
   }
   private async resources(estimatedBytes = 0): Promise<void> {
     const stats = await this.options.resources();
@@ -659,6 +686,7 @@ export class SemanticSearchService {
       AbortSignal.timeout(60_000),
       ...(signal ? [signal] : []),
     ]);
+    let pending: SnapshotRow | undefined;
     try {
       await this.resources();
       await this.transaction(async (client) => {
@@ -668,7 +696,7 @@ export class SemanticSearchService {
           [owner, this.clock().toISOString()],
         );
       });
-      const pending = (
+      pending = (
         await this.options.pool.query<SnapshotRow>(
           "SELECT record_key,content_hash,status FROM live_semantic_snapshot_records WHERE owner_id=$1 AND status='pending' ORDER BY record_key LIMIT 1",
           [owner],
@@ -693,12 +721,15 @@ export class SemanticSearchService {
           !this.options.scope.eligible(record, states, this.clock())
         ) {
           await this.options.pool.query(
-            "UPDATE live_semantic_snapshot_records SET status='withdrawn' WHERE owner_id=$1 AND record_key=$2 AND content_hash=$3",
+            "UPDATE live_semantic_snapshot_records SET status='withdrawn',failure_reason=NULL WHERE owner_id=$1 AND record_key=$2 AND content_hash=$3",
             [owner, pending.record_key, pending.content_hash],
           );
         } else {
           if (record.body_text.length > 1_048_576)
-            throw new Error("semantic record exceeds input bound");
+            throw new SemanticRecordError(
+              "input_bound",
+              "semantic record exceeds input bound",
+            );
           await this.options.pool.query(
             "DELETE FROM live_semantic_chunks WHERE owner_id=$1 AND record_key=$2 AND EXISTS(SELECT 1 FROM live_semantic_chunks expired WHERE expired.owner_id=$1 AND expired.record_key=$2 AND expired.expires_at<=$3)",
             [owner, record.record_key, this.clock().toISOString()],
@@ -758,7 +789,7 @@ export class SemanticSearchService {
                 !this.options.scope.eligible(current, currentStates, now)
               ) {
                 await client.query(
-                  "UPDATE live_semantic_snapshot_records SET status='withdrawn' WHERE owner_id=$1 AND record_key=$2",
+                  "UPDATE live_semantic_snapshot_records SET status='withdrawn',failure_reason=NULL WHERE owner_id=$1 AND record_key=$2",
                   [owner, record.record_key],
                 );
                 return false;
@@ -812,12 +843,56 @@ export class SemanticSearchService {
           }
         }
       }
-      await this.options.pool.query(
-        "UPDATE live_semantic_snapshots SET state=CASE WHEN EXISTS(SELECT 1 FROM live_semantic_snapshot_records r WHERE r.owner_id=$1 AND r.status='pending') THEN 'indexing' ELSE 'complete' END,reason=NULL WHERE owner_id=$1",
-        [owner],
-      );
+      await this.updateProgressState(this.options.pool, owner);
       return await this.progress(owner);
     } catch (error) {
+      if (error instanceof SemanticRecordError && pending) {
+        const failed = pending;
+        await this.transaction(async (client) => {
+          await this.binding(client);
+          const states = await this.states(client);
+          const current = (
+            await client.query<NormalizedRecord>(
+              "SELECT * FROM live_records WHERE owner_id=$1 AND record_key=$2 FOR SHARE",
+              [owner, failed.record_key],
+            )
+          ).rows[0];
+          const snapshot = (
+            await client.query<{ content_hash: string; status: string }>(
+              "SELECT content_hash,status FROM live_semantic_snapshot_records WHERE owner_id=$1 AND record_key=$2 FOR UPDATE",
+              [owner, failed.record_key],
+            )
+          ).rows[0];
+          if (
+            !snapshot ||
+            snapshot.content_hash !== failed.content_hash ||
+            snapshot.status !== "pending"
+          ) {
+            await this.updateProgressState(client, owner);
+            return;
+          }
+          const applicable =
+            current &&
+            current.content_hash === failed.content_hash &&
+            this.options.scope.eligible(current, states, this.clock());
+          await client.query(
+            "DELETE FROM live_semantic_chunks WHERE owner_id=$1 AND record_key=$2 AND content_hash=$3",
+            [owner, failed.record_key, failed.content_hash],
+          );
+          await client.query(
+            "UPDATE live_semantic_snapshot_records SET status=$4,failure_reason=$5 WHERE owner_id=$1 AND record_key=$2 AND content_hash=$3",
+            [
+              owner,
+              failed.record_key,
+              failed.content_hash,
+              applicable ? "failed" : "withdrawn",
+              applicable ? error.reason : null,
+            ],
+          );
+          await this.updateProgressState(client, owner);
+        });
+        return this.progress(owner);
+      }
       await this.options.pool.query(
         "UPDATE live_semantic_snapshots SET state='paused',reason=$2 WHERE owner_id=$1",
         [

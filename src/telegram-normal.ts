@@ -9,7 +9,11 @@ import type {
   Source,
   TendStore,
 } from "./engine.ts";
-import { telegramAIContactScope, telegramAIRecordSet } from "./engine.ts";
+import {
+  isRecord,
+  telegramAIContactScope,
+  telegramAIRecordSet,
+} from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
   prepareLiveAI,
@@ -445,7 +449,7 @@ export async function prepareNormalReply(input: {
     );
   }
   if (intent.intent === "search") {
-    let semanticUnavailable = false;
+    let semanticFallback: string | null = null;
     if (input.semanticSearch) {
       try {
         const result = await input.semanticSearch({
@@ -463,6 +467,7 @@ export async function prepareNormalReply(input: {
             const record = current.get(candidate.record_key);
             if (
               !record ||
+              candidate.owner_id !== auth.owner_id ||
               record.content_hash !== candidate.content_hash ||
               seen.has(record.record_key)
             )
@@ -471,47 +476,55 @@ export async function prepareNormalReply(input: {
             return [record];
           })
           .slice(0, 10);
-        return read(
-          {
-            outbound_sent: false,
-            search_mode: "semantic",
-            search_query: intent.query,
-            search_limit: 10,
-            search_results: matches.map((record) => ({
-              date: record.occurred_at,
-              source: record.source,
-              reference: record.evidence_reference,
-              text: (() => {
-                const match = result.matches?.find(
-                  (match) =>
-                    match.record_key === record.record_key &&
-                    Number.isInteger(match.start) &&
-                    Number.isInteger(match.end) &&
-                    match.start >= 0 &&
-                    match.end > match.start &&
-                    match.end <= record.body_text.length &&
-                    record.body_text.slice(match.start, match.end) ===
-                      match.text,
-                );
-                return match
-                  ? match.text.slice(0, 500)
-                  : record.body_text.slice(0, 500);
-              })(),
-              attribution: record.attribution ?? "unknown",
-            })),
-            normal_message: matches.length
-              ? "Imported semantic matches. Similarity does not establish identity."
-              : "No indexed semantic match. Index and account coverage may be partial.",
-            search_note:
-              "Local embedding search over eligible imported evidence; similarity is relevance, not factual confidence.",
-            coverage: state.sources,
-            semantic_coverage: result.coverage,
-          },
-          matches,
-        );
+        if (
+          !matches.length &&
+          (!isRecord(result.coverage) || result.coverage.state !== "complete")
+        ) {
+          semanticFallback =
+            "Semantic index is partial. Labelled keyword fallback. ";
+        } else
+          return read(
+            {
+              outbound_sent: false,
+              search_mode: "semantic",
+              search_query: intent.query,
+              search_limit: 10,
+              search_results: matches.map((record) => ({
+                date: record.occurred_at,
+                source: record.source,
+                reference: record.evidence_reference,
+                text: (() => {
+                  const match = result.matches?.find(
+                    (match) =>
+                      match.record_key === record.record_key &&
+                      Number.isInteger(match.start) &&
+                      Number.isInteger(match.end) &&
+                      match.start >= 0 &&
+                      match.end > match.start &&
+                      match.end <= record.body_text.length &&
+                      record.body_text.slice(match.start, match.end) ===
+                        match.text,
+                  );
+                  return match
+                    ? match.text.slice(0, 500)
+                    : record.body_text.slice(0, 500);
+                })(),
+                attribution: record.attribution ?? "unknown",
+              })),
+              normal_message: matches.length
+                ? "Imported semantic matches. Similarity does not establish identity."
+                : "No indexed semantic match. Index and account coverage may be partial.",
+              search_note:
+                "Local embedding search over eligible imported evidence; similarity is relevance, not factual confidence.",
+              coverage: state.sources,
+              semantic_coverage: result.coverage,
+            },
+            matches,
+          );
       } catch {
         if (signal.aborted) throw signal.reason;
-        semanticUnavailable = true;
+        semanticFallback =
+          "Semantic search unavailable. Labelled keyword fallback. ";
       }
     }
     const query = normalized(intent.query);
@@ -562,9 +575,7 @@ export async function prepareNormalReply(input: {
           ? "Imported keyword matches. People and channels remain separate."
           : "No imported keyword match. This does not establish absence from your accounts.",
         search_note:
-          (semanticUnavailable
-            ? "Semantic search unavailable. Labelled keyword fallback. "
-            : "") +
+          (semanticFallback ?? "") +
           "Bounded keyword ranking over the first 16,384 characters of eligible imported records; at most ten results. Not complete semantic search.",
         coverage: state.sources,
       },

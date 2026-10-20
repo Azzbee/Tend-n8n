@@ -1080,3 +1080,22 @@ it("shows a validated semantic passage beyond the message opening", async () => 
   });
   expect(result.reply.search_results).toMatchObject([{ text: passage }]);
 });
+
+it("uses labelled keyword fallback for an empty unfinished semantic index", async () => {
+  vi.spyOn(store, "interactions").mockReturnValue([
+    record({ body_text: "hotel logistics" }),
+  ]);
+  const result = await prepareNormalReply({
+    auth: auth("Find hotel logistics"),
+    store,
+    model: model({ intent: "search", query: "hotel logistics" }),
+    clock: now,
+    semanticSearch: async () => ({
+      records: [],
+      coverage: { state: "indexing", pending: 5 },
+    }),
+  });
+  expect(result.reply.search_mode).toBe("keyword");
+  expect(result.reply.search_note).toContain("Semantic index is partial");
+  expect(result.reply.search_results).toHaveLength(1);
+});

@@ -257,7 +257,7 @@ export function createPrivateServices(options: {
       if (initial.pending === 0) await service.refreshSnapshot(owner);
       while (!stop.signal.aborted) {
         const progress = await service.indexBatch(owner, stop.signal);
-        if (progress.state === "complete") break;
+        if (progress.pending === 0) break;
       }
     } catch {
       if (!stop.signal.aborted)

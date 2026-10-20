@@ -6,6 +6,7 @@ import {
   sources,
   type TendStore,
   type AuthCommand,
+  type Reply,
 } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
@@ -52,6 +53,18 @@ async function body(req: IncomingMessage): Promise<string> {
     chunks.push(b);
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+export function samePrivateReply(
+  expected: Reply,
+  checked: Reply,
+  scopedFreshness: boolean,
+): boolean {
+  const clean = (reply: Reply): Reply => {
+    const result = { ...reply };
+    if (scopedFreshness) delete result.coverage;
+    return result;
+  };
+  return JSON.stringify(clean(expected)) === JSON.stringify(clean(checked));
 }
 export function createPrivateWebHandler(
   options: Options,
@@ -178,15 +191,16 @@ export function createPrivateWebHandler(
         ["/private/app.js", "app.js"],
       ]).get(url.pathname);
       if (asset && req.method === "GET") {
+        const content = await readFile(
+          new URL("../web/private/" + asset, import.meta.url),
+        );
         res.writeHead(200, {
           ...headers,
           "Content-Type": asset.endsWith(".css")
             ? "text/css; charset=utf-8"
             : "text/javascript; charset=utf-8",
         });
-        res.end(
-          await readFile(new URL("../web/private/" + asset, import.meta.url)),
-        );
+        res.end(content);
         return true;
       }
       const session = sessions.get(cookie(req, "tend_private"));
@@ -538,8 +552,11 @@ export function createPrivateWebHandler(
                 v.prepared.ai_guard.prepared.contact_id,
               )) ?? null;
           const reply = await store.validatePreparedRead(v.auth, v.prepared);
-          const valid =
-            JSON.stringify(reply) === JSON.stringify(v.prepared.reply);
+          const valid = samePrivateReply(
+            v.prepared.reply,
+            reply,
+            Boolean(v.prepared.ai_guard?.freshness),
+          );
           if (!valid) views.delete(String(data.view_id));
           send(200, {
             view_id: data.view_id,
@@ -605,7 +622,8 @@ export function createPrivateWebHandler(
               (s) =>
                 s.status !== "revoked" &&
                 (s.source === "gmail"
-                  ? s.account_id === policy.account_email
+                  ? s.account_id.toLowerCase() ===
+                    policy.account_email.toLowerCase()
                   : s.source === "calendar"
                     ? policy.calendar_ids.includes(s.account_id)
                     : policy.social?.accounts.some(
@@ -702,8 +720,24 @@ export function createPrivateWebHandler(
             (await options.resolveGroup?.(
               prepared.ai_guard.prepared.contact_id,
             )) ?? null;
+        if (
+          prepared.ai_guard?.prepared.contact_id !== selector ||
+          prepared.ai_guard.prepared.purpose !== kind
+        ) {
+          send(503, {
+            error:
+              "The local assistant could not prepare this exact contact. Please try again.",
+          });
+          return true;
+        }
         const reply = await store.validatePreparedRead(auth, prepared);
-        if (JSON.stringify(reply) !== JSON.stringify(prepared.reply)) {
+        if (
+          !samePrivateReply(
+            prepared.reply,
+            reply,
+            Boolean(prepared.ai_guard?.freshness),
+          )
+        ) {
           send(409, {
             error: "Evidence changed while preparing. Please try again.",
           });

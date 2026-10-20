@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS live_semantic_snapshot_records (
  owner_id text NOT NULL REFERENCES live_semantic_snapshots ON DELETE CASCADE,
  record_key text NOT NULL,
  content_hash text NOT NULL CHECK(content_hash ~ '^[a-f0-9]{64}$'),
- status text NOT NULL CHECK(status IN ('pending','complete','withdrawn')),
+ status text NOT NULL CHECK(status IN ('pending','complete','withdrawn','failed')),
+ failure_reason text CHECK(failure_reason IN ('input_bound','context_limit')),
+ CHECK((status='failed')=(failure_reason IS NOT NULL)),
  PRIMARY KEY(owner_id,record_key)
 );
 CREATE TABLE IF NOT EXISTS live_semantic_chunks (
@@ -45,7 +47,7 @@ CREATE OR REPLACE FUNCTION invalidate_live_semantic_record() RETURNS trigger LAN
 BEGIN
  IF TG_OP='DELETE' OR NEW.content_hash IS DISTINCT FROM OLD.content_hash OR NEW.cancelled OR NEW.body_text IS DISTINCT FROM OLD.body_text OR NEW.contact_id IS DISTINCT FROM OLD.contact_id OR NEW.contact_ids IS DISTINCT FROM OLD.contact_ids OR NEW.source IS DISTINCT FROM OLD.source OR NEW.account_id IS DISTINCT FROM OLD.account_id OR NEW.occurred_at IS DISTINCT FROM OLD.occurred_at OR NEW.end_at IS DISTINCT FROM OLD.end_at OR NEW.actor_identity IS DISTINCT FROM OLD.actor_identity OR NEW.participant_identities IS DISTINCT FROM OLD.participant_identities OR NEW.attribution IS DISTINCT FROM OLD.attribution THEN
   DELETE FROM live_semantic_chunks WHERE owner_id=OLD.owner_id AND record_key=OLD.record_key;
-  UPDATE live_semantic_snapshot_records SET status='withdrawn' WHERE owner_id=OLD.owner_id AND record_key=OLD.record_key;
+  UPDATE live_semantic_snapshot_records SET status='withdrawn',failure_reason=NULL WHERE owner_id=OLD.owner_id AND record_key=OLD.record_key;
  END IF;
  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
  RETURN NEW;
@@ -56,7 +58,7 @@ CREATE OR REPLACE FUNCTION revoke_live_semantic_account() RETURNS trigger LANGUA
 BEGIN
  IF NEW.state->>'status'='revoked' THEN
   DELETE FROM live_semantic_chunks c USING live_records r WHERE c.owner_id=r.owner_id AND c.record_key=r.record_key AND r.owner_id=NEW.owner_id AND r.source=NEW.source AND r.account_id=NEW.account_id;
-  UPDATE live_semantic_snapshot_records s SET status='withdrawn' FROM live_records r WHERE s.owner_id=r.owner_id AND s.record_key=r.record_key AND r.owner_id=NEW.owner_id AND r.source=NEW.source AND r.account_id=NEW.account_id;
+  UPDATE live_semantic_snapshot_records s SET status='withdrawn',failure_reason=NULL FROM live_records r WHERE s.owner_id=r.owner_id AND s.record_key=r.record_key AND r.owner_id=NEW.owner_id AND r.source=NEW.source AND r.account_id=NEW.account_id;
  END IF;
  RETURN NEW;
 END $$;

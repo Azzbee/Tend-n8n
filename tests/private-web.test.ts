@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { TendStore, type AuthCommand } from "../src/engine.ts";
-import { createPrivateWebHandler } from "../src/private-web.ts";
+import {
+  createPrivateWebHandler,
+  samePrivateReply,
+} from "../src/private-web.ts";
 import { exampleLivePolicy } from "../src/live-policy.ts";
 import type { LiveRecord } from "../src/google-records.ts";
 const policy = exampleLivePolicy,
@@ -356,4 +359,152 @@ describe("private web boundary and bounded storage", () => {
       store.close();
     }
   });
+});
+
+describe("private held view comparison", () => {
+  it("keeps valid scoped output through unrelated coverage progress", () => {
+    const before = {
+      outbound_sent: false as const,
+      ai: { preview: "Held text" },
+      coverage: [{ cursor: "before" }],
+    };
+    const after = { ...before, coverage: [{ cursor: "after" }] };
+    expect(samePrivateReply(before, after, true)).toBe(true);
+    expect(samePrivateReply(before, after, false)).toBe(false);
+    expect(
+      samePrivateReply(before, { ...after, ai: { preview: "Changed" } }, true),
+    ).toBe(false);
+  });
+});
+
+async function unlockPrivate(base: string): Promise<Record<string, string>> {
+  const page = await fetch(base + "/private"),
+    html = await page.text(),
+    nonce = html.match(/name="nonce"[^>]*value="([^"]+)"/)?.[1];
+  const unlock = await fetch(base + "/private/unlock", {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      Cookie: page.headers.get("set-cookie")!.split(";")[0]!,
+      Origin: base,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "nonce=" + nonce,
+  });
+  const Cookie = unlock.headers.get("set-cookie")!.split(";")[0]!;
+  const session = (await (
+    await fetch(base + "/private/api/session", { headers: { Cookie } })
+  ).json()) as { csrf: string };
+  return {
+    Cookie,
+    Origin: base,
+    "Content-Type": "application/json",
+    "X-Tend-CSRF": session.csrf,
+  };
+}
+it.each(["briefing", "draft"] as const)(
+  "serves a held %s for the exact recipient and withdraws a real fixture edit",
+  async (kind) => {
+    const store = fixture();
+    store.ingest(record("proof"));
+    let calls = 0;
+    const handler = createPrivateWebHandler({
+      store,
+      policy,
+      clock,
+      normalModel: async () =>
+        ++calls === 1
+          ? {
+              intent: kind === "draft" ? "draft_preview" : "briefing",
+              query: "peer",
+            }
+          : {
+              items: [{ evidence_id: "E1", quote: "Literal message proof" }],
+              ...(kind === "draft"
+                ? {
+                    draft: {
+                      text: "Hi Peer, thanks for your message. Could you share a quick update when you have a moment?",
+                    },
+                  }
+                : {}),
+            },
+    });
+    const server = createServer((req, res) => {
+        void handler(req, res);
+      }),
+      base = await listen(server);
+    try {
+      const headers = await unlockPrivate(base),
+        response = await fetch(base + "/private/api/" + kind, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ selector: "peer" }),
+        });
+      expect(response.status).toBe(200);
+      const view = (await response.json()) as {
+        view_id: string;
+        reply: { ai: { status: string } };
+      };
+      expect(view.reply.ai.status).toBe("validated");
+      const original = store.sourceStatus(owner);
+      const spy = vi.spyOn(store, "sourceStatus").mockReturnValue(
+        original.map((state) => ({
+          ...state,
+          cursor: "sync-progress",
+          last_success: "2026-10-20T12:00:01Z",
+        })),
+      );
+      const valid = (await (
+        await fetch(base + "/private/api/revalidate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ view_id: view.view_id }),
+        })
+      ).json()) as { valid: boolean };
+      expect(valid.valid).toBe(true);
+      spy.mockRestore();
+      store.ingest({
+        ...record("proof"),
+        body_text: "The original source changed.",
+        authored_text: "The original source changed.",
+      });
+      const stale = (await (
+        await fetch(base + "/private/api/revalidate", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ view_id: view.view_id }),
+        })
+      ).json()) as { valid: boolean };
+      expect(stale.valid).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      store.close();
+    }
+  },
+);
+it("rejects a contact control when the classifier returns a different intent", async () => {
+  const store = fixture(),
+    handler = createPrivateWebHandler({
+      store,
+      policy,
+      clock,
+      normalModel: async () => ({ intent: "help" }),
+    }),
+    server = createServer((req, res) => {
+      void handler(req, res);
+    }),
+    base = await listen(server);
+  try {
+    const headers = await unlockPrivate(base);
+    const response = await fetch(base + "/private/api/briefing", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ selector: "peer" }),
+    });
+    expect(response.status).toBe(503);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
 });

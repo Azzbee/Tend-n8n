@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import {
+  EmbeddingContextError,
   LocalModelCoordinator,
   SemanticSearchService,
 } from "../src/semantic-search.ts";
@@ -290,6 +291,7 @@ describe("isolated PostgreSQL semantic index", () => {
       pending: 1,
       complete: 0,
       state: "paused",
+      failed: 0,
     });
     await service().indexBatch("owner");
     expect(await service().progress("owner")).toMatchObject({
@@ -297,6 +299,91 @@ describe("isolated PostgreSQL semantic index", () => {
       complete: 1,
       state: "complete",
     });
+  });
+  it("marks one permanently oversized record failed and continues with later records", async () => {
+    await reset();
+    await record("a-bad", "x".repeat(1_048_577));
+    await record("b-good", "Accommodation");
+    const s = service();
+    await s.initialiseSnapshot("owner");
+    expect(await s.indexBatch("owner")).toMatchObject({
+      failed: 1,
+      pending: 1,
+      complete: 0,
+      state: "indexing",
+    });
+    expect(await s.indexBatch("owner")).toMatchObject({
+      failed: 1,
+      pending: 0,
+      complete: 1,
+      state: "paused",
+      reason: "semantic records require review",
+    });
+    const failure = (
+      await pool.query(
+        "SELECT status,failure_reason FROM live_semantic_snapshot_records WHERE record_key='a-bad'",
+      )
+    ).rows[0];
+    expect(failure).toEqual({
+      status: "failed",
+      failure_reason: "input_bound",
+    });
+    expect(
+      (await s.search({ owner: "owner", query: "hotel" })).hits.map(
+        (hit) => hit.record.record_key,
+      ),
+    ).toEqual(["b-good"]);
+    expect(await s.refreshSnapshot("owner")).toMatchObject({
+      failed: 1,
+      pending: 0,
+      complete: 1,
+      state: "paused",
+    });
+    await pool.query(
+      "UPDATE live_records SET body_text='Accommodation fixed',content_hash=$1 WHERE record_key='a-bad'",
+      [hash("Accommodation fixed")],
+    );
+    expect(await s.refreshSnapshot("owner")).toMatchObject({
+      failed: 0,
+      pending: 1,
+      complete: 1,
+      state: "indexing",
+    });
+    expect(await s.indexBatch("owner")).toMatchObject({
+      failed: 0,
+      pending: 0,
+      complete: 2,
+      state: "complete",
+    });
+  });
+  it("withdraws partial passages from an irreducible context failure without blocking other records", async () => {
+    await reset();
+    await record("a-bad", "😀");
+    await record("b-good", "Accommodation");
+    const s = service({
+      embed: async (text) => {
+        if (text === "😀") throw new EmbeddingContextError();
+        return vector(text);
+      },
+    });
+    await s.initialiseSnapshot("owner");
+    expect(await s.indexBatch("owner")).toMatchObject({
+      failed: 1,
+      pending: 1,
+    });
+    expect(await s.indexBatch("owner")).toMatchObject({
+      failed: 1,
+      complete: 1,
+      pending: 0,
+      state: "paused",
+    });
+    expect(
+      (
+        await pool.query(
+          "SELECT failure_reason FROM live_semantic_snapshot_records WHERE record_key='a-bad'",
+        )
+      ).rows[0]?.failure_reason,
+    ).toBe("context_limit");
   });
   it("filters owner/contact/source/date before returning results and rechecks current eligibility", async () => {
     await reset();

@@ -150,7 +150,8 @@ export function indexCoverageLines(value: unknown): string[] {
     total = count("total"),
     pending = count("pending"),
     partial = count("partial"),
-    withdrawn = count("withdrawn");
+    withdrawn = count("withdrawn"),
+    failed = count("failed");
   const lines = [
     value.state === "complete"
       ? "Initial imported snapshot indexed."
@@ -167,6 +168,8 @@ export function indexCoverageLines(value: unknown): string[] {
     lines.push(`${partial} records only partly indexed.`);
   if (withdrawn !== null && withdrawn > 0)
     lines.push(`${withdrawn} records withdrawn from the index.`);
+  if (failed !== null && failed > 0)
+    lines.push(`${failed} records could not be indexed and need review.`);
   lines.push("Coverage is limited to eligible imported context.");
   return lines;
 }
@@ -262,6 +265,8 @@ export function mountPrivateWorkspace(): void {
   let expires: ReturnType<typeof setTimeout> | undefined;
   let polling: ReturnType<typeof setInterval> | undefined;
   let validating = false;
+  let checkingSession = false;
+  let channel: BroadcastChannel | undefined;
   let mode: "history" | "search" = "history";
   const activeRequests = new Set<AbortController>();
   function removeView(message?: string): void {
@@ -274,7 +279,8 @@ export function mountPrivateWorkspace(): void {
     visible("copy-draft", false);
     if (message) status(message);
   }
-  function lock(message: string): void {
+  function lock(message: string, notifyOtherTabs = true): void {
+    const wasUnlocked = session !== null;
     revision++;
     contactsRevision++;
     session = null;
@@ -287,6 +293,9 @@ export function mountPrivateWorkspace(): void {
     activeRequests.clear();
     if (expires !== undefined) clearTimeout(expires);
     if (polling !== undefined) clearInterval(polling);
+    document.removeEventListener("visibilitychange", checkOnReturn);
+    window.removeEventListener("focus", checkOnReturn);
+    window.removeEventListener("pageshow", checkOnReturn);
     workspace.hidden = true;
     locked.hidden = false;
     visible("lock", false);
@@ -321,6 +330,16 @@ export function mountPrivateWorkspace(): void {
       form.after(reload);
     }
     status(null);
+    if (channel) {
+      try {
+        if (notifyOtherTabs && wasUnlocked) channel.postMessage("lock");
+      } catch {
+        // The server session check also withdraws other tabs.
+      } finally {
+        channel.close();
+        channel = undefined;
+      }
+    }
   }
   async function api<T>(
     path: string,
@@ -328,7 +347,10 @@ export function mountPrivateWorkspace(): void {
   ): Promise<T> {
     const controller = new AbortController();
     activeRequests.add(controller);
-    const timeout = setTimeout(() => controller.abort(), 55_000);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      path === "session" ? 5_000 : 55_000,
+    );
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (body) {
@@ -360,6 +382,42 @@ export function mountPrivateWorkspace(): void {
       clearTimeout(timeout);
       activeRequests.delete(controller);
     }
+  }
+  async function checkSession(): Promise<void> {
+    if (!session || checkingSession) return;
+    if (Date.now() >= Date.parse(session.expires_at)) {
+      lock("Session expired · locked");
+      return;
+    }
+    checkingSession = true;
+    const currentSession = session;
+    try {
+      const current = await api<PrivateSessionResponse>("session");
+      if (session !== currentSession) return;
+      if (
+        current.csrf !== currentSession.csrf ||
+        current.expires_at !== currentSession.expires_at
+      ) {
+        lock("Private session changed · locked", false);
+        return;
+      }
+      if (Date.now() >= Date.parse(currentSession.expires_at)) {
+        lock("Session expired · locked");
+        return;
+      }
+      await revalidate();
+    } catch {
+      if (session === currentSession)
+        lock("Session check unavailable · locked", false);
+    } finally {
+      checkingSession = false;
+    }
+  }
+  function checkOnReturn(): void {
+    if (!session) return;
+    if (Date.now() >= Date.parse(session.expires_at))
+      lock("Session expired · locked");
+    else if (!document.hidden) void checkSession();
   }
   function report(error: unknown): void {
     if (session)
@@ -825,7 +883,15 @@ export function mountPrivateWorkspace(): void {
       if (copy && value.valid !== false && value.reply) {
         const draft = replyPresentation(value.reply).draft;
         if (draft) {
-          await navigator.clipboard.writeText(draft);
+          try {
+            await navigator.clipboard.writeText(draft);
+          } catch {
+            if (view?.view_id === id && session)
+              status(
+                "Copy is unavailable in this browser. Select the draft text and copy it manually. Nothing was sent.",
+              );
+            return;
+          }
           if (view?.view_id === id && session)
             status("Fresh draft copied. Nothing was sent to your contact.");
         }
@@ -988,16 +1054,20 @@ export function mountPrivateWorkspace(): void {
         () => lock("Session expired · locked"),
         Math.max(0, Date.parse(value.expires_at) - Date.now()),
       );
-      polling = setInterval(() => {
-        if (session && !document.hidden) void revalidate();
-      }, 15_000);
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden && session) {
-          if (Date.now() >= Date.parse(session.expires_at))
-            lock("Session expired · locked");
-          else void revalidate();
+      if (typeof BroadcastChannel === "function") {
+        try {
+          channel = new BroadcastChannel("tend-private");
+          channel.onmessage = (event: MessageEvent<unknown>) => {
+            if (event.data === "lock") lock("Locked on another tab", false);
+          };
+        } catch {
+          // Session polling remains available if tab messaging is unsupported.
         }
-      });
+      }
+      polling = setInterval(checkOnReturn, 15_000);
+      document.addEventListener("visibilitychange", checkOnReturn);
+      window.addEventListener("focus", checkOnReturn);
+      window.addEventListener("pageshow", checkOnReturn);
       void loadContacts();
     })
     .catch(() => {
