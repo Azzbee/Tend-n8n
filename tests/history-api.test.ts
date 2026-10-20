@@ -355,3 +355,32 @@ it("applies only confirmed Calendar withdrawals when new ingestion is resource-p
     store.close();
   }
 });
+it("keeps a quota 403 separate from revoking the connected Google source", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    await api.state("gmail");
+    expect(
+      await api.error({
+        source: "gmail",
+        status_code: 403,
+        reconnect_required: false,
+        retry_after_seconds: 3600,
+      }),
+    ).toMatchObject({ reconnect_required: false });
+    expect((await store.sourceStatus(policy.principal_id))[0]?.status).toBe(
+      "partial",
+    );
+  } finally {
+    store.close();
+  }
+});

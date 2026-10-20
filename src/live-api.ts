@@ -385,18 +385,6 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const source = url.searchParams.get("source");
         if (source !== "gmail" && source !== "calendar")
           throw new Error("invalid source");
-        if (
-          url.searchParams.get("lane") === "history" ||
-          (policy.history &&
-            url.searchParams.get("lane") === "auto" &&
-            clock().getUTCMinutes() % 2 === 0)
-        ) {
-          const historical = await historyAPI.state(source);
-          if (historical.reason !== "history_complete") {
-            respond(200, historical);
-            return;
-          }
-        }
         const states = (await store.sourceStatus(owner)).filter(
           (x) =>
             x.source === source &&
@@ -415,6 +403,40 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const selected =
           source === "gmail" ? pool[0] : pool[calendarTurn++ % pool.length];
         if (!selected) throw new Error("source missing");
+        const lane = url.searchParams.get("lane");
+        if (lane === "history") {
+          respond(200, await historyAPI.state(source, selected.account_id));
+          return;
+        }
+        if (
+          policy.history &&
+          lane === "auto" &&
+          selected.status !== "revoked"
+        ) {
+          await store.beginHistoryBackfill(
+            owner,
+            source,
+            selected.account_id,
+            clock().toISOString(),
+          );
+          if (
+            (await store.claimHistoryPoll(
+              owner,
+              source,
+              selected.account_id,
+            )) === "history"
+          ) {
+            const historical = await historyAPI.state(
+              source,
+              selected.account_id,
+            );
+            if (historical.request_allowed === true) {
+              respond(200, historical);
+              return;
+            }
+          }
+        }
+
         const range =
           source === "gmail"
             ? gmailWindow(incrementalPolicy, clock())

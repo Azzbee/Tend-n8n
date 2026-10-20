@@ -855,3 +855,38 @@ it("splits large history pages without changing or truncating source records", (
       100000,
     );
 });
+it.each([
+  "rateLimitExceeded",
+  "userRateLimitExceeded",
+  "dailyLimitExceeded",
+  "quotaExceeded",
+])(
+  "classifies quota 403 %s without revoking the Google connection",
+  (reason) => {
+    const node = load(files[0]!).nodes.find(
+      (n) => n.name === "Check Gmail profile",
+    )!;
+    const result = evaluate(
+      String(node.parameters.jsCode),
+      {
+        statusCode: 403,
+        headers: { "retry-after": "3600" },
+        body: { error: { errors: [{ reason }] } },
+      },
+      {
+        "Prepare Gmail profile": {
+          source: "gmail",
+          started_at: Date.now(),
+          deadline_at: Date.now() + 60000,
+          budget: { max_attempts: 3 },
+          attempts: { "Gmail profile": 1 },
+        },
+      },
+    ) as { json: Record<string, unknown> }[];
+    expect(result[0]?.json).toMatchObject({
+      reconnect_required: false,
+      retry_delay_seconds: 3600,
+      retry_allowed: false,
+    });
+  },
+);

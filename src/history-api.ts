@@ -52,11 +52,13 @@ export function createHistoryAPI(options: Options) {
   };
   async function state(
     source: "gmail" | "calendar",
+    account?: string,
   ): Promise<Record<string, unknown>> {
     approved();
     const states = (await store.sourceStatus(owner)).filter(
       (s) =>
         s.source === source &&
+        (account === undefined || s.account_id === account) &&
         s.mode === "live" &&
         (source === "gmail"
           ? s.account_id === policy.account_email
@@ -325,10 +327,7 @@ export function createHistoryAPI(options: Options) {
         : "provider_wait_requires_review",
       representable ? new Date(retryAt).toISOString() : null,
     );
-    const revoked =
-      value.reconnect_required === true ||
-      value.status_code === 401 ||
-      value.status_code === 403;
+    const revoked = value.reconnect_required === true;
     if (revoked)
       await store.revokeSource(owner, source as "gmail" | "calendar");
     return { recorded: true, lane: "history", reconnect_required: revoked };
