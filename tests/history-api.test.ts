@@ -219,7 +219,7 @@ it("does not advance a malformed history page or claim it is complete", async ()
     const result = await api.commit({
       ...state,
       profile_account_email: policy.account_email,
-      records: [{ id: "bad", oversized: true }],
+      records: [{ oversized: true }],
       previous_cursor: null,
       cursor: null,
       complete: true,
@@ -326,7 +326,7 @@ it("holds a quarantined page until reviewed instead of retrying it every poll", 
     await api.commit({
       ...state,
       profile_account_email: policy.account_email,
-      records: [{ id: "bad", oversized: true }],
+      records: [{ oversized: true }],
       previous_cursor: null,
       cursor: null,
       complete: true,
@@ -481,6 +481,296 @@ it("keeps a quota 403 separate from revoking the connected Google source", async
     expect((await store.sourceStatus(policy.principal_id))[0]?.status).toBe(
       "partial",
     );
+  } finally {
+    store.close();
+  }
+});
+
+it("imports readable history beside a stable unreadable record and queues it exactly once", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    const readable = {
+      id: "readable-mail",
+      threadId: "thread-one",
+      labelIds: ["INBOX"],
+      internalDate: String(Date.parse("2020-01-01T10:00:00Z")),
+      payload: {
+        mimeType: "text/plain",
+        headers: [
+          { name: "From", value: "peer@example.com" },
+          { name: "To", value: policy.account_email },
+        ],
+        body: {
+          data: Buffer.from("Hello from a historical message").toString(
+            "base64url",
+          ),
+        },
+      },
+    };
+    const page = {
+      ...state,
+      profile_account_email: policy.account_email,
+      records: [readable, { id: "oversized-mail", oversized: true }],
+      previous_cursor: null,
+      cursor: "next-page",
+      complete: false,
+    };
+    expect(await api.commit(page)).toMatchObject({
+      accepted: 1,
+      quarantined: 1,
+      content_complete: false,
+    });
+    const checkpoint = (await store.historyBackfills(policy.principal_id))[0]!;
+    expect(checkpoint).toMatchObject({
+      page_count: 1,
+      record_count: 1,
+      quarantined_count: 1,
+      cursor: "next-page",
+    });
+    expect(await store.quarantineCount(policy.principal_id)).toBe(1);
+    expect(await api.commit(page)).toMatchObject({ replayed: true });
+    expect(await store.quarantineCount(policy.principal_id)).toBe(1);
+    expect(
+      (await store.interactions(policy.principal_id)).map(
+        (r) => r.source_record_id,
+      ),
+    ).toEqual(["readable-mail"]);
+  } finally {
+    store.close();
+  }
+});
+it("finishes pagination without claiming complete content when only an oversized stable record is unavailable", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    expect(
+      await api.commit({
+        ...state,
+        profile_account_email: policy.account_email,
+        records: [{ id: "oversized-mail", oversized: true }],
+        previous_cursor: null,
+        cursor: null,
+        complete: true,
+      }),
+    ).toMatchObject({
+      accepted: 0,
+      quarantined: 1,
+      complete: true,
+      content_complete: false,
+    });
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0],
+    ).toMatchObject({ status: "complete", quarantined_count: 1 });
+  } finally {
+    store.close();
+  }
+});
+
+it.each([
+  { id: "foreign-marker", oversized: true, account_id: "different-account" },
+  {
+    id: "not-an-approved-marker",
+    oversized: true,
+    account_email: "other@example.com",
+  },
+  { id: "id with whitespace", oversized: true },
+])(
+  "holds unsafe record structure or provenance without advancing: %j",
+  async (raw) => {
+    const store = await setup();
+    try {
+      const api = createHistoryAPI({
+        store,
+        policy,
+        clock: now,
+        resources: async () => ({
+          free_bytes: 3 * 1024 ** 3,
+          database_bytes: 0,
+          index_bytes: 0,
+        }),
+      });
+      const state = await api.state("gmail");
+      expect(
+        await api.commit({
+          ...state,
+          profile_account_email: policy.account_email,
+          records: [raw],
+          previous_cursor: null,
+          cursor: "must-not-advance",
+          complete: false,
+        }),
+      ).toMatchObject({ paused: true, reason: "history_page_requires_review" });
+      expect(
+        (await store.historyBackfills(policy.principal_id))[0],
+      ).toMatchObject({ page_count: 0, record_count: 0, cursor: null });
+      expect(await store.quarantineCount(policy.principal_id)).toBe(0);
+    } finally {
+      store.close();
+    }
+  },
+);
+it("queues a stable oversized Calendar record with an explicit source reference", async () => {
+  const store = await setup();
+  try {
+    await store.seed(
+      [],
+      [],
+      [
+        {
+          owner_id: policy.principal_id,
+          source: "calendar",
+          account_id: "primary",
+          status: "partial",
+          mode: "live",
+          last_success: null,
+          coverage_start: "2026-09-20T10:00:00Z",
+          coverage_end: now().toISOString(),
+          cursor: null,
+        },
+      ],
+    );
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("calendar", "primary");
+    expect(
+      await api.commit({
+        ...state,
+        profile_account_email: policy.account_email,
+        records: [{ id: "large-event", oversized: true }],
+        previous_cursor: null,
+        cursor: null,
+        complete: true,
+      }),
+    ).toMatchObject({
+      quarantined: 1,
+      complete: true,
+      content_complete: false,
+    });
+    expect(
+      await store.historyQuarantines(
+        policy.principal_id,
+        "calendar",
+        "primary",
+      ),
+    ).toMatchObject({
+      total: 1,
+      reason_counts: [{ reason: "history_record_oversized", count: 1 }],
+      items: [
+        {
+          source_record_id: "large-event",
+          reason: "history_record_oversized",
+          original_reference: "tend-source:calendar/primary/large-event",
+        },
+      ],
+    });
+  } finally {
+    store.close();
+  }
+});
+
+it("queues an owned stable record with missing mandatory fields instead of holding readable siblings", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    expect(
+      await api.commit({
+        ...state,
+        profile_account_email: policy.account_email,
+        records: [{ id: "stable-but-missing-fields" }],
+        previous_cursor: null,
+        cursor: "next",
+        complete: false,
+      }),
+    ).toMatchObject({
+      quarantined: 1,
+      complete: false,
+      evidence_partial: true,
+    });
+    expect(
+      await store.historyQuarantines(
+        policy.principal_id,
+        "gmail",
+        policy.account_email,
+      ),
+    ).toMatchObject({
+      total: 1,
+      items: [
+        {
+          source_record_id: "stable-but-missing-fields",
+          reason: "invalid_provider_string",
+        },
+      ],
+    });
+  } finally {
+    store.close();
+  }
+});
+it("rejects an invalid outer history wrapper without changing the checkpoint", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    await expect(
+      api.commit({
+        ...state,
+        profile_account_email: policy.account_email,
+        records: { id: "not-a-page" },
+        previous_cursor: null,
+        cursor: "next",
+        complete: false,
+      }),
+    ).rejects.toThrow("Invalid or stale history page");
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0],
+    ).toMatchObject({ cursor: null, page_count: 0 });
   } finally {
     store.close();
   }

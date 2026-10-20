@@ -191,6 +191,55 @@ describe.each(["sqlite", "postgres"] as const)(
         }),
       ).toMatchObject({ kind: "page", complete: true });
     }
+    it("does not treat incidental LinkedIn snapshot columns as verified provider message IDs", async () => {
+      sessions = new SocialReadSessions({
+        policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        historyResourceGate: async () => null,
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      const proof_id = await linkedIdentity();
+      const planned = request(
+        await sessions.plan({
+          ...linked,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: planned.request_id,
+          status: 200,
+          body: {
+            elements: [
+              {
+                snapshotDomain: "INBOX",
+                snapshotData: [
+                  {
+                    id: "incidental-column",
+                    resourceId: "also-incidental",
+                    DATE: null,
+                    CONTENT: null,
+                  },
+                ],
+              },
+            ],
+            paging: { start: 0, count: 10, links: [] },
+          },
+        }),
+      ).toMatchObject({
+        kind: "blocked",
+        reason: "history_page_requires_review",
+      });
+      expect(await store.quarantineCount(owner)).toBe(0);
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        page_count: 0,
+        cursor: null,
+        status: "paused",
+      });
+    });
     it("keeps historical pagination and errors separate from incremental state", async () => {
       sessions = new SocialReadSessions({
         policy: { ...policy, history: { version: 1, mode: "all_available" } },
@@ -427,7 +476,7 @@ describe.each(["sqlite", "postgres"] as const)(
         prepared.reply,
       );
     });
-    it("applies confirmed withdrawals on a quarantined page without advancing or ingesting unrelated records", async () => {
+    it("withdraws invalid evidence and imports readable history alongside a stable unavailable record", async () => {
       const { proof_id, raw, prepared, auth } = await retainedHistoryEvidence();
       const planned = request(
         await sessions.plan({
@@ -456,18 +505,68 @@ describe.each(["sqlite", "postgres"] as const)(
           },
         }),
       ).toMatchObject({
-        kind: "blocked",
-        reason: "history_page_requires_review",
+        kind: "page",
+        accepted: 1,
+        quarantined: 1,
+        removed: 1,
+        pagination_complete: true,
+        evidence_partial: true,
       });
-      expect(await store.interactions(owner)).toHaveLength(0);
+      expect(
+        (await store.interactions(owner)).map((r) => r.source_record_id),
+      ).toEqual(["unrelated-new"]);
+      expect(await store.quarantineCount(owner)).toBe(1);
       expect(await store.validatePreparedRead(auth, prepared)).not.toEqual(
         prepared.reply,
       );
       expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        cursor: null,
+        page_count: 2,
+        status: "complete",
+        quarantined_count: 1,
+        last_error: null,
+      });
+    });
+    it("keeps a page held when an unavailable record belongs to another account", async () => {
+      const { proof_id, raw } = await retainedHistoryEvidence();
+      const planned = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: planned.request_id,
+          status: 200,
+          body: {
+            object: "MessageList",
+            cursor: null,
+            items: [
+              { ...raw, id: "readable-new", text: "This page must stay held" },
+              {
+                ...raw,
+                id: "foreign-unavailable",
+                account_id: "other-account",
+                text: null,
+              },
+            ],
+          },
+        }),
+      ).toMatchObject({
+        kind: "blocked",
+        reason: "foreign_provider_account",
+      });
+      expect(
+        (await store.interactions(owner)).map((r) => r.source_record_id),
+      ).toEqual([raw.id]);
+      expect(await store.quarantineCount(owner)).toBe(0);
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
         cursor: "retained-next",
         page_count: 1,
         status: "paused",
-        last_error: "history_page_requires_review",
       });
     });
     it.each([false, true])(

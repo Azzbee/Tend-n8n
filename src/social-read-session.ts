@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord, type TendStore, type SourceState } from "./engine.ts";
-import type { LiveStore } from "./live-store.ts";
+import type { LiveStore, HistoryQuarantine } from "./live-store.ts";
 import {
   parseSocialPolicy,
   allAvailableHistory,
@@ -564,7 +564,52 @@ export class SocialReadSessions {
           }
           throw error;
         }
-        if (normalized.batch.evidence_incomplete) {
+        const quarantines: HistoryQuarantine[] = (
+          normalized.batch.quarantines ?? []
+        ).map((q) => ({
+          ...q,
+          original_reference: `tend-source:${account.source}/${encodeURIComponent(account.account_id)}/${encodeURIComponent(q.source_record_id)}`,
+        }));
+        const unsafeQuarantine = quarantines.some(
+          (q) =>
+            [
+              "foreign_account",
+              "unauthenticated_account",
+              "unverified_member_identity",
+              "sender_direction_mismatch",
+              "unverified_participants",
+              "unverified_snapshot_owner",
+              "actor_mismatch",
+              "activity_resource_mismatch",
+              "foreign_recipient",
+              "unverified_echo_sender",
+              "history_thread_mismatch",
+              "payload_limit",
+              "invalid_cycle",
+              "invalid_identity",
+            ].includes(q.reason) ||
+            !q.source_record_id ||
+            q.source_record_id.length > 8192 ||
+            Array.from(q.source_record_id).some(
+              (c) =>
+                /\s/u.test(c) ||
+                c.charCodeAt(0) < 32 ||
+                c.charCodeAt(0) === 127,
+            ) ||
+            q.source_record_id.startsWith("invalid-record") ||
+            !mapped.request.items.some(
+              (raw) =>
+                isRecord(raw) &&
+                ((mapped.request.format === "unipile_messages" &&
+                  (raw.id === q.source_record_id ||
+                    raw.message_id === q.source_record_id) &&
+                  raw.account_id === account.account_id) ||
+                  (mapped.request.format === "linkedin_changes" &&
+                    raw.resourceId === q.source_record_id &&
+                    raw.owner === account.owner_identity)),
+            ),
+        );
+        if (unsafeQuarantine) {
           if (removed.length) {
             await this.store.commitHistoryBackfill({
               owner_id: this.principal,
@@ -619,6 +664,7 @@ export class SocialReadSessions {
           operation_hash: normalized.page_hash,
           complete: normalized.batch.complete,
           records: historicalRecords,
+          quarantines,
           removed_record_ids: removed,
           withdrawals_observed_at: now.toISOString(),
           ...(normalized.batch.contacts
@@ -636,17 +682,28 @@ export class SocialReadSessions {
               }
             : {}),
         });
+        const retainedCheckpoint = (
+          await this.store.historyBackfills(this.principal)
+        ).find(
+          (c) =>
+            c.source === account.source && c.account_id === account.account_id,
+        );
+        const evidencePartial =
+          (retainedCheckpoint?.quarantined_count ?? 0) > 0;
         return {
           kind: "page",
           gap_free: false,
           source: account.source,
           accepted: accepted.length,
-          quarantined: 0,
+          quarantined: quarantines.length,
           removed: removed.length,
           complete: normalized.batch.complete,
           pagination_complete: normalized.batch.complete,
-          evidence_partial: false,
-          status: normalized.batch.complete ? "current" : "partial",
+          evidence_partial: evidencePartial,
+          status:
+            normalized.batch.complete && !evidencePartial
+              ? "current"
+              : "partial",
           page_hash: normalized.page_hash,
           ...(mapped.metadata ? { metadata: mapped.metadata } : {}),
         };

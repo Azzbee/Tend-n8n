@@ -623,6 +623,32 @@ describe("LinkedIn official portability", () => {
     expect(a.record.direction).toBe("received");
     expect(a.record.attribution).toBe("direct");
   });
+  it("retains the provider resource ID when a LinkedIn change has unreadable content", () => {
+    const change = liChange();
+    expect(
+      normalizeLinkedInChange(
+        {
+          ...change,
+          id: "activity-envelope",
+          processedActivity: {
+            ...change.processedActivity,
+            content: { content: { string: null } },
+          },
+        },
+        liCtx,
+      ),
+    ).toMatchObject({
+      kind: "quarantined",
+      source_record_id: change.resourceId,
+      reason: "invalid_string",
+    });
+    expect(
+      normalizeLinkedInChange(
+        { ...change, owner: "urn:li:person:foreign" },
+        liCtx,
+      ),
+    ).toMatchObject({ kind: "quarantined", reason: "foreign_account" });
+  });
   it("fails closed on foreign owners, processing failure, actor mismatch and unknown methods", () => {
     for (const patch of [
       { owner: "foreign" },

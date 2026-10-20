@@ -151,7 +151,11 @@ function safe(
   if (input && typeof input === "object" && !Array.isArray(input)) {
     const raw = input as Record<string, unknown>;
     try {
-      recordId = id(raw.id ?? raw.message_id);
+      recordId = id(
+        source === "linkedin" && raw.resourceId !== undefined
+          ? raw.resourceId
+          : (raw.id ?? raw.message_id),
+      );
     } catch {
       // Malformed identifiers use a bounded payload digest below.
     }

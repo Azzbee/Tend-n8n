@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import type { TendStore, Contact, Identity } from "./engine.ts";
 import { isRecord } from "./engine.ts";
-import type { LiveStore } from "./live-store.ts";
+import type { LiveStore, HistoryQuarantine } from "./live-store.ts";
 import {
   allAvailableHistory,
   HISTORY_START,
@@ -194,6 +194,10 @@ export function createHistoryAPI(options: Options) {
         replayed: true,
         lane: "history",
         complete: checkpoint.status === "complete",
+        content_complete:
+          checkpoint.status === "complete" &&
+          (checkpoint.quarantined_count ?? 0) === 0,
+        evidence_partial: (checkpoint.quarantined_count ?? 0) > 0,
         outbound_sent: false,
       };
     if (
@@ -217,8 +221,10 @@ export function createHistoryAPI(options: Options) {
     const records: LiveRecord[] = [],
       contacts: Contact[] = [],
       identities: Identity[] = [],
-      removed: string[] = [];
-    let quarantined = 0;
+      removed: string[] = [],
+      quarantines: HistoryQuarantine[] = [];
+    let quarantined = 0,
+      unsafe = false;
     for (const raw of value.records) {
       const context = {
         policy,
@@ -226,10 +232,40 @@ export function createHistoryAPI(options: Options) {
         account_email: policy.account_email,
         ...(source === "calendar" ? { calendar_id: account } : {}),
       };
-      const result =
-        source === "gmail"
+      const stableId =
+        isRecord(raw) &&
+        typeof raw.id === "string" &&
+        raw.id.length > 0 &&
+        raw.id.length <= 1024 &&
+        !Array.from(raw.id).some(
+          (c) =>
+            /\s/u.test(c) || c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127,
+        )
+          ? raw.id
+          : null;
+      const oversized =
+        stableId !== null &&
+        isRecord(raw) &&
+        raw.oversized === true &&
+        Object.keys(raw).every((key) => ["id", "oversized"].includes(key));
+      const foreignAccount =
+        isRecord(raw) &&
+        ((raw.account_id !== undefined && raw.account_id !== account) ||
+          (raw.account_email !== undefined &&
+            raw.account_email !== policy.account_email));
+      const result = oversized
+        ? {
+            kind: "quarantined" as const,
+            source_record_id: stableId!,
+            reason: "history_record_oversized",
+          }
+        : source === "gmail"
           ? normalizeGmailMessage(raw, context)
           : normalizeCalendarEvent(raw, context);
+      if (foreignAccount) {
+        unsafe = true;
+        continue;
+      }
       if (result.kind === "accepted") {
         records.push({
           ...result.record,
@@ -239,11 +275,27 @@ export function createHistoryAPI(options: Options) {
         });
         contacts.push(...result.contacts);
         identities.push(...result.identities);
-      } else if (result.kind === "quarantined") quarantined++;
-      else if (isRecord(raw) && raw.status === "cancelled")
+      } else if (result.kind === "quarantined") {
+        quarantined++;
+        if (
+          !stableId ||
+          foreignAccount ||
+          ["unverified_owner_alias", "unverified_owner_authorship"].includes(
+            result.reason,
+          )
+        )
+          unsafe = true;
+        else
+          quarantines.push({
+            source_record_id: stableId,
+            reason: result.reason,
+            observed_at: clock().toISOString(),
+            original_reference: `tend-source:${source}/${encodeURIComponent(account)}/${encodeURIComponent(stableId)}`,
+          });
+      } else if (isRecord(raw) && raw.status === "cancelled")
         removed.push(result.source_record_id);
     }
-    if (blocked || quarantined) {
+    if (blocked || unsafe) {
       // Confirmed withdrawals are cleanup; resource pauses must never preserve known invalid evidence.
       if (removed.length)
         await store.commitHistoryBackfill({
@@ -263,14 +315,14 @@ export function createHistoryAPI(options: Options) {
           removed_record_ids: removed,
           withdrawals_observed_at: clock().toISOString(),
         });
-      const reason = quarantined ? "history_page_requires_review" : blocked!;
+      const reason = unsafe ? "history_page_requires_review" : blocked!;
       const paused = await store.pauseHistoryBackfill(
         owner,
         source,
         account,
         reason,
         null,
-        !quarantined,
+        !unsafe,
       );
       return {
         accepted: 0,
@@ -295,16 +347,23 @@ export function createHistoryAPI(options: Options) {
         ? { advance: value.advance as boolean }
         : {}),
       records,
+      quarantines,
       contacts,
       identities,
       removed_record_ids: removed,
       withdrawals_observed_at: clock().toISOString(),
     });
+    const retained = (await store.historyBackfills(owner)).find(
+      (c) => c.source === source && c.account_id === account,
+    );
     return {
       accepted: records.length,
       quarantined,
       lane: "history",
       complete: value.complete,
+      content_complete:
+        value.complete && (retained?.quarantined_count ?? 0) === 0,
+      evidence_partial: (retained?.quarantined_count ?? 0) > 0,
       outbound_sent: false,
     };
   }
