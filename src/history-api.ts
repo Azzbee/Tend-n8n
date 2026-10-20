@@ -204,10 +204,6 @@ export function createHistoryAPI(options: Options) {
     )
       throw new Error("Invalid or stale history page");
     const blocked = await gate();
-    if (blocked) {
-      await store.pauseHistoryBackfill(owner, source, account, blocked, null);
-      return { accepted: 0, paused: true, reason: blocked };
-    }
     const records: LiveRecord[] = [],
       contacts: Contact[] = [],
       identities: Identity[] = [],
@@ -237,20 +233,34 @@ export function createHistoryAPI(options: Options) {
       else if (isRecord(raw) && raw.status === "cancelled")
         removed.push(result.source_record_id);
     }
-    if (quarantined) {
-      await store.pauseHistoryBackfill(
-        owner,
-        source,
-        account,
-        "history_page_requires_review",
-        null,
-      );
+    if (blocked || quarantined) {
+      // Confirmed withdrawals are cleanup; resource pauses must never preserve known invalid evidence.
+      if (removed.length)
+        await store.commitHistoryBackfill({
+          owner_id: owner,
+          source,
+          account_id: account,
+          version: 1,
+          watermark: checkpoint.watermark,
+          expected_cursor: checkpoint.cursor,
+          cursor: checkpoint.cursor,
+          advance: false,
+          operation_hash: createHash("sha256")
+            .update(JSON.stringify({ withdrawal_only: value }))
+            .digest("hex"),
+          complete: false,
+          records: [],
+          removed_record_ids: removed,
+          withdrawals_observed_at: clock().toISOString(),
+        });
+      const reason = blocked ?? "history_page_requires_review";
+      await store.pauseHistoryBackfill(owner, source, account, reason, null);
       return {
         accepted: 0,
         quarantined,
         paused: true,
         complete: false,
-        reason: "history_page_requires_review",
+        reason,
         outbound_sent: false,
       };
     }

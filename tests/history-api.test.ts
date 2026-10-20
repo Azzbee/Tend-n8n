@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TendStore } from "../src/engine.ts";
 import { exampleLivePolicy } from "../src/live-policy.ts";
 import { createHistoryAPI } from "../src/history-api.ts";
@@ -276,6 +276,81 @@ it("counts one provider page after partial storage chunks finish", async () => {
     expect(
       (await store.historyBackfills(policy.principal_id))[0]?.page_count,
     ).toBe(1);
+  } finally {
+    store.close();
+  }
+});
+
+it("applies only confirmed Calendar withdrawals when new ingestion is resource-paused", async () => {
+  const store = await setup();
+  try {
+    await store.seed(
+      [],
+      [],
+      [
+        {
+          owner_id: policy.principal_id,
+          source: "calendar",
+          account_id: "primary",
+          status: "partial",
+          mode: "live",
+          last_success: null,
+          coverage_start: "2026-10-20T10:00:00.000Z",
+          coverage_end: "2026-10-27T10:00:00.000Z",
+          cursor: null,
+        },
+      ],
+    );
+    let enough = true;
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: enough ? 3 * 1024 ** 3 : 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("calendar");
+    const commit = vi.spyOn(store, "commitHistoryBackfill");
+    enough = false;
+    const result = await api.commit({
+      ...state,
+      profile_account_email: policy.account_email,
+      records: [{ id: "cancelled-source-event", status: "cancelled" }],
+      previous_cursor: null,
+      cursor: "next",
+      complete: false,
+    });
+    expect(result).toMatchObject({
+      accepted: 0,
+      paused: true,
+      reason: "disk_floor",
+    });
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        advance: false,
+        cursor: null,
+        records: [],
+        removed_record_ids: ["cancelled-source-event"],
+      }),
+    );
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0],
+    ).toMatchObject({ status: "paused", cursor: null, page_count: 0 });
+    enough = true;
+    await api.commit({
+      ...state,
+      profile_account_email: policy.account_email,
+      records: [{ id: "cancelled-source-event", status: "cancelled" }],
+      previous_cursor: null,
+      cursor: "next",
+      complete: false,
+    });
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0],
+    ).toMatchObject({ cursor: "next", page_count: 1 });
   } finally {
     store.close();
   }
