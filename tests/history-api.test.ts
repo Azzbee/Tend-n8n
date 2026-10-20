@@ -82,6 +82,107 @@ describe("isolated history API lane", () => {
       store.close();
     }
   });
+  it.each(["history_page_requires_review", "provider_429"])(
+    "keeps %s and its future provider deadline through resource pressure",
+    async (error) => {
+      const store = await setup();
+      let free = 3 * 1024 ** 3;
+      const resources = vi.fn(async () => ({
+        free_bytes: free,
+        database_bytes: 0,
+        index_bytes: 0,
+      }));
+      try {
+        const api = createHistoryAPI({ store, policy, clock: now, resources });
+        await api.state("gmail");
+        const held = await store.pauseHistoryBackfill(
+          policy.principal_id,
+          "gmail",
+          policy.account_email,
+          error,
+          "2026-10-21T10:00:00.000Z",
+        );
+        const checks = resources.mock.calls.length;
+        free = 1024 ** 3;
+        expect((await api.state("gmail")).request_allowed).toBe(false);
+        expect((await store.historyBackfills(policy.principal_id))[0]).toEqual(
+          held,
+        );
+        free = 3 * 1024 ** 3;
+        expect((await api.state("gmail")).request_allowed).toBe(false);
+        expect((await store.historyBackfills(policy.principal_id))[0]).toEqual(
+          held,
+        );
+        expect(resources.mock.calls).toHaveLength(checks);
+      } finally {
+        store.close();
+      }
+    },
+  );
+  it.each(["history_page_requires_review", "provider_429"])(
+    "keeps concurrent %s written while measuring resources",
+    async (error) => {
+      const store = await setup();
+      try {
+        await store.beginHistoryBackfill(
+          policy.principal_id,
+          "gmail",
+          policy.account_email,
+          now().toISOString(),
+        );
+        let held:
+          Awaited<ReturnType<typeof store.pauseHistoryBackfill>> | undefined;
+        const api = createHistoryAPI({
+          store,
+          policy,
+          clock: now,
+          resources: async () => {
+            held = await store.pauseHistoryBackfill(
+              policy.principal_id,
+              "gmail",
+              policy.account_email,
+              error,
+              "2026-10-21T10:00:00.000Z",
+            );
+            return { free_bytes: 1024 ** 3, database_bytes: 0, index_bytes: 0 };
+          },
+        });
+        expect((await api.state("gmail")).request_allowed).toBe(false);
+        expect((await store.historyBackfills(policy.principal_id))[0]).toEqual(
+          held,
+        );
+      } finally {
+        store.close();
+      }
+    },
+  );
+  it("resumes a resource-only pause once disk recovers", async () => {
+    const store = await setup();
+    let free = 1024 ** 3;
+    try {
+      const api = createHistoryAPI({
+        store,
+        policy,
+        clock: now,
+        resources: async () => ({
+          free_bytes: free,
+          database_bytes: 0,
+          index_bytes: 0,
+        }),
+      });
+      expect(await api.state("gmail")).toMatchObject({
+        request_allowed: false,
+        reason: "disk_floor",
+      });
+      free = 3 * 1024 ** 3;
+      expect(await api.state("gmail")).toMatchObject({
+        request_allowed: true,
+        reason: null,
+      });
+    } finally {
+      store.close();
+    }
+  });
   it("requires the explicit approved versioned history mode", async () => {
     const store = await setup();
     try {

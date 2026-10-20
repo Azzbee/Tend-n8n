@@ -147,6 +147,7 @@ export class SocialReadSessions {
         account,
         code,
         null,
+        true,
       );
       throw new Error(code);
     }
@@ -545,31 +546,21 @@ export class SocialReadSessions {
               paused.last_error === null
             )
               throw error;
-            try {
-              await this.store.commitHistoryBackfill({
-                owner_id: this.principal,
-                source: account.source,
-                account_id: account.account_id,
-                version: 1,
-                watermark: pending.plan.coverage_end,
-                expected_cursor: pending.plan.expected_cursor,
-                cursor: pending.plan.expected_cursor,
-                advance: false,
-                operation_hash: normalized.page_hash,
-                complete: false,
-                records: [],
-                removed_record_ids: removed,
-                withdrawals_observed_at: now.toISOString(),
-              });
-            } finally {
-              await this.store.pauseHistoryBackfill(
-                this.principal,
-                account.source,
-                account.account_id,
-                paused.last_error,
-                paused.retry_after_until,
-              );
-            }
+            await this.store.commitHistoryBackfill({
+              owner_id: this.principal,
+              source: account.source,
+              account_id: account.account_id,
+              version: 1,
+              watermark: pending.plan.coverage_end,
+              expected_cursor: pending.plan.expected_cursor,
+              cursor: pending.plan.expected_cursor,
+              advance: false,
+              operation_hash: normalized.page_hash,
+              complete: false,
+              records: [],
+              removed_record_ids: removed,
+              withdrawals_observed_at: now.toISOString(),
+            });
           }
           throw error;
         }

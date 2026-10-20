@@ -738,6 +738,60 @@ describe.each(["sqlite", "postgres"] as const)(
       ).toEqual({ available: false, reason: "fresh_identity_proof_required" });
       expect((await store.counts(owner)).interactions).toBe(0);
     });
+    it.each(["history_page_requires_review", "provider_429"])(
+      "preserves concurrent %s during a social history resource check",
+      async (error) => {
+        let blocked = true;
+        const retry = "2026-10-21T10:00:00.000Z";
+        sessions = new SocialReadSessions({
+          policy: { ...policy, history: { version: 1, mode: "all_available" } },
+          store,
+          principal_id: owner,
+          clock: () => now,
+          historyResourceGate: async () => {
+            if (!blocked) return null;
+            await store.pauseHistoryBackfill(
+              owner,
+              personal.source,
+              personal.account_id,
+              error,
+              retry,
+            );
+            return "disk_floor";
+          },
+        });
+        const proof_id = await identity(personal);
+        expect(
+          await sessions.plan({
+            ...personal,
+            phase: "snapshot",
+            lane: "history",
+            proof_id,
+          }),
+        ).toEqual({ available: false, reason: "disk_floor" });
+        const checkpoint = (await store.historyBackfills(owner))[0];
+        expect(checkpoint).toMatchObject({
+          status: "paused",
+          last_error: error,
+          retry_after_until: retry,
+          cursor: null,
+          page_count: 0,
+        });
+        blocked = false;
+        expect(
+          await sessions.plan({
+            ...personal,
+            phase: "snapshot",
+            lane: "history",
+            proof_id,
+          }),
+        ).toEqual({
+          available: false,
+          reason: error === "provider_429" ? "provider_retry_not_due" : error,
+        });
+        expect((await store.historyBackfills(owner))[0]).toEqual(checkpoint);
+      },
+    );
     it("requires fresh exact-account identity proof before planning approved history", async () => {
       sessions = new SocialReadSessions({
         policy: { ...policy, history: { version: 1, mode: "all_available" } },

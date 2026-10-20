@@ -788,7 +788,15 @@ export function advanceHistoryCheckpoint(
   if (current.last_operation_hash === hash) return null;
   if (current.status === "complete" || current.cursor !== batch.expected_cursor)
     throw new Error("stale history cursor or completed backfill");
+  const withdrawalOnly =
+    !advance &&
+    batch.records.length === 0 &&
+    (batch.contacts?.length ?? 0) === 0 &&
+    (batch.identities?.length ?? 0) === 0 &&
+    (batch.removed_record_ids?.length ?? 0) > 0 &&
+    batch.withdrawals_observed_at !== undefined;
   if (
+    !withdrawalOnly &&
     current.retry_after_until &&
     Date.parse(current.retry_after_until) > now.getTime()
   )
@@ -825,9 +833,14 @@ export function advanceHistoryCheckpoint(
     page_count: current.page_count + (advance ? 1 : 0),
     oldest_at: oldest[0] ?? null,
     newest_at: oldest.at(-1) ?? null,
-    status: batch.complete ? "complete" : "running",
-    retry_after_until: null,
-    last_error: null,
+    status:
+      withdrawalOnly && current.status === "paused"
+        ? "paused"
+        : batch.complete
+          ? "complete"
+          : "running",
+    retry_after_until: withdrawalOnly ? current.retry_after_until : null,
+    last_error: withdrawalOnly ? current.last_error : null,
     last_operation_hash: hash,
     last_request_hash: batch.operation_hash,
     updated_at: now.toISOString(),
@@ -1923,31 +1936,58 @@ export class TendStore {
     account: string,
     error: string,
     retryAfter: string | null = null,
+    resourceOnly = false,
   ): HistoryCheckpoint {
     this.assertOwner(owner);
     if (
       !/^[a-z0-9_:-]{1,120}$/.test(error) ||
-      (retryAfter !== null && !exactTimestamp(retryAfter))
+      (retryAfter !== null && !exactTimestamp(retryAfter)) ||
+      (resourceOnly &&
+        (![
+          "disk_floor",
+          "index_budget",
+          "history_resource_gate_required",
+          "history_resource_measurement_unavailable",
+        ].includes(error) ||
+          retryAfter !== null))
     )
       throw new Error("invalid history pause");
-    const current = this.historyBackfills(owner).find(
-      (s) => s.source === source && s.account_id === account,
-    );
-    if (!current || current.status === "complete")
-      throw new Error("history checkpoint unavailable");
-    const row: HistoryCheckpoint = {
-      ...current,
-      status: "paused",
-      retry_after_until: retryAfter,
-      last_error: error,
-      updated_at: this.clock().toISOString(),
-    };
-    this.db
-      .prepare(
-        "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
-      )
-      .run(JSON.stringify(row), owner, source, account);
-    return row;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.historyBackfills(owner).find(
+        (s) => s.source === source && s.account_id === account,
+      );
+      if (!current || current.status === "complete")
+        throw new Error("history checkpoint unavailable");
+      if (
+        resourceOnly &&
+        (current.last_error?.endsWith("requires_review") ||
+          (current.retry_after_until !== null &&
+            Date.parse(current.retry_after_until) > this.clock().getTime()))
+      ) {
+        this.db.exec("COMMIT");
+        return current;
+      }
+      const row: HistoryCheckpoint = {
+        ...current,
+        status: "paused",
+        retry_after_until: resourceOnly
+          ? current.retry_after_until
+          : retryAfter,
+        last_error: error,
+        updated_at: this.clock().toISOString(),
+      };
+      this.db
+        .prepare(
+          "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+        )
+        .run(JSON.stringify(row), owner, source, account);
+      this.db.exec("COMMIT");
+      return row;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   dailyBriefingGet(owner: string, day: string): DailyBriefingRow | null {
     this.assertOwner(owner);

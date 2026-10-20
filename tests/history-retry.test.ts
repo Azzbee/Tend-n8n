@@ -103,6 +103,51 @@ describe.each(["sqlite", "postgres"] as const)(
           staleError,
           quota.retry_after_until,
         );
+        for (const hold of [staleError, "provider_429"]) {
+          const protectedPause = await store.pauseHistoryBackfill(
+            owner,
+            "gmail",
+            account,
+            hold,
+            quota.retry_after_until,
+          );
+          expect(
+            await store.pauseHistoryBackfill(
+              owner,
+              "gmail",
+              account,
+              "disk_floor",
+              null,
+              true,
+            ),
+          ).toEqual(protectedPause);
+          expect((await store.historyBackfills(owner))[0]).toEqual(
+            protectedPause,
+          );
+          await store.commitHistoryBackfill({
+            owner_id: owner,
+            source: "gmail",
+            account_id: account,
+            version: 1,
+            watermark: now,
+            expected_cursor: null,
+            cursor: null,
+            advance: false,
+            complete: false,
+            operation_hash: (hold === staleError ? "a" : "b").repeat(64),
+            records: [],
+            removed_record_ids: ["known-deleted"],
+            withdrawals_observed_at: now,
+          });
+          expect((await store.historyBackfills(owner))[0]).toMatchObject({
+            status: "paused",
+            last_error: hold,
+            retry_after_until: protectedPause.retry_after_until,
+            cursor: null,
+            page_count: 0,
+            next_poll_lane: protectedPause.next_poll_lane,
+          });
+        }
         await store.revokeSource(owner, "gmail");
         expect(
           await store.retryHistoryBackfill(owner, "gmail", account, staleError),

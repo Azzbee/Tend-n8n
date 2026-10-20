@@ -989,11 +989,20 @@ export class PostgresStore implements LiveStore {
     account: string,
     error: string,
     retryAfter: string | null = null,
+    resourceOnly = false,
   ): Promise<HistoryCheckpoint> {
     this.owner(owner);
     if (
       !/^[a-z0-9_:-]{1,120}$/.test(error) ||
-      (retryAfter !== null && !exactTimestamp(retryAfter))
+      (retryAfter !== null && !exactTimestamp(retryAfter)) ||
+      (resourceOnly &&
+        (![
+          "disk_floor",
+          "index_budget",
+          "history_resource_gate_required",
+          "history_resource_measurement_unavailable",
+        ].includes(error) ||
+          retryAfter !== null))
     )
       throw new Error("invalid history pause");
     return this.run(async (s) => {
@@ -1002,10 +1011,19 @@ export class PostgresStore implements LiveStore {
       );
       if (!current || current.status === "complete")
         throw new Error("history checkpoint unavailable");
+      if (
+        resourceOnly &&
+        (current.last_error?.endsWith("requires_review") ||
+          (current.retry_after_until !== null &&
+            Date.parse(current.retry_after_until) > s.clock().getTime()))
+      )
+        return current;
       const row: HistoryCheckpoint = {
         ...current,
         status: "paused",
-        retry_after_until: retryAfter,
+        retry_after_until: resourceOnly
+          ? current.retry_after_until
+          : retryAfter,
         last_error: error,
         updated_at: s.clock().toISOString(),
       };

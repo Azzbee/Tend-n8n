@@ -90,24 +90,32 @@ export function createHistoryAPI(options: Options) {
         request_allowed: false,
         reason: "source_revoked",
       };
-    const checkpoint = await store.beginHistoryBackfill(
+    let checkpoint = await store.beginHistoryBackfill(
       owner,
       source,
       selected.account_id,
       clock().toISOString(),
     );
-    const blocked = await gate();
-    if (blocked)
-      await store.pauseHistoryBackfill(
+    const waitingBeforeGate =
+      checkpoint.retry_after_until !== null &&
+      Date.parse(checkpoint.retry_after_until) > clock().getTime();
+    const heldBeforeGate = checkpoint.last_error?.endsWith("requires_review");
+    const resourceBlock =
+      waitingBeforeGate || heldBeforeGate ? null : await gate();
+    if (resourceBlock)
+      checkpoint = await store.pauseHistoryBackfill(
         owner,
         source,
         selected.account_id,
-        blocked,
+        resourceBlock,
         null,
+        true,
       );
     const waiting =
       checkpoint.retry_after_until !== null &&
       Date.parse(checkpoint.retry_after_until) > clock().getTime();
+    const held = checkpoint.last_error?.endsWith("requires_review");
+    const blocked = waiting || held ? null : resourceBlock;
     const end = checkpoint.watermark;
     return {
       lane: "history",
@@ -255,14 +263,21 @@ export function createHistoryAPI(options: Options) {
           removed_record_ids: removed,
           withdrawals_observed_at: clock().toISOString(),
         });
-      const reason = blocked ?? "history_page_requires_review";
-      await store.pauseHistoryBackfill(owner, source, account, reason, null);
+      const reason = quarantined ? "history_page_requires_review" : blocked!;
+      const paused = await store.pauseHistoryBackfill(
+        owner,
+        source,
+        account,
+        reason,
+        null,
+        !quarantined,
+      );
       return {
         accepted: 0,
         quarantined,
         paused: true,
         complete: false,
-        reason,
+        reason: paused.last_error,
         outbound_sent: false,
       };
     }
