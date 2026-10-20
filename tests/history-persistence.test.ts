@@ -619,6 +619,115 @@ describe("separate history and daily ledgers", () => {
     );
     it(
       kind +
+        " resumes bounded chunks without advancing an incomplete provider page",
+      async () => {
+        const owner = "chunks-" + kind;
+        const principal2 = { ...principal, owner_id: owner };
+        const isolated =
+          kind === "sqlite"
+            ? new TendStore(":memory:", {
+                mode: "live",
+                principal: principal2,
+                clock: () => new Date(now),
+              })
+            : await PostgresStore.open({
+                connectionString: runtime.connectionString,
+                principal: principal2,
+                clock: () => new Date(now),
+              });
+        try {
+          await isolated.seed(
+            [
+              { owner_id: owner, contact_id: "OWNER", name: "Owner" },
+              { owner_id: owner, contact_id: "peer", name: "Peer" },
+            ],
+            [
+              {
+                owner_id: owner,
+                identity: state.account_id,
+                contact_id: "OWNER",
+              },
+              {
+                owner_id: owner,
+                identity: "peer@example.invalid",
+                contact_id: "peer",
+              },
+            ],
+            [{ ...state, owner_id: owner }],
+          );
+          await isolated.beginHistoryBackfill(
+            owner,
+            "gmail",
+            state.account_id,
+            now,
+          );
+          const first = {
+            ...page(),
+            owner_id: owner,
+            advance: false,
+            expected_cursor: null,
+            cursor: null,
+            records: [{ ...page().records[0]!, owner_id: owner }],
+            contacts: [],
+            identities: [],
+          };
+          expect(await isolated.commitHistoryBackfill(first)).toHaveLength(1);
+          expect((await isolated.historyBackfills(owner))[0]).toMatchObject({
+            page_count: 0,
+            record_count: 1,
+            cursor: null,
+            status: "running",
+          });
+          await expect(
+            Promise.resolve().then(() =>
+              isolated.commitHistoryBackfill({
+                ...first,
+                records: [
+                  {
+                    ...first.records[0]!,
+                    source_record_id: "bad",
+                    actor_identity: "unknown@example.invalid",
+                  },
+                ],
+                operation_hash: "c".repeat(64),
+              }),
+            ),
+          ).rejects.toThrow(/identity/);
+          expect((await isolated.historyBackfills(owner))[0]).toMatchObject({
+            page_count: 0,
+            record_count: 1,
+            cursor: null,
+          });
+          expect(await isolated.commitHistoryBackfill(first)).toEqual([]);
+          await isolated.commitHistoryBackfill({
+            ...first,
+            records: [{ ...first.records[0]!, source_record_id: "second" }],
+            operation_hash: "d".repeat(64),
+          });
+          await isolated.commitHistoryBackfill({
+            ...first,
+            advance: true,
+            records: [],
+            cursor: null,
+            complete: true,
+            operation_hash: "e".repeat(64),
+          });
+          expect((await isolated.historyBackfills(owner))[0]).toMatchObject({
+            page_count: 1,
+            record_count: 2,
+            cursor: null,
+            status: "complete",
+          });
+          expect((await isolated.sourceStatus(owner))[0]?.cursor).toBe(
+            "incremental-kept",
+          );
+        } finally {
+          await isolated.close();
+        }
+      },
+    );
+    it(
+      kind +
         " backs the real daily service with one durable claim and late acknowledgement",
       async () => {
         const service = new DailyBriefingService({

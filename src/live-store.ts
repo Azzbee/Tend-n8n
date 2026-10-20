@@ -20,6 +20,7 @@ export interface HistoryCheckpoint {
   updated_at: string;
 }
 export interface HistoryPageCommit {
+  advance?: boolean;
   owner_id: string;
   source: Source;
   account_id: string;

@@ -752,6 +752,7 @@ export function advanceHistoryCheckpoint(
   now: Date,
 ): HistoryCheckpoint | null {
   const payload = JSON.stringify(batch);
+  const advance = batch.advance !== false;
   if (
     Buffer.byteLength(payload) > 1048576 ||
     !/^[a-f0-9]{64}$/.test(batch.operation_hash) ||
@@ -768,7 +769,10 @@ export function advanceHistoryCheckpoint(
         c === null ||
         (typeof c === "string" && c.length > 0 && c.length <= 8192),
     ) ||
-    batch.complete !== (batch.cursor === null) ||
+    (batch.advance !== undefined && typeof batch.advance !== "boolean") ||
+    (advance
+      ? batch.complete !== (batch.cursor === null)
+      : batch.complete || batch.cursor !== batch.expected_cursor) ||
     (batch.contacts?.length ?? 0) > 1000 ||
     (batch.identities?.length ?? 0) > 1000 ||
     (batch.removed_record_ids?.length ?? 0) > 1000
@@ -783,7 +787,7 @@ export function advanceHistoryCheckpoint(
     Date.parse(current.retry_after_until) > now.getTime()
   )
     throw new Error("history provider wait required");
-  if (!batch.complete && batch.cursor === batch.expected_cursor)
+  if (advance && !batch.complete && batch.cursor === batch.expected_cursor)
     throw new Error("history cursor did not advance");
   if (
     batch.records.some(
@@ -812,7 +816,7 @@ export function advanceHistoryCheckpoint(
   return {
     ...current,
     cursor: batch.cursor,
-    page_count: current.page_count + 1,
+    page_count: current.page_count + (advance ? 1 : 0),
     oldest_at: oldest[0] ?? null,
     newest_at: oldest.at(-1) ?? null,
     status: batch.complete ? "complete" : "running",
