@@ -289,7 +289,8 @@ export function createLiveServer(options: LiveServerOptions): Server {
                       ? {
                           original_url: `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(checkpoint.account_id)}#all/${encodeURIComponent(item.source_record_id)}`,
                         }
-                      : checkpoint.source === "calendar"
+                      : checkpoint.source === "calendar" &&
+                          checkpoint.account_id !== "primary"
                         ? {
                             original_url: `https://calendar.google.com/calendar/u/0/r?authuser=${encodeURIComponent(policy.account_email)}&cid=${encodeURIComponent(checkpoint.account_id)}&eid=${encodeURIComponent(Buffer.from(`${item.source_record_id} ${checkpoint.account_id}`).toString("base64url"))}`,
                           }

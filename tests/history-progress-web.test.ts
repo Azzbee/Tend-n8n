@@ -6,7 +6,7 @@ import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import type { HistoryCheckpoint } from "../src/live-store.ts";
 
 describe("private historical review metadata", () => {
-  it.each(["revoked", "race"] as const)(
+  it.each(["revoked", "race", "primary"] as const)(
     "keeps healthy progress scoped when another source is unavailable (%s)",
     async (mode) => {
       const policy = exampleLivePolicy;
@@ -68,8 +68,19 @@ describe("private historical review metadata", () => {
       const reviews = vi
         .spyOn(store, "historyQuarantines")
         .mockImplementation((...args) => {
-          if (args[2] === "primary")
-            throw new Error("Source changed during review lookup");
+          if (args[2] === "primary") {
+            if (mode !== "primary")
+              throw new Error("Source changed during review lookup");
+            return {
+              ...report,
+              items: report.items.map((entry) => ({
+                ...entry,
+                original_reference: entry.original_reference
+                  ? `tend-source:calendar/primary/${encodeURIComponent(entry.source_record_id)}`
+                  : null,
+              })),
+            };
+          }
           return report;
         });
       const server = createLiveServer({
@@ -139,10 +150,19 @@ describe("private historical review metadata", () => {
           }[];
         };
         expect(data.history).toHaveLength(2);
-        expect(data.history[1]!.last_error).toBe(
-          mode === "revoked" ? "source_revoked" : "review_metadata_unavailable",
-        );
-        expect(data.history[1]!.review).toBeNull();
+        if (mode === "primary") {
+          expect(data.history[1]!.last_error).toBeNull();
+          expect(
+            data.history[1]!.review.items[0]!.original_url,
+          ).toBeUndefined();
+        } else {
+          expect(data.history[1]!.last_error).toBe(
+            mode === "revoked"
+              ? "source_revoked"
+              : "review_metadata_unavailable",
+          );
+          expect(data.history[1]!.review).toBeNull();
+        }
         expect(data.history[0]!.review.total).toBe(1);
         expect(data.history[0]!.review.items[0]!.original_url).toBe(
           `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(policy.account_email)}#all/message%23fragment`,
