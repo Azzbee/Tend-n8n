@@ -472,6 +472,130 @@ describe("separate history and daily ledgers", () => {
     );
     it(
       kind +
+        " never lets a frozen history page replace or delete a newer incremental version",
+      async () => {
+        const owner = "newer-" + kind;
+        const principal2 = { ...principal, owner_id: owner };
+        const clock = () => new Date("2026-10-20T10:10:00.000Z");
+        const isolated =
+          kind === "sqlite"
+            ? new TendStore(":memory:", {
+                mode: "live",
+                principal: principal2,
+                clock,
+              })
+            : await PostgresStore.open({
+                connectionString: runtime.connectionString,
+                principal: principal2,
+                clock,
+              });
+        try {
+          const raw = { ...page().records[0]!, owner_id: owner };
+          await isolated.seed(
+            [
+              { owner_id: owner, contact_id: "OWNER", name: "Owner" },
+              { owner_id: owner, contact_id: "peer", name: "Peer" },
+            ],
+            [
+              {
+                owner_id: owner,
+                identity: state.account_id,
+                contact_id: "OWNER",
+              },
+              {
+                owner_id: owner,
+                identity: "peer@example.invalid",
+                contact_id: "peer",
+              },
+            ],
+            [{ ...state, owner_id: owner }],
+          );
+          await isolated.ingest({
+            ...raw,
+            body_text: "Fresh incremental evidence",
+            authored_text: "Fresh incremental evidence",
+            observed_at: "2026-10-20T10:05:00.000Z",
+          });
+          await isolated.beginHistoryBackfill(
+            owner,
+            "gmail",
+            state.account_id,
+            now,
+          );
+          const input = {
+            ...page(),
+            owner_id: owner,
+            records: [raw],
+            contacts: [],
+            identities: [],
+          };
+          await isolated.commitHistoryBackfill(input);
+          expect((await isolated.interactions(owner))[0]?.body_text).toBe(
+            "Fresh incremental evidence",
+          );
+          await isolated.commitHistoryBackfill({
+            ...input,
+            records: [],
+            expected_cursor: "history-next",
+            cursor: null,
+            complete: true,
+            operation_hash: "b".repeat(64),
+            removed_record_ids: [raw.source_record_id],
+          });
+          expect((await isolated.interactions(owner))[0]?.body_text).toBe(
+            "Fresh incremental evidence",
+          );
+        } finally {
+          await isolated.close();
+        }
+      },
+    );
+    it(
+      kind + " keeps social history bounded when only Google history expands",
+      async () => {
+        await store().seed(
+          [],
+          [],
+          [
+            {
+              ...state,
+              source: "whatsapp_personal",
+              account_id: "personal-account",
+            },
+          ],
+        );
+        await store().ingest({
+          ...page().records[0]!,
+          source: "whatsapp_personal",
+          account_id: "personal-account",
+          source_record_id: "old-wa",
+        });
+        const query = {
+          contact_ids: ["peer"],
+          accounts: [
+            { source: "gmail", account_id: state.account_id },
+            { source: "whatsapp_personal", account_id: "personal-account" },
+          ],
+          now,
+          message_start: "0001-01-01T00:00:00.000Z",
+          calendar_end: "2026-10-27T10:00:00.000Z",
+          limit: 50,
+        };
+        expect(
+          (await store().privateHistory(principal.owner_id, query)).total,
+        ).toBe(1);
+        expect(
+          (
+            await store().privateHistory(principal.owner_id, {
+              ...query,
+              social_start: "2026-09-20T10:00:00.000Z",
+            })
+          ).total,
+        ).toBe(0);
+      },
+    );
+    it(
+      kind +
         " backs the real daily service with one durable claim and late acknowledgement",
       async () => {
         const service = new DailyBriefingService({

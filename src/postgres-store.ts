@@ -344,7 +344,10 @@ export class PostgresStore implements LiveStore {
     this.owner(raw.owner_id);
     return this.run((s) => s.write(raw));
   }
-  private async write(raw: RawRecord): Promise<NormalizedRecord> {
+  private async write(
+    raw: RawRecord,
+    preserveNewer = false,
+  ): Promise<NormalizedRecord> {
     const normalized = normalizeLiveRecord(
       raw,
       await this.identities(raw.owner_id),
@@ -361,11 +364,17 @@ export class PostgresStore implements LiveStore {
     )
       throw new Error("unregistered account/mode or source revoked");
     const prior = (
-      await this.q<{ content_hash: string }>(
-        "SELECT content_hash FROM live_records WHERE owner_id=$1 AND record_key=$2",
+      await this.q(
+        "SELECT * FROM live_records WHERE owner_id=$1 AND record_key=$2",
         [raw.owner_id, normalized.record_key],
       )
     )[0];
+    if (
+      preserveNewer &&
+      prior &&
+      Date.parse(String(prior.observed_at)) > Date.parse(raw.observed_at)
+    )
+      return this.record(prior);
     if (prior && prior.content_hash !== normalized.content_hash)
       await this.invalidate(raw.owner_id, normalized.record_key);
     const values = recordColumns.map((k) =>
@@ -843,7 +852,7 @@ export class PostgresStore implements LiveStore {
       await s.seed(batch.contacts ?? [], batch.identities ?? [], []);
       const records: NormalizedRecord[] = [];
       for (const raw of batch.records) {
-        const record = await s.write(raw);
+        const record = await s.write(raw, true);
         records.push(record);
         await s.q(
           "INSERT INTO live_history_seen VALUES($1,$2,$3,1,$4) ON CONFLICT DO NOTHING",
@@ -856,6 +865,17 @@ export class PostgresStore implements LiveStore {
         );
       }
       for (const id of batch.removed_record_ids ?? []) {
+        const prior = (
+          await s.q<{ observed_at: string }>(
+            "SELECT observed_at FROM live_records WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND source_record_id=$4",
+            [batch.owner_id, batch.source, batch.account_id, id],
+          )
+        )[0];
+        if (
+          prior &&
+          Date.parse(prior.observed_at) > Date.parse(current.watermark)
+        )
+          continue;
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
         await s.q(
           "DELETE FROM live_history_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1 AND record_id=$4",
@@ -1037,6 +1057,8 @@ export class PostgresStore implements LiveStore {
     query: PrivateHistoryQuery,
   ): Promise<PrivateHistoryPage> {
     this.owner(owner);
+    if (query.social_start !== undefined && !exactTimestamp(query.social_start))
+      throw new Error("invalid social history range");
     return this.run(async (s) => {
       if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 51)
         throw new Error("Invalid page limit");
@@ -1070,14 +1092,18 @@ export class PostgresStore implements LiveStore {
       const calendarStart = value(query.calendar_start ?? query.now);
       const now = value(query.now),
         end = value(query.calendar_end),
-        start = value(query.message_start);
+        start = value(query.message_start),
+        socialStart = value(query.social_start ?? query.message_start);
       where +=
         " AND ((r.source='calendar' AND coalesce(r.end_at,r.occurred_at)>" +
         calendarStart +
         " AND r.occurred_at<" +
         end +
-        ") OR (r.source<>'calendar' AND r.occurred_at>=" +
+        ") OR (r.source<>'calendar' AND r.occurred_at>=CASE WHEN r.source='gmail' THEN " +
         start +
+        " ELSE " +
+        socialStart +
+        " END" +
         " AND r.occurred_at<=" +
         now +
         "))";

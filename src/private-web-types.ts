@@ -69,6 +69,7 @@ export interface PrivateHistoryQuery {
   accounts: { source: string; account_id: string }[];
   now: string;
   message_start: string;
+  social_start?: string;
   calendar_start?: string;
   calendar_end: string;
   source?: string;

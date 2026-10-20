@@ -1068,7 +1068,7 @@ export class TendStore {
       throw e;
     }
   }
-  private writeRecord(raw: RawRecord): NormalizedRecord {
+  private writeRecord(raw: RawRecord, preserveNewer = false): NormalizedRecord {
     const r = this.normalizeIncoming(raw);
     const state = this.sourceStatus(raw.owner_id).find(
       (s) => s.source === raw.source && s.account_id === raw.account_id,
@@ -1098,9 +1098,14 @@ export class TendStore {
       throw new Error("calendar ingestion mode mismatch");
     const previous = this.db
       .prepare(
-        "SELECT json_extract(data,'$.content_hash') AS content_hash FROM interactions WHERE owner_id=? AND record_key=?",
+        "SELECT data,json_extract(data,'$.content_hash') AS content_hash FROM interactions WHERE owner_id=? AND record_key=?",
       )
       .get(raw.owner_id, r.record_key);
+    if (preserveNewer && previous) {
+      const canonical = JSON.parse(String(previous.data)) as NormalizedRecord;
+      if (Date.parse(canonical.observed_at) > Date.parse(raw.observed_at))
+        return canonical;
+    }
     if (previous && previous.content_hash !== r.content_hash) {
       for (const candidate of this.commitments(raw.owner_id).filter(
         (candidate) => candidate.record_key === r.record_key,
@@ -1736,7 +1741,9 @@ export class TendStore {
         return [];
       }
       this.seed(batch.contacts ?? [], batch.identities ?? [], []);
-      const records = batch.records.map((record) => this.writeRecord(record));
+      const records = batch.records.map((record) =>
+        this.writeRecord(record, true),
+      );
       for (const record of records)
         this.db
           .prepare("INSERT OR IGNORE INTO live_history_seen VALUES(?,?,?,?,?)")
@@ -1748,6 +1755,16 @@ export class TendStore {
             record.source_record_id,
           );
       for (const id of batch.removed_record_ids ?? []) {
+        const prior = this.db
+          .prepare(
+            "SELECT json_extract(data,'$.observed_at') observed_at FROM interactions WHERE owner_id=? AND source=? AND account_id=? AND source_record_id=?",
+          )
+          .get(batch.owner_id, batch.source, batch.account_id, id);
+        if (
+          prior &&
+          Date.parse(String(prior.observed_at)) > Date.parse(current.watermark)
+        )
+          continue;
         this.removeLiveRecord(
           batch.owner_id,
           batch.source,
@@ -1921,6 +1938,8 @@ export class TendStore {
     query: PrivateHistoryQuery,
   ): PrivateHistoryPage {
     this.assertOwner(owner);
+    if (query.social_start !== undefined && !exactTimestamp(query.social_start))
+      throw new Error("invalid social history range");
     if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 51)
       throw new Error("Invalid page limit");
     const values: (string | number)[] = [owner];
@@ -1951,10 +1970,11 @@ export class TendStore {
       "EXISTS (SELECT 1 FROM live_sources s WHERE s.owner_id=interactions.owner_id AND s.source=interactions.source AND s.account_id=interactions.account_id AND json_extract(s.data,'$.status')<>'revoked')",
     );
     add(
-      "((source='calendar' AND coalesce(json_extract(data,'$.end_at'),json_extract(data,'$.occurred_at'))>? AND json_extract(data,'$.occurred_at')<?) OR (source<>'calendar' AND json_extract(data,'$.occurred_at')>=? AND json_extract(data,'$.occurred_at')<=?))",
+      "((source='calendar' AND coalesce(json_extract(data,'$.end_at'),json_extract(data,'$.occurred_at'))>? AND json_extract(data,'$.occurred_at')<?) OR (source<>'calendar' AND json_extract(data,'$.occurred_at')>=CASE WHEN source='gmail' THEN ? ELSE ? END AND json_extract(data,'$.occurred_at')<=?))",
       query.calendar_start ?? query.now,
       query.calendar_end,
       query.message_start,
+      query.social_start ?? query.message_start,
       query.now,
     );
     for (const term of query.terms ?? [])
