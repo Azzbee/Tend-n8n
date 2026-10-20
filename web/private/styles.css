@@ -275,6 +275,7 @@ p {
 }
 .contact {
   width: 100%;
+  flex-shrink: 0;
   text-align: left;
   border-color: transparent;
   border-radius: 0;
@@ -302,6 +303,7 @@ p {
   color: var(--muted);
   margin-top: 5px;
   display: block;
+  overflow-wrap: anywhere;
 }
 .filters {
   display: flex;
