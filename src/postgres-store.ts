@@ -512,16 +512,57 @@ export class PostgresStore implements LiveStore {
         throw new Error("batch account mismatch");
       await s.seed(batch.contacts ?? [], batch.identities ?? [], []);
       const out: NormalizedRecord[] = [];
-      for (const r of batch.records) {
-        out.push(await s.write(r));
+      for (const raw of batch.records) {
+        const quarantined = (
+          await s.q<{ observed_at: string }>(
+            "SELECT observed_at FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              raw.source_record_id,
+            ],
+          )
+        )[0];
+        if (
+          quarantined &&
+          Date.parse(quarantined.observed_at) > Date.parse(raw.observed_at)
+        )
+          continue;
+        out.push(await s.write(raw, true));
         await s.q(
-          "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4",
-          [batch.owner_id, batch.source, batch.account_id, r.source_record_id],
+          "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at::timestamptz<=$5::timestamptz",
+          [
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            raw.source_record_id,
+            raw.observed_at,
+          ],
         );
       }
-      for (const q of batch.quarantines ?? [])
+      for (const q of batch.quarantines ?? []) {
+        const prior = (
+          await s.q<{ observed_at: string }>(
+            "SELECT observed_at FROM live_records WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND source_record_id=$4",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              q.source_record_id,
+            ],
+          )
+        )[0];
+        if (prior && Date.parse(prior.observed_at) > Date.parse(q.observed_at))
+          continue;
+        await s.remove(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          q.source_record_id,
+        );
         await s.q(
-          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at",
+          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at WHERE EXCLUDED.observed_at::timestamptz>=live_review_quarantines.observed_at::timestamptz",
           [
             batch.owner_id,
             batch.source,
@@ -531,13 +572,32 @@ export class PostgresStore implements LiveStore {
             q.observed_at,
           ],
         );
+      }
       for (const id of batch.seen_record_ids)
         await s.q(
           "INSERT INTO live_seen VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
           [batch.owner_id, batch.source, batch.account_id, id],
         );
-      for (const id of batch.removed_record_ids ?? [])
+      for (const id of batch.removed_record_ids ?? []) {
+        const review = batch.quarantines?.find(
+          (q) => q.source_record_id === id,
+        );
+        const prior = review
+          ? (
+              await s.q<{ observed_at: string }>(
+                "SELECT observed_at FROM live_records WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND source_record_id=$4",
+                [batch.owner_id, batch.source, batch.account_id, id],
+              )
+            )[0]
+          : undefined;
+        if (
+          review &&
+          prior &&
+          Date.parse(prior.observed_at) > Date.parse(review.observed_at)
+        )
+          continue;
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
+      }
       if (completion.complete && batch.reconcile) {
         const missing = await s.q<{ source_record_id: string }>(
           "SELECT source_record_id FROM live_records r WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND ((source='calendar' AND coalesce(end_at,occurred_at)::timestamptz>$4::timestamptz AND occurred_at::timestamptz<$5::timestamptz) OR (source<>'calendar' AND occurred_at::timestamptz>=$4::timestamptz AND occurred_at::timestamptz<=$5::timestamptz)) AND NOT EXISTS(SELECT 1 FROM live_seen v WHERE v.owner_id=r.owner_id AND v.source=r.source AND v.account_id=r.account_id AND v.record_id=r.source_record_id)",
@@ -746,7 +806,7 @@ export class PostgresStore implements LiveStore {
       for (const r of expired)
         await s.remove(owner, r.source, r.account_id, r.source_record_id);
       await s.q(
-        "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND observed_at<CASE WHEN source='gmail' THEN $2 ELSE $3 END",
+        "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND observed_at::timestamptz<CASE WHEN source='gmail' THEN $2::timestamptz ELSE $3::timestamptz END",
         [owner, messageStart, socialStart],
       );
       await s.prune(owner);
@@ -865,7 +925,7 @@ export class PostgresStore implements LiveStore {
         observed_at: string;
         original_reference: string | null;
       }>(
-        "SELECT record_id,reason,observed_at,original_reference FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 ORDER BY observed_at DESC,record_id LIMIT $4",
+        "SELECT record_id,reason,observed_at,original_reference FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 ORDER BY observed_at::timestamptz DESC,record_id LIMIT $4",
         [owner, source, account, limit],
       );
       return {
@@ -981,7 +1041,7 @@ export class PostgresStore implements LiveStore {
           continue;
         const record = await s.write(raw, true);
         await s.q(
-          "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at<=$5",
+          "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at::timestamptz<=$5::timestamptz",
           [
             batch.owner_id,
             batch.source,
@@ -1026,7 +1086,7 @@ export class PostgresStore implements LiveStore {
           [batch.owner_id, batch.source, batch.account_id, q.source_record_id],
         );
         await s.q(
-          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at,original_reference=EXCLUDED.original_reference WHERE EXCLUDED.observed_at>=live_review_quarantines.observed_at",
+          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at,original_reference=EXCLUDED.original_reference WHERE EXCLUDED.observed_at::timestamptz>=live_review_quarantines.observed_at::timestamptz",
           [
             batch.owner_id,
             batch.source,
@@ -1054,7 +1114,7 @@ export class PostgresStore implements LiveStore {
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
         if (!batch.quarantines?.some((q) => q.source_record_id === id))
           await s.q(
-            "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at<=$5",
+            "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at::timestamptz<=$5::timestamptz",
             [
               batch.owner_id,
               batch.source,

@@ -1292,22 +1292,62 @@ export class TendStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.seed(batch.contacts ?? [], batch.identities ?? [], []);
-      const out = batch.records.map((record) => this.writeRecord(record));
-      for (const record of out)
+      const out: NormalizedRecord[] = [];
+      for (const raw of batch.records) {
+        const quarantined = this.db
+          .prepare(
+            "SELECT observed_at FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
+          )
+          .get(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            raw.source_record_id,
+          );
+        if (
+          quarantined &&
+          Date.parse(String(quarantined.observed_at)) >
+            Date.parse(raw.observed_at)
+        )
+          continue;
+        out.push(this.writeRecord(raw, true));
         this.db
           .prepare(
-            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
+            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND julianday(observed_at)<=julianday(?)",
           )
           .run(
             batch.owner_id,
             batch.source,
             batch.account_id,
-            record.source_record_id,
+            raw.source_record_id,
+            raw.observed_at,
           );
-      for (const q of batch.quarantines ?? [])
+      }
+      for (const q of batch.quarantines ?? []) {
+        const prior = this.db
+          .prepare(
+            "SELECT json_extract(data,'$.observed_at') observed_at FROM interactions WHERE owner_id=? AND source=? AND account_id=? AND source_record_id=?",
+          )
+          .get(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+          );
+        if (
+          prior &&
+          Date.parse(String(prior.observed_at)) > Date.parse(q.observed_at)
+        )
+          continue;
+        this.removeLiveRecord(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          q.source_record_id,
+        );
         this.db
           .prepare(
-            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at",
+            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at WHERE julianday(excluded.observed_at)>=julianday(live_quarantines.observed_at)",
           )
           .run(
             batch.owner_id,
@@ -1317,18 +1357,36 @@ export class TendStore {
             q.reason,
             q.observed_at,
           );
+      }
 
       for (const id of batch.seen_record_ids)
         this.db
           .prepare("INSERT OR IGNORE INTO live_sync_seen VALUES(?,?,?,?)")
           .run(batch.owner_id, batch.source, batch.account_id, id);
-      for (const id of batch.removed_record_ids ?? [])
+      for (const id of batch.removed_record_ids ?? []) {
+        const review = batch.quarantines?.find(
+          (q) => q.source_record_id === id,
+        );
+        const prior = review
+          ? this.db
+              .prepare(
+                "SELECT json_extract(data,'$.observed_at') observed_at FROM interactions WHERE owner_id=? AND source=? AND account_id=? AND source_record_id=?",
+              )
+              .get(batch.owner_id, batch.source, batch.account_id, id)
+          : undefined;
+        if (
+          review &&
+          prior &&
+          Date.parse(String(prior.observed_at)) > Date.parse(review.observed_at)
+        )
+          continue;
         this.removeLiveRecord(
           batch.owner_id,
           batch.source,
           batch.account_id,
           id,
         );
+      }
       if (completion.complete && batch.reconcile) {
         const seen = new Set(
           this.db
@@ -1681,7 +1739,7 @@ export class TendStore {
           );
       this.db
         .prepare(
-          "DELETE FROM live_quarantines WHERE owner_id=? AND observed_at<CASE WHEN source='gmail' THEN ? ELSE ? END",
+          "DELETE FROM live_quarantines WHERE owner_id=? AND julianday(observed_at)<julianday(CASE WHEN source='gmail' THEN ? ELSE ? END)",
         )
         .run(owner, gmailStart, socialStart);
       this.pruneLiveContacts(owner);
@@ -1833,7 +1891,7 @@ export class TendStore {
       reason_counts_truncated: reasons.length > 50,
       items: this.db
         .prepare(
-          "SELECT record_id,reason,observed_at,original_reference FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? ORDER BY observed_at DESC,record_id LIMIT ?",
+          "SELECT record_id,reason,observed_at,original_reference FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? ORDER BY julianday(observed_at) DESC,record_id LIMIT ?",
         )
         .all(owner, source, account, limit)
         .map((r) => ({
@@ -1955,7 +2013,7 @@ export class TendStore {
         records.push(record);
         this.db
           .prepare(
-            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND observed_at<=?",
+            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND julianday(observed_at)<=julianday(?)",
           )
           .run(
             batch.owner_id,
@@ -1999,7 +2057,7 @@ export class TendStore {
           );
         this.db
           .prepare(
-            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at,original_reference=excluded.original_reference WHERE excluded.observed_at>=live_quarantines.observed_at",
+            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at,original_reference=excluded.original_reference WHERE julianday(excluded.observed_at)>=julianday(live_quarantines.observed_at)",
           )
           .run(
             batch.owner_id,
@@ -2042,7 +2100,7 @@ export class TendStore {
         if (!batch.quarantines?.some((q) => q.source_record_id === id))
           this.db
             .prepare(
-              "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND observed_at<=?",
+              "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND julianday(observed_at)<=julianday(?)",
             )
             .run(
               batch.owner_id,

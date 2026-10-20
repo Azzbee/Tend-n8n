@@ -122,8 +122,23 @@ describe.each(["sqlite", "postgres"] as const)(
               principal,
               clock: () => new Date(now),
             });
+      const bindings = {
+        contacts: [
+          { owner_id: owner, contact_id: "OWNER", name: "Owner" },
+          { owner_id: owner, contact_id: "peer", name: "Peer" },
+        ],
+        identities: [
+          { owner_id: owner, contact_id: "OWNER", identity: account },
+          {
+            owner_id: owner,
+            contact_id: "peer",
+            identity: "peer@example.invalid",
+          },
+        ],
+      };
       return {
         store,
+        bindings,
         owner,
         account,
         principal,
@@ -350,6 +365,208 @@ describe.each(["sqlite", "postgres"] as const)(
           last_error: "provider_429",
           retry_after_until: "2026-10-21T18:00:00.000Z",
           page_count: 0,
+        });
+      } finally {
+        await f.store.close();
+      }
+    });
+    it("keeps historical review newer than stale incremental records and review updates", async () => {
+      const f = await fixture();
+      try {
+        await f.store.commitHistoryBackfill({ ...f.page(), records: [] });
+        const incremental = (
+          previous: string | null,
+          cursor: string,
+          observed_at: string,
+          queue = false,
+        ) => ({
+          ...f.bindings,
+          owner_id: f.owner,
+          source: "gmail" as const,
+          account_id: f.account,
+          records: queue
+            ? []
+            : [
+                {
+                  ...f.record("unreadable", observed_at),
+                  occurred_at: "2026-10-20T16:00:00.000Z",
+                  coverage_start: "2026-09-20T17:00:00.000Z",
+                },
+              ],
+          expected_cursor: previous,
+          cursor,
+          complete: false,
+          reconcile: false,
+          coverage_start: "2026-09-20T17:00:00.000Z",
+          coverage_end: watermark,
+          seen_record_ids: ["unreadable"],
+          ...(queue
+            ? {
+                quarantines: [
+                  {
+                    source_record_id: "unreadable",
+                    reason: "older_incremental_review",
+                    observed_at,
+                  },
+                ],
+              }
+            : {}),
+        });
+        await f.store.commitLiveBatch(
+          incremental(null, "i1", "2026-10-20T17:30:00.000Z"),
+        );
+        expect(await f.store.interactions(f.owner)).toHaveLength(0);
+        expect(
+          (await f.store.historyQuarantines(f.owner, "gmail", f.account)).items,
+        ).toEqual([f.quarantine()]);
+        await f.store.commitLiveBatch(
+          incremental("i1", "i2", "2026-10-20T17:15:00.000Z", true),
+        );
+        expect(
+          (await f.store.historyQuarantines(f.owner, "gmail", f.account)).items,
+        ).toEqual([f.quarantine()]);
+        await f.store.commitLiveBatch(
+          incremental("i2", "i3", "2026-10-20T17:45:00.000Z"),
+        );
+        expect(await f.store.interactions(f.owner)).toHaveLength(0);
+        await f.store.commitLiveBatch(incremental("i3", "i4", now));
+        expect(await f.store.interactions(f.owner)).toHaveLength(1);
+        expect(await f.store.quarantineCount(f.owner)).toBe(0);
+      } finally {
+        await f.store.close();
+      }
+    });
+    it("compares review timestamps chronologically across offsets and keeps the verified reference", async () => {
+      const f = await fixture();
+      try {
+        const offset = "2026-10-20T19:45:00+02:00";
+        await f.store.commitHistoryBackfill({
+          ...f.page(),
+          records: [],
+          quarantines: [f.quarantine("unreadable", offset)],
+        });
+        await f.store.commitHistoryBackfill({
+          ...f.page(),
+          records: [],
+          expected_cursor: "next",
+          cursor: "next2",
+          operation_hash: "b".repeat(64),
+          quarantines: [
+            f.quarantine("unreadable", "2026-10-20T20:30:00+03:00"),
+          ],
+        });
+        expect(
+          (await f.store.historyQuarantines(f.owner, "gmail", f.account))
+            .items[0]?.observed_at,
+        ).toBe(offset);
+        await f.store.commitLiveBatch({
+          ...f.bindings,
+          owner_id: f.owner,
+          source: "gmail",
+          account_id: f.account,
+          records: [],
+          cursor: "i1",
+          complete: false,
+          reconcile: false,
+          coverage_start: "2026-09-20T17:00:00.000Z",
+          coverage_end: watermark,
+          seen_record_ids: ["unreadable"],
+          quarantines: [
+            {
+              source_record_id: "unreadable",
+              reason: "newer_incremental_review",
+              observed_at: "2026-10-20T17:50:00.000Z",
+            },
+          ],
+        });
+        expect(
+          (await f.store.historyQuarantines(f.owner, "gmail", f.account))
+            .items[0],
+        ).toMatchObject({
+          reason: "newer_incremental_review",
+          observed_at: "2026-10-20T17:50:00.000Z",
+          original_reference: f.quarantine().original_reference,
+        });
+        await f.store.commitHistoryBackfill({
+          ...f.page(),
+          records: [],
+          expected_cursor: "next2",
+          cursor: "next3",
+          operation_hash: "c".repeat(64),
+          quarantines: [
+            f.quarantine("unreadable", "2026-10-20T19:55:00+02:00"),
+          ],
+        });
+        await f.store.commitHistoryBackfill({
+          ...f.page(),
+          ...f.bindings,
+          records: [f.record("unreadable")],
+          expected_cursor: "next3",
+          cursor: null,
+          complete: true,
+          operation_hash: "d".repeat(64),
+          quarantines: [],
+        });
+        expect(await f.store.quarantineCount(f.owner)).toBe(0);
+        expect(await f.store.interactions(f.owner)).toHaveLength(1);
+      } finally {
+        await f.store.close();
+      }
+    });
+    it("does not withdraw newer canonical evidence from a stale incremental review", async () => {
+      const f = await fixture();
+      try {
+        await f.store.commitHistoryBackfill({
+          ...f.page(),
+          records: [f.record("unreadable")],
+          quarantines: [],
+        });
+        await f.store.commitLiveBatch({
+          ...f.bindings,
+          owner_id: f.owner,
+          source: "gmail",
+          account_id: f.account,
+          records: [],
+          cursor: "i1",
+          complete: false,
+          reconcile: false,
+          coverage_start: "2026-09-20T17:00:00.000Z",
+          coverage_end: watermark,
+          seen_record_ids: ["unreadable"],
+          removed_record_ids: ["unreadable"],
+          quarantines: [
+            {
+              source_record_id: "unreadable",
+              reason: "older_incremental_review",
+              observed_at: "2026-10-20T17:30:00.000Z",
+            },
+          ],
+        });
+        expect(await f.store.interactions(f.owner)).toHaveLength(1);
+        expect(await f.store.quarantineCount(f.owner)).toBe(0);
+        await f.store.commitLiveBatch({
+          ...f.bindings,
+          owner_id: f.owner,
+          source: "gmail",
+          account_id: f.account,
+          records: [
+            {
+              ...f.record("unreadable", "2026-10-20T17:30:00.000Z"),
+              body_text:
+                "Older overwrite must not replace fresh canonical text",
+            },
+          ],
+          expected_cursor: "i1",
+          cursor: "i2",
+          complete: false,
+          reconcile: false,
+          coverage_start: "2026-09-20T17:00:00.000Z",
+          coverage_end: watermark,
+          seen_record_ids: ["unreadable"],
+        });
+        expect((await f.store.interactions(f.owner))[0]).toMatchObject({
+          observed_at: now,
+          body_text: "Readable fictional evidence",
         });
       } finally {
         await f.store.close();
