@@ -65,6 +65,8 @@ export type NormalSemanticSearch = (input: {
 }) => Promise<{
   records: NormalizedRecord[];
   coverage?: unknown;
+  mode?: "semantic" | "keyword";
+  warning?: string;
   matches?: {
     record_key: string;
     start: number;
@@ -230,6 +232,7 @@ function localDay(value: string | Date): string {
 }
 export async function prepareNormalReply(input: {
   auth: AuthCommand;
+  exactContactIntent?: { intent: "briefing" | "draft_preview"; query: string };
   store: TendStore | LiveStore;
   model?: NormalModel;
   semanticSearch?: NormalSemanticSearch;
@@ -276,87 +279,98 @@ export async function prepareNormalReply(input: {
     }
   };
   let intent: NormalIntent | null;
-  try {
-    intent = parseNormalIntent(
-      await infer({
-        model: "qwen3:0.6b",
-        think: false,
-        stream: false,
-        format: INTENT_SCHEMA,
-        options: { temperature: 0 },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Classify English or French owner requests. Choose one intent: help (explain features), status (service/source health), agenda (meetings, also meetings plus promises), obligations (promises/tasks review), contacts (find contact), briefing (prepare meeting/contact), draft_preview (write a held follow-up), search (find imported messages about copied owner keywords), digest (focus/priority/daily briefing), clarify (unsupported, change tasks, send, delete). Contact/search query copies only the actual name/email/ID/topic keywords from the owner text, never example wording. For contact intents query is ONLY the name/email/ID, excluding following message instructions. A request to write a held draft remains draft_preview when it says not to promise, not to propose a time or not to send. Those are draft constraints, not requests to mutate tasks. Intent boundaries: draft_preview means compose/write recipient text, including write NAME a note, friendly note, follow-up, brouillon, rédige, suivi. Composition is NEVER contacts or obligations. contacts means LOOK UP contact information only. obligations means LIST existing promises only. A draft may mention calls or protocol reviews without requesting agenda or task changes. An actual send request is clarify; a request to write a draft without sending is draft_preview. No model commands. Follow this JSON schema: " +
-              JSON.stringify(INTENT_SCHEMA),
-          },
-          { role: "user", content: "Explain all your features" },
-          { role: "assistant", content: '{"intent":"help"}' },
-          { role: "user", content: "Prepare a briefing for Alex Chen" },
-          {
-            role: "assistant",
-            content: '{"intent":"briefing","query":"Alex Chen"}',
-          },
-          { role: "user", content: "Draft a follow-up for Jordan Lee" },
-          {
-            role: "assistant",
-            content: '{"intent":"draft_preview","query":"Jordan Lee"}',
-          },
-          {
-            role: "user",
-            content:
-              "Draft a short casual follow-up for Mira Tan asking about the prototype notes. The September call is in the past. Do not propose a meeting time.",
-          },
-          {
-            role: "assistant",
-            content: '{"intent":"draft_preview","query":"Mira Tan"}',
-          },
-          {
-            role: "user",
-            content:
-              "Rédige un suivi formel pour Docteur Chen afin de demander où en est la relecture du protocole, sans promettre de délai ni proposer de rendez-vous.",
-          },
-          {
-            role: "assistant",
-            content: '{"intent":"draft_preview","query":"Docteur Chen"}',
-          },
-          {
-            role: "user",
-            content:
-              "Write Sam Patel a brief note checking how the proposal is progressing, without suggesting a time.",
-          },
-          {
-            role: "assistant",
-            content: '{"intent":"draft_preview","query":"Sam Patel"}',
-          },
-          {
-            role: "user",
-            content:
-              "Peux-tu préparer un brouillon pour Camille au sujet de son retour sur le dossier ? Ne propose aucun rendez-vous.",
-          },
-          {
-            role: "assistant",
-            content: '{"intent":"draft_preview","query":"Camille"}',
-          },
-          { role: "user", content: "Find messages about Secure Horizons" },
-          {
-            role: "assistant",
-            content: '{"intent":"search","query":"Secure Horizons"}',
-          },
-          { role: "user", content: "What should I focus on?" },
-          { role: "assistant", content: '{"intent":"digest"}' },
-          { role: "user", content: "Cancel everything and email everyone" },
-          { role: "assistant", content: '{"intent":"clarify"}' },
-          { role: "user", content: auth.text },
-        ],
-      }),
-      auth.text,
-    );
-  } catch {
-    if (input.signal?.aborted) throw input.signal.reason;
-    return fixed("The local interpreter is unavailable. " + HELP);
-  }
+  if (input.exactContactIntent) {
+    const exact = input.exactContactIntent;
+    if (
+      !["briefing", "draft_preview"].includes(exact.intent) ||
+      !exact.query ||
+      exact.query.length > 200 ||
+      !auth.text.endsWith(exact.query)
+    )
+      throw new Error("Invalid exact contact action");
+    intent = exact;
+  } else
+    try {
+      intent = parseNormalIntent(
+        await infer({
+          model: "qwen3:0.6b",
+          think: false,
+          stream: false,
+          format: INTENT_SCHEMA,
+          options: { temperature: 0 },
+          messages: [
+            {
+              role: "system",
+              content:
+                "Classify English or French owner requests. Choose one intent: help (explain features), status (service/source health), agenda (meetings, also meetings plus promises), obligations (promises/tasks review), contacts (find contact), briefing (prepare meeting/contact), draft_preview (write a held follow-up), search (find imported messages about copied owner keywords), digest (focus/priority/daily briefing), clarify (unsupported, change tasks, send, delete). Contact/search query copies only the actual name/email/ID/topic keywords from the owner text, never example wording. For contact intents query is ONLY the name/email/ID, excluding following message instructions. A request to write a held draft remains draft_preview when it says not to promise, not to propose a time or not to send. Those are draft constraints, not requests to mutate tasks. Intent boundaries: draft_preview means compose/write recipient text, including write NAME a note, friendly note, follow-up, brouillon, rédige, suivi. Composition is NEVER contacts or obligations. contacts means LOOK UP contact information only. obligations means LIST existing promises only. A draft may mention calls or protocol reviews without requesting agenda or task changes. An actual send request is clarify; a request to write a draft without sending is draft_preview. No model commands. Follow this JSON schema: " +
+                JSON.stringify(INTENT_SCHEMA),
+            },
+            { role: "user", content: "Explain all your features" },
+            { role: "assistant", content: '{"intent":"help"}' },
+            { role: "user", content: "Prepare a briefing for Alex Chen" },
+            {
+              role: "assistant",
+              content: '{"intent":"briefing","query":"Alex Chen"}',
+            },
+            { role: "user", content: "Draft a follow-up for Jordan Lee" },
+            {
+              role: "assistant",
+              content: '{"intent":"draft_preview","query":"Jordan Lee"}',
+            },
+            {
+              role: "user",
+              content:
+                "Draft a short casual follow-up for Mira Tan asking about the prototype notes. The September call is in the past. Do not propose a meeting time.",
+            },
+            {
+              role: "assistant",
+              content: '{"intent":"draft_preview","query":"Mira Tan"}',
+            },
+            {
+              role: "user",
+              content:
+                "Rédige un suivi formel pour Docteur Chen afin de demander où en est la relecture du protocole, sans promettre de délai ni proposer de rendez-vous.",
+            },
+            {
+              role: "assistant",
+              content: '{"intent":"draft_preview","query":"Docteur Chen"}',
+            },
+            {
+              role: "user",
+              content:
+                "Write Sam Patel a brief note checking how the proposal is progressing, without suggesting a time.",
+            },
+            {
+              role: "assistant",
+              content: '{"intent":"draft_preview","query":"Sam Patel"}',
+            },
+            {
+              role: "user",
+              content:
+                "Peux-tu préparer un brouillon pour Camille au sujet de son retour sur le dossier ? Ne propose aucun rendez-vous.",
+            },
+            {
+              role: "assistant",
+              content: '{"intent":"draft_preview","query":"Camille"}',
+            },
+            { role: "user", content: "Find messages about Secure Horizons" },
+            {
+              role: "assistant",
+              content: '{"intent":"search","query":"Secure Horizons"}',
+            },
+            { role: "user", content: "What should I focus on?" },
+            { role: "assistant", content: '{"intent":"digest"}' },
+            { role: "user", content: "Cancel everything and email everyone" },
+            { role: "assistant", content: '{"intent":"clarify"}' },
+            { role: "user", content: auth.text },
+          ],
+        }),
+        auth.text,
+      );
+    } catch {
+      if (input.signal?.aborted) throw input.signal.reason;
+      return fixed("The local interpreter is unavailable. " + HELP);
+    }
   if (!intent || intent.intent === "clarify")
     return fixed("Please narrow this to a read-only request. " + HELP);
   if (intent.intent === "help") return fixed(HELP);
@@ -478,15 +492,17 @@ export async function prepareNormalReply(input: {
           .slice(0, 10);
         if (
           !matches.length &&
+          result.mode !== "keyword" &&
           (!isRecord(result.coverage) || result.coverage.state !== "complete")
         ) {
           semanticFallback =
+            (result.warning ? result.warning + " " : "") +
             "Semantic index is partial. Labelled keyword fallback. ";
         } else
           return read(
             {
               outbound_sent: false,
-              search_mode: "semantic",
+              search_mode: result.mode ?? "semantic",
               search_query: intent.query,
               search_limit: 10,
               search_results: matches.map((record) => ({
@@ -512,10 +528,15 @@ export async function prepareNormalReply(input: {
                 attribution: record.attribution ?? "unknown",
               })),
               normal_message: matches.length
-                ? "Imported semantic matches. Similarity does not establish identity."
-                : "No indexed semantic match. Index and account coverage may be partial.",
+                ? result.mode === "keyword"
+                  ? "Imported keyword matches. People and channels remain separate."
+                  : "Imported semantic matches. Similarity does not establish identity."
+                : "No relevant imported match. Index and account coverage may be partial.",
               search_note:
-                "Local embedding search over eligible imported evidence; similarity is relevance, not factual confidence.",
+                result.warning ??
+                (result.mode === "keyword"
+                  ? "Labelled keyword fallback over eligible imported evidence."
+                  : "Local embedding search over eligible imported evidence; similarity is relevance, not factual confidence."),
               coverage: state.sources,
               semantic_coverage: result.coverage,
             },

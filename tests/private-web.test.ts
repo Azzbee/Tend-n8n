@@ -412,11 +412,11 @@ it.each(["briefing", "draft"] as const)(
       store,
       policy,
       clock,
-      normalModel: async () =>
-        ++calls === 1
+      normalModel: async (request) =>
+        (++calls, request.messages[0]!.content.startsWith("Classify"))
           ? {
-              intent: kind === "draft" ? "draft_preview" : "briefing",
-              query: "peer",
+              intent: "contacts",
+              query: "wrong /no_think",
             }
           : {
               items: [{ evidence_id: "E1", quote: "Literal message proof" }],
@@ -446,6 +446,7 @@ it.each(["briefing", "draft"] as const)(
         reply: { ai: { status: string } };
       };
       expect(view.reply.ai.status).toBe("validated");
+      expect(calls).toBe(1);
       const original = store.sourceStatus(owner);
       const spy = vi.spyOn(store, "sourceStatus").mockReturnValue(
         original.map((state) => ({
@@ -483,7 +484,7 @@ it.each(["briefing", "draft"] as const)(
     }
   },
 );
-it("rejects a contact control when the classifier returns a different intent", async () => {
+it("rejects an unknown exact contact before any model inference", async () => {
   const store = fixture(),
     handler = createPrivateWebHandler({
       store,
@@ -500,9 +501,58 @@ it("rejects a contact control when the classifier returns a different intent", a
     const response = await fetch(base + "/private/api/briefing", {
       method: "POST",
       headers,
-      body: JSON.stringify({ selector: "peer" }),
+      body: JSON.stringify({ selector: "not-a-contact" }),
     });
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(400);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
+});
+
+it("labels verified groups from an exact stored member without joining names", async () => {
+  const store = fixture();
+  const group = {
+    id: "group:verified-phone-pair",
+    name: "group:verified-phone-pair",
+    verified_at: clock().toISOString(),
+    proof_kind: "owner_confirmed" as const,
+    proof_reference: "owner-confirmation:fixture",
+    members: [
+      {
+        source: "calendar" as const,
+        account_id: policy.calendar_ids[0]!,
+        contact_id: "other",
+        identity: "other@example.invalid",
+      },
+      {
+        source: "gmail" as const,
+        account_id: policy.account_email,
+        contact_id: "peer",
+        identity: "peer@example.invalid",
+      },
+    ],
+  };
+  const handler = createPrivateWebHandler({
+    store,
+    policy: { ...policy, verified_contact_groups: [group] },
+    clock,
+    resolveGroup: async (id) => (id === group.id ? group : undefined),
+  });
+  const server = createServer((req, res) => {
+      void handler(req, res);
+    }),
+    base = await listen(server);
+  try {
+    const headers = await unlockPrivate(base);
+    const response = await fetch(base + "/private/api/contacts", { headers });
+    const result = (await response.json()) as {
+      contacts: { contact_id: string; name: string }[];
+    };
+    expect(response.status, JSON.stringify(result)).toBe(200);
+    expect(
+      result.contacts.find((contact) => contact.contact_id === group.id)?.name,
+    ).toBe("Peer");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();

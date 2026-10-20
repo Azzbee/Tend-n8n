@@ -3,13 +3,14 @@ import { statfs } from "node:fs/promises";
 import { Pool, type PoolConfig } from "pg";
 import type { Contact, NormalizedRecord, SourceState } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
-import type { LivePolicy } from "./live-policy.ts";
+import type { LivePolicy, VerifiedContactGroup } from "./live-policy.ts";
 import { eligibleRecords } from "./record-eligibility.ts";
 import {
   localNormalModel,
   type NormalModel,
   type NormalSemanticSearch,
 } from "./telegram-normal.ts";
+import { retrieveRelevantEvidence } from "./semantic-relevance.ts";
 import type { PrivateSemanticSearch } from "./private-web-types.ts";
 import {
   LocalModelCoordinator,
@@ -19,29 +20,7 @@ import {
 
 export const PRIVATE_EMBEDDING_DIGEST =
   "1a37926bf842899cbf90583e3932f3820548716d9d07661ba622199ffe95c552";
-export function guardSemanticRecords(
-  canonical: NormalizedRecord[],
-  matches: NormalizedRecord[],
-): NormalizedRecord[] {
-  const current = new Map(
-      canonical.map((record) => [record.record_key, record]),
-    ),
-    seen = new Set<string>();
-  return matches
-    .flatMap((match) => {
-      const record = current.get(match.record_key);
-      if (
-        !record ||
-        record.owner_id !== match.owner_id ||
-        record.content_hash !== match.content_hash ||
-        seen.has(record.record_key)
-      )
-        return [];
-      seen.add(record.record_key);
-      return [record];
-    })
-    .slice(0, 30);
-}
+export { guardSemanticRecords } from "./semantic-relevance.ts";
 export async function resolvePrivateSearchSelection(
   selector: string | undefined,
   policy: LivePolicy,
@@ -142,25 +121,42 @@ export function createPrivateServices(options: {
       },
       signal,
     );
-  const normalSemanticSearch: NormalSemanticSearch = async ({
+  const retrieve = async (
+    query: string,
+    records: NormalizedRecord[],
+    signal: AbortSignal,
+    ids?: string[],
+    group?: VerifiedContactGroup,
+  ) =>
+    retrieveRelevantEvidence({
+      owner,
+      query,
+      records,
+      signal,
+      infer: normalModel,
+      search: (searchSignal) =>
+        service.search({
+          owner,
+          query,
+          limit: 12,
+          signal: searchSignal,
+          ...(ids ? { contactIds: ids } : {}),
+          ...(group
+            ? {
+                accounts: group.members.map((member) => ({
+                  source: member.source,
+                  account_id: member.account_id,
+                  contact_id: member.contact_id,
+                })),
+              }
+            : {}),
+        }),
+    });
+  const normalSemanticSearch: NormalSemanticSearch = ({
     query,
     records,
     signal,
-  }) => {
-    const result = await service.search({ owner, query, signal });
-    return {
-      records: guardSemanticRecords(
-        records,
-        result.hits.map((hit) => hit.record),
-      ),
-      coverage: result.coverage,
-      matches: result.hits.map((hit) => ({
-        record_key: hit.record.record_key,
-        ...hit.passage,
-        similarity: hit.similarity,
-      })),
-    };
-  };
+  }) => retrieve(query, records, signal);
   const privateSemanticSearch: PrivateSemanticSearch = async ({
     query,
     selector,
@@ -178,31 +174,35 @@ export function createPrivateServices(options: {
     const group = policy.verified_contact_groups?.find(
       (group) => group.id === selector,
     );
-    const result = await service.search({
+    const canonical = eligibleRecords(
+      await store.interactions(owner),
+      new Date(),
+      policy,
+      await store.sourceStatus(owner),
       owner,
-      query,
-      ...(ids ? { contactIds: ids } : {}),
-      ...(group
-        ? {
-            accounts: group.members.map((member) => ({
-              source: member.source,
-              account_id: member.account_id,
-              contact_id: member.contact_id,
-            })),
-          }
-        : {}),
-    });
-    const records = guardSemanticRecords(
-      eligibleRecords(
-        await store.interactions(owner),
-        new Date(),
-        policy,
-        await store.sourceStatus(owner),
-        owner,
-        true,
-      ),
-      result.hits.map((hit) => hit.record),
+      true,
+    ).filter(
+      (record) =>
+        (!ids ||
+          ids.includes(record.contact_id) ||
+          record.contact_ids?.some((id) => ids.includes(id))) &&
+        (!group ||
+          group.members.some(
+            (member) =>
+              member.source === record.source &&
+              member.account_id === record.account_id &&
+              (member.contact_id === record.contact_id ||
+                record.contact_ids?.includes(member.contact_id)),
+          )),
     );
+    const result = await retrieve(
+      query,
+      canonical,
+      AbortSignal.timeout(45000),
+      ids,
+      group,
+    );
+    const records = result.records;
     const prepared = {
       reply: { outbound_sent: false as const, semantic_results: records },
       record_guards: records.map((record) => ({
@@ -228,28 +228,7 @@ export function createPrivateServices(options: {
       await store.contacts(owner),
       await store.sourceStatus(owner),
     );
-    return {
-      records,
-      matches: result.hits
-        .filter((hit) =>
-          records.some(
-            (record) =>
-              record.record_key === hit.record.record_key &&
-              record.content_hash === hit.record.content_hash &&
-              record.body_text.slice(hit.passage.start, hit.passage.end) ===
-                hit.passage.text,
-          ),
-        )
-        .map((hit) => ({
-          record_key: hit.record.record_key,
-          ...hit.passage,
-          similarity: hit.similarity,
-        })),
-      mode: "semantic",
-      coverage: result.coverage,
-      warning:
-        "Similarity finds relevant text; it does not establish identity. Coverage may be partial.",
-    };
+    return { ...result, records };
   };
   const run = async (): Promise<void> => {
     try {

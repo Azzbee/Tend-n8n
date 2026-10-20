@@ -278,16 +278,33 @@ export function createPrivateWebHandler(
           if (!prior && options.resolveGroup)
             for (const candidate of policy.verified_contact_groups ?? []) {
               const group = await options.resolveGroup(candidate.id);
+              const members = group
+                ? await Promise.all(
+                    group.members.map(async (member) =>
+                      (await store.contacts(owner, member.contact_id)).find(
+                        (contact) => contact.contact_id === member.contact_id,
+                      ),
+                    ),
+                  )
+                : [];
+              const readableName =
+                members.find(
+                  (member) =>
+                    member?.name.trim() &&
+                    member.name !== member.contact_id &&
+                    !member.name.includes("@") &&
+                    !/^\+?[\d\s]+$/u.test(member.name),
+                )?.name ?? group?.name;
               if (
                 group &&
                 (!q ||
-                  group.name.toLowerCase().includes(q.toLowerCase()) ||
+                  readableName!.toLowerCase().includes(q.toLowerCase()) ||
                   group.id === q)
               )
                 groups.push({
                   owner_id: owner,
                   contact_id: group.id,
-                  name: group.name,
+                  name: readableName!,
                   verified_group: true,
                   provenance: group.proof_kind,
                   emails: group.members.map((m) => m.identity),
@@ -704,6 +721,10 @@ export function createPrivateWebHandler(
         };
         const prepared = await prepareNormalReply({
           auth,
+          exactContactIntent: {
+            intent: kind === "draft" ? "draft_preview" : "briefing",
+            query: selector,
+          },
           store,
           policy,
           clock,

@@ -1765,3 +1765,120 @@ describe("personalised generated prose and retained prompt dependencies", () => 
     },
   );
 });
+
+describe("relative draft claims use current Paris dates and cited evidence", () => {
+  it.each([
+    ["2026-09-23T10:00:00Z", "earlier this week", false],
+    ["2026-10-19T08:00:00Z", "earlier this week", true],
+    ["2026-10-18T23:30:00Z", "earlier this week", true],
+    ["2026-10-18T21:30:00Z", "earlier this week", false],
+    ["2026-09-23T10:00:00Z", "plus tôt cette semaine", false],
+    ["2026-10-19T08:00:00Z", "plus tôt cette semaine", true],
+  ] as const)("checks %s against %s", (stamp, phrase, accepted) => {
+    const source = record({ occurred_at: stamp });
+    const prepared = draftPrepare([source]);
+    const result = validateLiveAI(
+      prepared,
+      generated(
+        `Hi Mira, thanks for your message ${phrase}. Could you share an update?`,
+      ),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe(accepted ? "validated" : "fallback");
+    if (!accepted) expect(result.draft).toBeNull();
+  });
+  it.each(["earlier this week", "a few days ago", "récemment"])(
+    "does not use an uncited recent record for %s",
+    (phrase) => {
+      const old = record({ occurred_at: "2026-09-23T10:00:00Z" });
+      const recent = record({
+        record_key: "9".repeat(64),
+        content_hash: "8".repeat(64),
+        occurred_at: "2026-10-19T08:00:00Z",
+      });
+      const prepared = draftPrepare([old, recent]);
+      const output = generated(
+        `Thanks for your message ${phrase}. Could you share an update?`,
+      );
+      output.items[0]!.evidence_id = prepared.evidence.find(
+        (item) => item.record_key === old.record_key,
+      )!.evidence_id;
+      expect(
+        validateLiveAI(prepared, output, [old, recent], undefined, draftNow)
+          .draft,
+      ).toBeNull();
+    },
+  );
+});
+
+it("withdraws a retained current-week draft after the Paris week rolls over", () => {
+  const source = record({ occurred_at: "2026-10-19T08:00:00Z" });
+  const prepared = draftPrepare([source]);
+  const output = generated(
+    "Thanks for your message earlier this week. Could you share an update?",
+  );
+  expect(
+    validateLiveAI(prepared, output, [source], undefined, draftNow).draft,
+  ).not.toBeNull();
+  expect(
+    validateLiveAI(
+      prepared,
+      output,
+      [source],
+      undefined,
+      new Date("2026-10-25T23:00:00Z"),
+    ).draft,
+  ).toBeNull();
+});
+
+describe("elapsed and vague draft dates are grounded in cited Paris dates", () => {
+  it.each([
+    ["2026-09-23T10:00:00Z", "a few days ago", false],
+    ["2026-09-23T10:00:00Z", "la semaine passée", false],
+    ["2026-09-23T10:00:00Z", "recently", false],
+    ["2026-09-23T10:00:00Z", "récemment", false],
+    ["2026-10-17T10:00:00Z", "a few days ago", true],
+    ["2026-10-17T10:00:00Z", "il y a quelques jours", true],
+    ["2026-10-19T10:00:00Z", "a few days ago", false],
+    ["2026-10-17T10:00:00Z", "two days ago", true],
+    ["2026-10-17T10:00:00Z", "several days ago", true],
+    ["2026-09-23T10:00:00Z", "a few weeks ago", true],
+    ["2026-10-17T10:00:00Z", "a few weeks ago", false],
+    ["2026-09-23T10:00:00Z", "il y a quelques mois", false],
+    ["2026-10-17T10:00:00Z", "three days ago", false],
+    ["2026-10-17T10:00:00Z", "il y a deux jours", true],
+    ["2026-09-23T10:00:00Z", "26 days ago", true],
+    ["2026-09-23T10:00:00Z", "il y a 25 jours", false],
+    ["2026-10-19T10:00:00Z", "last month", false],
+    ["2026-10-19T10:00:00Z", "le mois passé", false],
+    ["2026-09-23T10:00:00Z", "last month", true],
+    ["2026-09-23T10:00:00Z", "le mois dernier", true],
+    ["2026-10-14T10:00:00Z", "la semaine passée", true],
+    ["2026-10-14T10:00:00Z", "last week", true],
+    ["2026-10-12T10:00:00Z", "one week ago", true],
+    ["2026-10-18T10:00:00Z", "one week ago", false],
+    ["2026-09-19T13:00:00Z", "a month ago", true],
+    ["2026-10-19T10:00:00Z", "a month ago", false],
+  ] as const)("checks %s described as %s", (stamp, phrase, accepted) => {
+    const source = record({ occurred_at: stamp }),
+      prepared = draftPrepare([source]);
+    const result = validateLiveAI(
+      prepared,
+      generated(
+        `Thanks for your message ${phrase}. Could you share an update?`,
+      ),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe(accepted ? "validated" : "fallback");
+  });
+  it("puts a fictional stale invitation correction in the bounded generation prompt", () => {
+    const prepared = draftPrepare([record()]);
+    expect(prepared.request.messages[0]!.content).toContain("23 September");
+    expect(prepared.request.messages[0]!.content).toContain("20 October");
+    expect(prepared.request.messages[0]!.content).toContain("past-only");
+  });
+});

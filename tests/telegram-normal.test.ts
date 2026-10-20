@@ -1099,3 +1099,24 @@ it("uses labelled keyword fallback for an empty unfinished semantic index", asyn
   expect(result.reply.search_note).toContain("Semantic index is partial");
   expect(result.reply.search_results).toHaveLength(1);
 });
+
+it("keeps a returned keyword fallback label and warning even with no hits", async () => {
+  const reply = await prepareNormalReply({
+    auth: auth("Find messages about project"),
+    store,
+    clock: now,
+    model: model({ intent: "search", query: "project" }),
+    semanticSearch: async () => ({
+      records: [],
+      mode: "keyword",
+      warning:
+        "Local relevance inference unavailable. Labelled keyword fallback.",
+      coverage: { state: "partial" },
+    }),
+  });
+  expect(reply.reply.search_mode).toBe("keyword");
+  expect(reply.reply.search_note).toContain(
+    "Local relevance inference unavailable",
+  );
+  expect(reply.reply.search_results).toEqual([]);
+});
