@@ -1876,6 +1876,47 @@ export class TendStore {
       throw error;
     }
   }
+  retryHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    expectedLastError: string,
+  ): boolean {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const state = this.sourceStatus(owner).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      const current = this.historyBackfills(owner).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      const allowed =
+        state?.mode === "live" &&
+        state.status !== "revoked" &&
+        current?.status === "paused" &&
+        current.last_error === expectedLastError &&
+        /^[a-z0-9_:-]{1,120}$/.test(expectedLastError) &&
+        expectedLastError.endsWith("requires_review");
+      if (allowed)
+        this.db
+          .prepare(
+            "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+          )
+          .run(
+            JSON.stringify({ ...current, last_error: "owner_retry_requested" }),
+            owner,
+            source,
+            account,
+          );
+      this.db.exec("COMMIT");
+      return Boolean(allowed);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   pauseHistoryBackfill(
     owner: string,
     source: Source,

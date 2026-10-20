@@ -59,6 +59,7 @@ export type LiveStoreMethod =
   | "historyResourceUsage"
   | "commitHistoryBackfill"
   | "pauseHistoryBackfill"
+  | "retryHistoryBackfill"
   | "dailyBriefingGet"
   | "dailyBriefingLatest"
   | "dailyBriefingInsert"

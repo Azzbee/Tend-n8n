@@ -948,6 +948,41 @@ export class PostgresStore implements LiveStore {
       return records;
     });
   }
+  async retryHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    expectedLastError: string,
+  ): Promise<boolean> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      const state = (await s.sourceStatus(owner)).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      const current = (await s.historyBackfills(owner)).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      if (
+        state?.mode !== "live" ||
+        state.status === "revoked" ||
+        current?.status !== "paused" ||
+        current.last_error !== expectedLastError ||
+        !/^[a-z0-9_:-]{1,120}$/.test(expectedLastError) ||
+        !expectedLastError.endsWith("requires_review")
+      )
+        return false;
+      await s.q(
+        "UPDATE live_history_backfills SET data=$4 WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1",
+        [
+          owner,
+          source,
+          account,
+          JSON.stringify({ ...current, last_error: "owner_retry_requested" }),
+        ],
+      );
+      return true;
+    });
+  }
   async pauseHistoryBackfill(
     owner: string,
     source: Source,
