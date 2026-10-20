@@ -333,7 +333,7 @@ export function createHistoryAPI(options: Options) {
         outbound_sent: false,
       };
     }
-    await store.commitHistoryBackfill({
+    const stored = await store.commitHistoryBackfill({
       owner_id: owner,
       source,
       account_id: account,
@@ -357,7 +357,7 @@ export function createHistoryAPI(options: Options) {
       (c) => c.source === source && c.account_id === account,
     );
     return {
-      accepted: records.length,
+      accepted: stored.length,
       quarantined,
       lane: "history",
       complete: value.complete,

@@ -775,3 +775,52 @@ it("rejects an invalid outer history wrapper without changing the checkpoint", a
     store.close();
   }
 });
+
+it("reports only retained records when the store rejects normalized older observations", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    const commit = vi
+      .spyOn(store, "commitHistoryBackfill")
+      .mockReturnValueOnce([]);
+    const result = await api.commit({
+      ...state,
+      profile_account_email: policy.account_email,
+      records: [
+        {
+          id: "stale-readable-mail",
+          threadId: "thread",
+          labelIds: ["INBOX"],
+          internalDate: String(Date.parse("2020-01-01T10:00:00Z")),
+          payload: {
+            mimeType: "text/plain",
+            headers: [
+              { name: "From", value: "peer@example.com" },
+              { name: "To", value: policy.account_email },
+            ],
+            body: {
+              data: Buffer.from("Older readable content").toString("base64url"),
+            },
+          },
+        },
+      ],
+      previous_cursor: null,
+      cursor: "next",
+      complete: false,
+    });
+    expect(commit.mock.calls[0]?.[0].records).toHaveLength(1);
+    expect(result.accepted).toBe(0);
+  } finally {
+    store.close();
+  }
+});
