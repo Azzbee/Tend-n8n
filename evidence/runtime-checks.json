@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-20T12:57:20.043Z",
+  "checked_at": "2026-10-20T15:08:06.449Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -11,22 +11,23 @@
     "08-assistant.json": "2fe2628c0cd9eac35f0038246aa3a52670e845c4c9111564646f456f1e87f474",
     "09-retry-fixture.json": "33b8ef2fb4c7619ee372ead7c77726ebda617006816ce10e47cfeacde79e46cf",
     "10-telegram-private.json": "6b3c0f37b1ebcf43f15276fcab3f9921a9813ec397f630012cb2bf45166a4619",
-    "11-google-gmail-readonly.json": "09052c99e7b745cc35e35c25e500a344219b77e77aced5bdfaea43648a98a3fc",
-    "12-google-calendar-readonly.json": "0986cdb6b3cdf7c04bea86c9d2edff447d02d47132ade18fa977dcf92d8842c6",
+    "11-google-gmail-readonly.json": "43d9f772ceb65f543714509209af4925d5d084a7a073ad725fd8290db3013e31",
+    "12-google-calendar-readonly.json": "7a78b1ff4fa1a2d317ab822e5e227b0431eaaec1b6057e0b6b903f1bec43feb9",
     "13-google-normalize-store.json": "2e97ad270c12b370da19deebaa49d6d3789121f5976f9e21c3fc538e8d121692",
     "14-google-telegram-private.json": "0ad9d8f45d25191c50b178cf97a332615959af70d0a07f1991d79d48c243ec93",
     "15-google-extract-commitments.json": "098318be83ce2b26c0687b47494f8e6b35e20308b93d8bd8855296b91cb95909",
     "16-live-ai-review.json": "950b8674bbfc5b9a3be05f4caeee1e56e49d68c35f2fa18410ba93dfef8aa831",
     "17-personal-whatsapp-readonly.json": "ee669d8b8f5fb3f3bc5c6faa0473662eb66c43d2d6555fbe107feb152c544a11",
     "18-linkedin-portability-readonly.json": "afab0c2596c0d54248ddce53511f2fc35650c191463b59c7df0a91f59ea236c4",
-    "19-business-whatsapp-readonly.json": "66b18e9a0c96f31ec17fa62e29ff1c1f8b6d50d31c8a2ba03589d18a1bcfd155"
+    "19-business-whatsapp-readonly.json": "66b18e9a0c96f31ec17fa62e29ff1c1f8b6d50d31c8a2ba03589d18a1bcfd155",
+    "20-daily-owner-briefing.json": "6599182c0eb5a0b5d5e4a990146f5c6590c9740e43fb642a6aed7d9ab98c0f7a"
   },
   "source_sha256": {
-    "engine.ts": "9e44ee2d18cb036665d47673a74c5922323464cc3439cad5af9692a9ffbe880e",
-    "server.ts": "697c775a3b2bfdcce1069c201f4bc35fdab5ed414f1c2b868fd93fd097b6b07b",
-    "build-workflows.ts": "dc3e91db0716b7c40796ea5f8ee2b15ad09a9bf0d2489bce7579a1838aead2d0",
+    "engine.ts": "328f9fd3e62464c211315f28d43b80fa5ed6b8d6597715d6b15c2ed0bbf6021e",
+    "server.ts": "20a86273e39c9027f2090119b1f355095edcf734cd2f89641ae19dad4286e82c",
+    "build-workflows.ts": "0b98daf8d8243f9ae5b93cfa004abcc4112c64251ac58cdbbdceba6fde8fce56",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "6e1545d11faa5274ff00cbf3c74f1e6d2ae70eab675edeb9a4a107264c6b756f"
+    "integration.ts": "64a3f6a962c8930b07006ba8ddb325fce177118e8706b81e6a062d7e6391eee2"
   },
   "runtime": {
     "node": "v24.5.0",
