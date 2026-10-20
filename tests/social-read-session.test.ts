@@ -738,6 +738,56 @@ describe.each(["sqlite", "postgres"] as const)(
       ).toEqual({ available: false, reason: "fresh_identity_proof_required" });
       expect((await store.counts(owner)).interactions).toBe(0);
     });
+    it("requires fresh exact-account identity proof before planning approved history", async () => {
+      sessions = new SocialReadSessions({
+        policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        store,
+        principal_id: owner,
+        clock: () => now,
+        historyResourceGate: async () => null,
+      });
+      const denied = {
+        available: false,
+        reason: "fresh_identity_proof_required",
+      };
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          lane: "history",
+        }),
+      ).toEqual(denied);
+      const wrongProof = await identity(business);
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          lane: "history",
+          proof_id: wrongProof,
+        }),
+      ).toEqual(denied);
+      expect(await store.historyBackfills(owner)).toEqual([]);
+      const proof_id = await identity(personal);
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          lane: "history",
+          proof_id,
+        }),
+      ).toMatchObject({ available: true });
+      const before = await store.historyBackfills(owner);
+      now = new Date(now.getTime() + 300001);
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          lane: "history",
+          proof_id,
+        }),
+      ).toEqual(denied);
+      expect(await store.historyBackfills(owner)).toEqual(before);
+    });
     it("requires server-issued exact owner proof and never accepts caller plans", async () => {
       expect(
         await sessions.plan({
