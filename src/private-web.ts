@@ -299,6 +299,7 @@ export function createPrivateWebHandler(
                 group &&
                 (!q ||
                   readableName!.toLowerCase().includes(q.toLowerCase()) ||
+                  group.name.toLowerCase().includes(q.toLowerCase()) ||
                   group.id === q)
               )
                 groups.push({

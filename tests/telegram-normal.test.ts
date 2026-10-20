@@ -1120,3 +1120,24 @@ it("keeps a returned keyword fallback label and warning even with no hits", asyn
   );
   expect(reply.reply.search_results).toEqual([]);
 });
+
+it("does not claim AI relevance review for keyword results after canonical rejection", async () => {
+  const canonical = record({ body_text: "hotel logistics" });
+  vi.spyOn(store, "interactions").mockReturnValue([canonical]);
+  const result = await prepareNormalReply({
+    auth: auth("Find hotel logistics"),
+    store,
+    clock: now,
+    model: model({ intent: "search", query: "hotel logistics" }),
+    semanticSearch: async () => ({
+      records: [{ ...canonical, content_hash: "outdated" }],
+      coverage: { state: "indexing", pending: 1 },
+      warning:
+        "Local AI checked relevance of at most twelve eligible candidate passages.",
+    }),
+  });
+  expect(result.reply.search_mode).toBe("keyword");
+  expect(result.reply.search_results).toHaveLength(1);
+  expect(result.reply.search_note).toContain("Labelled keyword fallback");
+  expect(result.reply.search_note).not.toContain("Local AI checked relevance");
+});

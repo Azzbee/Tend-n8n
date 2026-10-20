@@ -514,7 +514,7 @@ it("labels verified groups from an exact stored member without joining names", a
   const store = fixture();
   const group = {
     id: "group:verified-phone-pair",
-    name: "group:verified-phone-pair",
+    name: "Trusted project contact",
     verified_at: clock().toISOString(),
     proof_kind: "owner_confirmed" as const,
     proof_reference: "owner-confirmation:fixture",
@@ -553,6 +553,18 @@ it("labels verified groups from an exact stored member without joining names", a
     expect(
       result.contacts.find((contact) => contact.contact_id === group.id)?.name,
     ).toBe("Peer");
+    for (const query of ["Trusted project", "Peer", group.id]) {
+      const filtered = await fetch(
+        base + "/private/api/contacts?q=" + encodeURIComponent(query),
+        { headers },
+      );
+      const page = (await filtered.json()) as {
+        contacts: { contact_id: string }[];
+      };
+      expect(
+        page.contacts.some((contact) => contact.contact_id === group.id),
+      ).toBe(true);
+    }
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();

@@ -821,10 +821,52 @@ function unsupportedRelativeDraftTime(
         test(stamp, today - day(stamp))
       );
     });
+  const hour = (stamp: Date): number =>
+    Number(
+      new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Europe/Paris",
+        hour: "2-digit",
+        hourCycle: "h23",
+      }).format(stamp),
+    );
   const claims: {
     pattern: string;
     test: (stamp: Date, elapsed: number) => boolean;
   }[] = [
+    {
+      pattern: "recent(?:ly|e|s|es)?|lately|dernierement",
+      test: (_stamp, elapsed) => elapsed >= 0 && elapsed <= 4,
+    },
+    {
+      pattern: "this\\s+morning|ce\\s+matin|cette\\s+matinee",
+      test: (stamp, elapsed) =>
+        elapsed === 0 && hour(stamp) >= 6 && hour(stamp) < 12,
+    },
+    {
+      pattern: "last\\s+night|hier\\s+soir|(?:la\\s+)?nuit\\s+derniere",
+      test: (stamp, elapsed) =>
+        (elapsed === 1 && hour(stamp) >= 18) ||
+        (elapsed === 0 && hour(stamp) < 6),
+    },
+    {
+      pattern:
+        "(?:over\\s+)?the\\s+past\\s+week|au\\s+cours\\s+des\\s+sept\\s+derniers\\s+jours",
+      test: (_stamp, elapsed) => elapsed >= 0 && elapsed <= 7,
+    },
+    {
+      pattern:
+        "(?:over\\s+)?the\\s+past\\s+few\\s+days|ces\\s+quelques\\s+derniers\\s+jours",
+      test: (_stamp, elapsed) => elapsed >= 0 && elapsed <= 4,
+    },
+    {
+      pattern: "this\\s+week[- ]?end|ce\\s+week[- ]?end",
+      test: (stamp) => day(stamp) >= week + 5 && day(stamp) < week + 7,
+    },
+    {
+      pattern: "tout\\s+a\\s+l['’]heure",
+      test: (stamp, elapsed) =>
+        elapsed === 0 && now.getTime() - stamp.getTime() <= 4 * 3600000,
+    },
     {
       pattern:
         "(?:earlier\\s+)?this\\s+week|(?:plus\\s+tot\\s+)?cette\\s+semaine",

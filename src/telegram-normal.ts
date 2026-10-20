@@ -496,8 +496,7 @@ export async function prepareNormalReply(input: {
           (!isRecord(result.coverage) || result.coverage.state !== "complete")
         ) {
           semanticFallback =
-            (result.warning ? result.warning + " " : "") +
-            "Semantic index is partial. Labelled keyword fallback. ";
+            "No eligible semantic matches remain after canonical validation. Semantic index is partial. Labelled keyword fallback. ";
         } else
           return read(
             {

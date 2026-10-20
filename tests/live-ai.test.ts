@@ -1882,3 +1882,76 @@ describe("elapsed and vague draft dates are grounded in cited Paris dates", () =
     expect(prepared.request.messages[0]!.content).toContain("past-only");
   });
 });
+
+describe("temporal adjectives and day-part claims use cited Paris time", () => {
+  const now = new Date("2026-10-20T12:00:00Z");
+  function validate(stamp: string, text: string, at = now) {
+    const source = record({ occurred_at: stamp });
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: at.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Write a short follow-up",
+        policy: exampleLivePolicy,
+      },
+    });
+    return validateLiveAI(prepared, generated(text), [source], undefined, at);
+  }
+  it.each([
+    "your recent invite",
+    "votre invitation récente",
+    "vos messages récents",
+    "votre récente invitation",
+    "your updates lately",
+    "votre message dernièrement",
+    "your message this morning",
+    "votre message ce matin",
+    "your message last night",
+    "your message over the past week",
+    "your message over the past few days",
+    "your message this weekend",
+    "votre message ce week-end",
+    "votre message tout à l’heure",
+  ])("rejects old September evidence described as %s", (claim) => {
+    expect(
+      validate(
+        "2026-09-23T10:00:00Z",
+        `Thanks for ${claim}. Could you share an update?`,
+      ).draft,
+    ).toBeNull();
+  });
+  it.each([
+    ["2026-10-19T10:00:00Z", "your recent invite", true],
+    ["2026-10-19T10:00:00Z", "votre invitation récente", true],
+    ["2026-10-19T10:00:00Z", "your updates lately", true],
+    ["2026-10-20T07:00:00Z", "your message this morning", true],
+    ["2026-10-19T07:00:00Z", "your message this morning", false],
+    ["2026-10-20T11:00:00Z", "your message this morning", false],
+    ["2026-10-19T20:00:00Z", "your message last night", true],
+    ["2026-10-20T02:00:00Z", "your message last night", true],
+    ["2026-10-19T08:00:00Z", "your message last night", false],
+    ["2026-10-15T08:00:00Z", "your message over the past week", true],
+    ["2026-10-10T08:00:00Z", "your message over the past week", false],
+    ["2026-10-19T08:00:00Z", "your message over the past few days", true],
+    ["2026-10-20T10:00:00Z", "votre message tout à l’heure", true],
+    ["2026-10-19T10:00:00Z", "votre message tout à l’heure", false],
+  ] as const)("checks %s as %s", (stamp, claim, accepted) => {
+    expect(
+      validate(stamp, `Thanks for ${claim}. Could you share an update?`).status,
+    ).toBe(accepted ? "validated" : "fallback");
+  });
+  it("withdraws this-weekend wording across the Paris Sunday/Monday boundary", () => {
+    const source = "2026-10-18T18:00:00Z",
+      text = "Thanks for your message this weekend. Could you share an update?";
+    expect(
+      validate(source, text, new Date("2026-10-18T21:30:00Z")).status,
+    ).toBe("validated");
+    expect(
+      validate(source, text, new Date("2026-10-18T22:30:00Z")).draft,
+    ).toBeNull();
+  });
+});
