@@ -17,6 +17,7 @@ export interface HistoryCheckpoint {
   last_error: string | null;
   last_operation_hash: string | null;
   last_request_hash: string | null;
+  next_poll_lane?: "incremental" | "history";
   updated_at: string;
 }
 export interface HistoryPageCommit {
@@ -54,6 +55,7 @@ export type LiveStoreMethod =
   | "privateHistory"
   | "beginHistoryBackfill"
   | "historyBackfills"
+  | "claimHistoryPoll"
   | "historyResourceUsage"
   | "commitHistoryBackfill"
   | "pauseHistoryBackfill"

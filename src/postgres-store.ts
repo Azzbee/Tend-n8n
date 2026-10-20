@@ -811,6 +811,38 @@ export class PostgresStore implements LiveStore {
       ).map((r) => r.data),
     );
   }
+  async claimHistoryPoll(
+    owner: string,
+    source: Source,
+    account: string,
+  ): Promise<"incremental" | "history"> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      const state = await s.state(owner, source, account);
+      if (state.mode !== "live" || state.status === "revoked")
+        throw new Error("history source unavailable or revoked");
+      const checkpoint = (await s.historyBackfills(owner)).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      if (!checkpoint) throw new Error("history checkpoint missing");
+      const lane = checkpoint.next_poll_lane ?? "incremental";
+      if (lane !== "incremental" && lane !== "history")
+        throw new Error("invalid history polling lane");
+      await s.q(
+        "UPDATE live_history_backfills SET data=$4 WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1",
+        [
+          owner,
+          source,
+          account,
+          JSON.stringify({
+            ...checkpoint,
+            next_poll_lane: lane === "incremental" ? "history" : "incremental",
+          }),
+        ],
+      );
+      return lane;
+    });
+  }
   async beginHistoryBackfill(
     owner: string,
     source: Source,

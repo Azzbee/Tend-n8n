@@ -743,6 +743,7 @@ export function initialHistoryCheckpoint(
     last_error: null,
     last_operation_hash: null,
     last_request_hash: null,
+    next_poll_lane: "incremental",
     updated_at: now.toISOString(),
   };
 }
@@ -1722,6 +1723,47 @@ export class TendStore {
       )
       .all(owner)
       .map((r) => JSON.parse(String(r.data)) as HistoryCheckpoint);
+  }
+  claimHistoryPoll(
+    owner: string,
+    source: Source,
+    account: string,
+  ): "incremental" | "history" {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const state = this.sourceStatus(owner).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      if (!state || state.mode !== "live" || state.status === "revoked")
+        throw new Error("history source unavailable or revoked");
+      const checkpoint = this.historyBackfills(owner).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      if (!checkpoint) throw new Error("history checkpoint missing");
+      const lane = checkpoint.next_poll_lane ?? "incremental";
+      if (lane !== "incremental" && lane !== "history")
+        throw new Error("invalid history polling lane");
+      this.db
+        .prepare(
+          "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+        )
+        .run(
+          JSON.stringify({
+            ...checkpoint,
+            next_poll_lane: lane === "incremental" ? "history" : "incremental",
+          }),
+          owner,
+          source,
+          account,
+        );
+      this.db.exec("COMMIT");
+      return lane;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   beginHistoryBackfill(
     owner: string,

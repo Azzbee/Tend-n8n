@@ -1,4 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Pool } from "pg";
 import { TendStore, type SourceState } from "../src/engine.ts";
 import { PostgresStore } from "../src/postgres-store.ts";
 import { postgresTestRuntime } from "./postgres-test-runtime.ts";
@@ -745,6 +750,121 @@ describe("separate history and daily ledgers", () => {
           ).not.toEqual(recentView.reply);
         } finally {
           await isolated.close();
+        }
+      },
+    );
+    it(
+      kind +
+        " alternates durable per-account polling lanes without changing history progress",
+      async () => {
+        const owner = "poll-lane-" + kind,
+          principal2 = { ...principal, owner_id: owner };
+        const dir = mkdtempSync(join(tmpdir(), "tend-lanes-")),
+          path = join(dir, "test.sqlite");
+        const open = () =>
+          kind === "sqlite"
+            ? new TendStore(path, {
+                mode: "live",
+                principal: principal2,
+                clock: () => new Date(now),
+              })
+            : PostgresStore.open({
+                connectionString: runtime.connectionString,
+                principal: principal2,
+                clock: () => new Date(now),
+              });
+        let isolated = await open();
+        try {
+          const accounts = [state.account_id, "second@example.invalid"];
+          await isolated.seed(
+            [],
+            [],
+            accounts.map((account_id) => ({
+              ...state,
+              owner_id: owner,
+              account_id,
+            })),
+          );
+          for (const account of accounts)
+            await isolated.beginHistoryBackfill(owner, "gmail", account, now);
+          const baseline = (await isolated.historyBackfills(owner)).find(
+            (c) => c.account_id === state.account_id,
+          )!;
+          expect(
+            await isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+          ).toBe("incremental");
+          const after = (await isolated.historyBackfills(owner)).find(
+            (c) => c.account_id === state.account_id,
+          )!;
+          const { next_poll_lane: _oldLane, ...oldProgress } = baseline;
+          const { next_poll_lane: _newLane, ...newProgress } = after;
+          void _oldLane;
+          void _newLane;
+          expect(newProgress).toEqual(oldProgress);
+          expect(after.next_poll_lane).toBe("history");
+          expect(
+            await isolated.claimHistoryPoll(owner, "gmail", accounts[1]!),
+          ).toBe("incremental");
+          await isolated.close();
+          isolated = await open();
+          expect(
+            await isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+          ).toBe("history");
+          const racing = await Promise.all([
+            Promise.resolve().then(() =>
+              isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+            ),
+            Promise.resolve().then(() =>
+              isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+            ),
+          ]);
+          expect(racing.sort()).toEqual(["history", "incremental"]);
+          await isolated.close();
+          if (kind === "sqlite") {
+            const db = new DatabaseSync(path);
+            try {
+              db.prepare(
+                "UPDATE live_history_backfills SET data=json_remove(data,'$.next_poll_lane') WHERE owner_id=? AND account_id=?",
+              ).run(owner, state.account_id);
+            } finally {
+              db.close();
+            }
+          } else {
+            const pool = new Pool({
+              connectionString: runtime.connectionString,
+            });
+            try {
+              await pool.query(
+                "UPDATE live_history_backfills SET data=data-'next_poll_lane' WHERE owner_id=$1 AND account_id=$2",
+                [owner, state.account_id],
+              );
+            } finally {
+              await pool.end();
+            }
+          }
+          isolated = await open();
+          expect(
+            await isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+          ).toBe("incremental");
+          await expect(
+            Promise.resolve().then(() =>
+              isolated.claimHistoryPoll("foreign", "gmail", state.account_id),
+            ),
+          ).rejects.toThrow(/owner/);
+          await expect(
+            Promise.resolve().then(() =>
+              isolated.claimHistoryPoll(owner, "gmail", "foreign-account"),
+            ),
+          ).rejects.toThrow(/source|account|checkpoint/);
+          await isolated.revokeSource(owner, "gmail");
+          await expect(
+            Promise.resolve().then(() =>
+              isolated.claimHistoryPoll(owner, "gmail", state.account_id),
+            ),
+          ).rejects.toThrow(/source|revoked/);
+        } finally {
+          await isolated.close();
+          rmSync(dir, { recursive: true, force: true });
         }
       },
     );
