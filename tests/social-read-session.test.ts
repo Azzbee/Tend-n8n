@@ -194,6 +194,7 @@ describe.each(["sqlite", "postgres"] as const)(
     it("keeps historical pagination and errors separate from incremental state", async () => {
       sessions = new SocialReadSessions({
         policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        historyResourceGate: async () => null,
         store,
         principal_id: owner,
         clock: () => now,
@@ -270,6 +271,58 @@ describe.each(["sqlite", "postgres"] as const)(
         retry_after_until: "2026-10-14T12:02:00.000Z",
       });
     });
+    it("requires a history resource measurement and rechecks it before committing a page", async () => {
+      const approved = {
+        ...policy,
+        history: { version: 1, mode: "all_available" } as const,
+      };
+      sessions = new SocialReadSessions({
+        policy: approved,
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      let proof_id = await identity();
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      ).toEqual({ available: false, reason: "history_resource_gate_required" });
+      let checks = 0;
+      sessions = new SocialReadSessions({
+        policy: approved,
+        store,
+        principal_id: owner,
+        clock: () => now,
+        historyResourceGate: async () => (++checks === 1 ? null : "disk_floor"),
+      });
+      proof_id = await identity();
+      const selected = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: selected.request_id,
+          status: 200,
+          body: { object: "MessageList", cursor: null, items: [] },
+        }),
+      ).toEqual({ kind: "blocked", reason: "disk_floor" });
+      expect(checks).toBe(2);
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        status: "paused",
+        last_error: "disk_floor",
+        cursor: null,
+        page_count: 0,
+      });
+    });
     it("rejects history lanes without approval or with changelog operations", async () => {
       expect(
         await sessions.plan({
@@ -280,6 +333,7 @@ describe.each(["sqlite", "postgres"] as const)(
       ).toMatchObject({ available: false });
       sessions = new SocialReadSessions({
         policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        historyResourceGate: async () => null,
         store,
         principal_id: owner,
         clock: () => now,

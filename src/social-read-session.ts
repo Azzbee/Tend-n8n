@@ -20,6 +20,7 @@ import type { MessagingSource } from "./messaging-records.ts";
 import { normalizeSocialBatch } from "./social-sync.ts";
 import { handleSocialSync } from "./social-api.ts";
 interface Options {
+  historyResourceGate?: () => Promise<string | null>;
   policy: SocialPolicy;
   store: TendStore | LiveStore;
   principal_id: string;
@@ -109,6 +110,8 @@ function reason(error: unknown): string {
 }
 export class SocialReadSessions {
   private readonly policy: SocialPolicy;
+  private readonly historyResourceGate:
+    (() => Promise<string | null>) | undefined;
   private readonly store: TendStore | LiveStore;
   private readonly principal: string;
   private readonly clock: () => Date;
@@ -117,9 +120,36 @@ export class SocialReadSessions {
   private readonly proofs = new Map<string, Proof>();
   constructor(options: Options) {
     this.policy = parseSocialPolicy(options.policy)!;
+    this.historyResourceGate = options.historyResourceGate;
     this.store = options.store;
     this.principal = options.principal_id;
     this.clock = options.clock ?? (() => new Date());
+  }
+  private async checkHistoryResources(
+    source: MessagingSource,
+    account: string,
+  ): Promise<void> {
+    let blocked: string | null;
+    try {
+      blocked = this.historyResourceGate
+        ? await this.historyResourceGate()
+        : "history_resource_gate_required";
+    } catch {
+      blocked = "history_resource_measurement_unavailable";
+    }
+    if (blocked !== null) {
+      const code = /^[a-z0-9_:-]{1,120}$/.test(blocked)
+        ? blocked
+        : "history_resource_measurement_unavailable";
+      await this.store.pauseHistoryBackfill(
+        this.principal,
+        source,
+        account,
+        code,
+        null,
+      );
+      throw new Error(code);
+    }
   }
   private clean(now: number): void {
     if (!Number.isFinite(now)) throw new Error("invalid_social_clock");
@@ -205,6 +235,7 @@ export class SocialReadSessions {
           Date.parse(checkpoint.retry_after_until) > now.getTime()
         )
           throw new Error("provider_retry_not_due");
+        await this.checkHistoryResources(selected.source, selected.account_id);
         state = {
           ...state,
           status: "partial",
@@ -520,6 +551,7 @@ export class SocialReadSessions {
             ...record.participant_identities,
           ]),
         );
+        await this.checkHistoryResources(account.source, account.account_id);
         const accepted = await this.store.commitHistoryBackfill({
           owner_id: this.principal,
           source: account.source,
