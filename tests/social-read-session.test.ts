@@ -191,6 +191,110 @@ describe.each(["sqlite", "postgres"] as const)(
         }),
       ).toMatchObject({ kind: "page", complete: true });
     }
+    it("keeps historical pagination and errors separate from incremental state", async () => {
+      sessions = new SocialReadSessions({
+        policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      const before = await store.sourceStatus(owner);
+      const proof_id = await identity();
+      const selected = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(selected.plan.coverage_start).toBe("0001-01-01T00:00:00.000Z");
+      expect(new URL(selected.plan.url).searchParams.has("after")).toBe(false);
+      const historicalResult = await sessions.result({
+        request_id: selected.request_id,
+        status: 200,
+        body: {
+          object: "MessageList",
+          cursor: "history-page-two",
+          items: [
+            {
+              id: "old-message",
+              account_id: personal.account_id,
+              chat_id: "old-thread",
+              sender_id: "friend",
+              timestamp: "2020-01-01T12:00:00Z",
+              is_sender: false,
+              text: "Historical source",
+              attendees: [
+                { attendee_provider_id: "owner-user" },
+                { attendee_provider_id: "friend" },
+              ],
+            },
+          ],
+        },
+      });
+      expect(historicalResult.kind, JSON.stringify(historicalResult)).toBe(
+        "page",
+      );
+      expect(historicalResult).toMatchObject({
+        kind: "page",
+        accepted: 1,
+        complete: false,
+      });
+      expect(await store.sourceStatus(owner)).toEqual(before);
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        cursor: "history-page-two",
+        page_count: 1,
+      });
+      const second = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(second.plan.expected_cursor).toBe("history-page-two");
+      expect(
+        await sessions.result({
+          request_id: second.request_id,
+          status: 429,
+          body: {},
+          headers: { "Retry-After": "120" },
+        }),
+      ).toMatchObject({ kind: "blocked" });
+      expect(await store.sourceStatus(owner)).toEqual(before);
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        cursor: "history-page-two",
+        status: "paused",
+        retry_after_until: "2026-10-14T12:02:00.000Z",
+      });
+    });
+    it("rejects history lanes without approval or with changelog operations", async () => {
+      expect(
+        await sessions.plan({
+          ...personal,
+          phase: "identity",
+          lane: "history",
+        }),
+      ).toMatchObject({ available: false });
+      sessions = new SocialReadSessions({
+        policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      const proof_id = await linkedIdentity();
+      expect(
+        await sessions.plan({
+          ...linked,
+          phase: "changes",
+          proof_id,
+          lane: "history",
+        }),
+      ).toMatchObject({ available: false });
+      expect(await store.historyBackfills(owner)).toEqual([]);
+    });
     it.each(["wrong_phone", "wrong_account"] as const)(
       "rejects Business identity %s without issuing a proof",
       async (invalid) => {

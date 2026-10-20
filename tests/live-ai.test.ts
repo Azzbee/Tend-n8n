@@ -2289,3 +2289,36 @@ it.each([
       .draft?.text,
   ).toBe(text);
 });
+
+describe("historical personalised draft evidence", () => {
+  it("uses old context only with explicit history policy and still holds the generated text", () => {
+    const source = record({ occurred_at: "2020-01-01T12:00:00Z" });
+    const approved = {
+      ...exampleLivePolicy,
+      history: { version: 1, mode: "all_available" } as const,
+    };
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: draftNow.toISOString(),
+        contact_name: "Mira Tan",
+        owner_request: "Write a short follow-up without proposing a time",
+        policy: approved,
+      },
+    });
+    const result = validateLiveAI(
+      prepared,
+      generated(),
+      [source],
+      undefined,
+      draftNow,
+    );
+    expect(result.status).toBe("validated");
+    expect(result.draft).toMatchObject({ pending_review: true });
+    expect(result.outbound_sent).toBe(false);
+    expect(draftPrepare([source]).evidence).toEqual([]);
+  });
+});

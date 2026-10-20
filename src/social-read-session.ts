@@ -3,6 +3,8 @@ import { isRecord, type TendStore, type SourceState } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
   parseSocialPolicy,
+  allAvailableHistory,
+  HISTORY_START,
   socialAccount,
   socialWindow,
   type SocialPolicy,
@@ -15,6 +17,7 @@ import {
   type SocialReadPhase,
 } from "./social-provider-reads.ts";
 import type { MessagingSource } from "./messaging-records.ts";
+import { normalizeSocialBatch } from "./social-sync.ts";
 import { handleSocialSync } from "./social-api.ts";
 interface Options {
   policy: SocialPolicy;
@@ -32,6 +35,7 @@ interface Proof {
   connections_complete?: boolean;
 }
 interface Pending {
+  lane?: "history";
   plan: ProviderReadPlan;
   proof_id?: string;
   expires_at: number;
@@ -66,10 +70,13 @@ function selector(value: unknown): {
   source: MessagingSource;
   account_id: string;
   phase: SocialReadPhase;
+  lane?: "history";
   proof_id?: string;
 } {
   if (!isRecord(value)) throw new Error("invalid_social_selector");
-  allowed(value, ["source", "account_id", "phase", "proof_id"]);
+  allowed(value, ["source", "account_id", "phase", "proof_id", "lane"]);
+  if (value.lane !== undefined && value.lane !== "history")
+    throw new Error("invalid_history_lane");
   if (
     !["whatsapp_personal", "whatsapp_business", "linkedin"].includes(
       String(value.source),
@@ -91,6 +98,7 @@ function selector(value: unknown): {
     source: value.source as MessagingSource,
     account_id: value.account_id,
     phase: value.phase as SocialReadPhase,
+    ...(value.lane === "history" ? { lane: "history" as const } : {}),
     ...(typeof value.proof_id === "string" ? { proof_id: value.proof_id } : {}),
   };
 }
@@ -162,6 +170,12 @@ export class SocialReadSessions {
           selected.source,
           selected.account_id,
         );
+      if (
+        selected.lane === "history" &&
+        (!allAvailableHistory(this.policy) ||
+          !["snapshot", "identity"].includes(selected.phase))
+      )
+        throw new Error("unapproved_history_operation");
       let state = await this.state(selected.source, selected.account_id);
       const verified =
         selected.phase === "identity"
@@ -172,7 +186,34 @@ export class SocialReadSessions {
               selected.account_id,
               account.provider,
             );
-      if (selected.phase !== "identity") {
+      if (selected.lane === "history" && selected.phase !== "identity") {
+        const checkpoint = await this.store.beginHistoryBackfill(
+          this.principal,
+          selected.source,
+          selected.account_id,
+          now.toISOString(),
+        );
+        if (checkpoint.status === "complete")
+          throw new Error("history_backfill_complete");
+        if (
+          checkpoint.status === "paused" &&
+          checkpoint.last_error === "history_page_requires_review"
+        )
+          throw new Error("history_page_requires_review");
+        if (
+          checkpoint.retry_after_until &&
+          Date.parse(checkpoint.retry_after_until) > now.getTime()
+        )
+          throw new Error("provider_retry_not_due");
+        state = {
+          ...state,
+          status: "partial",
+          coverage_start: HISTORY_START,
+          coverage_end: checkpoint.watermark,
+          cursor: checkpoint.cursor,
+        };
+      }
+      if (selected.phase !== "identity" && selected.lane !== "history") {
         const proof = this.proof(
           selected.proof_id,
           selected.source,
@@ -275,6 +316,7 @@ export class SocialReadSessions {
       const request_id = randomUUID();
       this.pending.set(request_id, {
         plan,
+        ...(selected.lane ? { lane: selected.lane } : {}),
         expires_at: now.getTime() + 120000,
         ...(selected.proof_id ? { proof_id: selected.proof_id } : {}),
       });
@@ -359,14 +401,23 @@ export class SocialReadSessions {
           const seconds = Number.isFinite(parsed)
             ? Math.min(86400, Math.max(1, parsed))
             : Math.min(8, 2 ** Math.min(3, state.attempt_count ?? 0));
-          await this.store.markLiveSyncError(
-            this.principal,
-            account.source,
-            account.account_id,
-            false,
-            new Date(now.getTime() + seconds * 1000).toISOString(),
-            input.status === 200 ? 599 : input.status,
-          );
+          if (pending.lane === "history")
+            await this.store.pauseHistoryBackfill(
+              this.principal,
+              account.source,
+              account.account_id,
+              mapped.reason,
+              new Date(now.getTime() + seconds * 1000).toISOString(),
+            );
+          else
+            await this.store.markLiveSyncError(
+              this.principal,
+              account.source,
+              account.account_id,
+              false,
+              new Date(now.getTime() + seconds * 1000).toISOString(),
+              input.status === 200 ? 599 : input.status,
+            );
         }
         return { kind: "blocked", reason: mapped.reason };
       }
@@ -422,6 +473,92 @@ export class SocialReadSessions {
           truncated_value_count: mapped.truncated_value_count,
           transient: true,
           expires_at: new Date(verified.expires_at).toISOString(),
+        };
+      }
+      if (pending.lane === "history") {
+        const original_message_times = await this.store.originalMessageTimes(
+          this.principal,
+          account.source,
+          account.account_id,
+        );
+        const normalized = normalizeSocialBatch(this.policy, mapped.request, {
+          history_watermark: pending.plan.coverage_end,
+          principal_id: this.principal,
+          now,
+          authenticated: {
+            provider: account.provider,
+            account_id: account.account_id,
+          },
+          original_message_times,
+        });
+        if (
+          normalized.batch.evidence_incomplete ||
+          normalized.invalidated_record_ids.length ||
+          (normalized.batch.removed_record_ids?.length ?? 0)
+        ) {
+          await this.store.pauseHistoryBackfill(
+            this.principal,
+            account.source,
+            account.account_id,
+            "history_page_requires_review",
+            null,
+          );
+          throw new Error("history_page_requires_review");
+        }
+        const historicalRecords = normalized.batch.records.filter(
+          (record) =>
+            Date.parse(record.occurred_at) <=
+            Date.parse(pending.plan.coverage_end),
+        );
+        const historicalContacts = new Set([
+          "OWNER",
+          ...historicalRecords.flatMap((record) => record.contact_ids),
+        ]);
+        const historicalIdentities = new Set(
+          historicalRecords.flatMap((record) => [
+            record.actor_identity,
+            ...record.participant_identities,
+          ]),
+        );
+        const accepted = await this.store.commitHistoryBackfill({
+          owner_id: this.principal,
+          source: account.source,
+          account_id: account.account_id,
+          version: 1,
+          watermark: pending.plan.coverage_end,
+          expected_cursor: pending.plan.expected_cursor,
+          cursor: normalized.batch.cursor,
+          operation_hash: normalized.page_hash,
+          complete: normalized.batch.complete,
+          records: historicalRecords,
+          ...(normalized.batch.contacts
+            ? {
+                contacts: normalized.batch.contacts.filter((contact) =>
+                  historicalContacts.has(contact.contact_id),
+                ),
+              }
+            : {}),
+          ...(normalized.batch.identities
+            ? {
+                identities: normalized.batch.identities.filter((identity) =>
+                  historicalIdentities.has(identity.identity),
+                ),
+              }
+            : {}),
+        });
+        return {
+          kind: "page",
+          gap_free: false,
+          source: account.source,
+          accepted: accepted.length,
+          quarantined: 0,
+          removed: 0,
+          complete: normalized.batch.complete,
+          pagination_complete: normalized.batch.complete,
+          evidence_partial: false,
+          status: normalized.batch.complete ? "current" : "partial",
+          page_hash: normalized.page_hash,
+          ...(mapped.metadata ? { metadata: mapped.metadata } : {}),
         };
       }
       const receipt = await handleSocialSync({

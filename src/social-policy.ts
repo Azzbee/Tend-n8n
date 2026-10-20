@@ -1,3 +1,28 @@
+export interface HistoryScope {
+  version: 1;
+  mode: "all_available";
+}
+export const HISTORY_START = "0001-01-01T00:00:00.000Z";
+export function parseHistoryScope(value: unknown): HistoryScope | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 2 ||
+    !Object.hasOwn(value, "version") ||
+    !Object.hasOwn(value, "mode") ||
+    (value as Record<string, unknown>).version !== 1 ||
+    (value as Record<string, unknown>).mode !== "all_available"
+  )
+    throw new Error("invalid versioned history scope");
+  return { version: 1, mode: "all_available" };
+}
+export function allAvailableHistory(policy: {
+  history?: HistoryScope;
+}): boolean {
+  return parseHistoryScope(policy.history) !== undefined;
+}
 import type { MessagingSource } from "./messaging-records.ts";
 interface AccountBinding {
   account_id: string;
@@ -34,6 +59,7 @@ export type SocialAccount =
   | BusinessWhatsAppAccount
   | LinkedInAccount;
 export interface SocialPolicy {
+  history?: HistoryScope;
   window_days: 30;
   accounts: SocialAccount[];
 }
@@ -139,7 +165,8 @@ export function validatedLinkedInProfileUrl(value: unknown): string {
 export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
   if (input === undefined) return undefined;
   const raw = object(input);
-  keys(raw, ["window_days", "accounts"]);
+  keys(raw, ["window_days", "accounts", "history"]);
+  const history = parseHistoryScope(raw.history);
   if (
     raw.window_days !== 30 ||
     !Array.isArray(raw.accounts) ||
@@ -241,7 +268,7 @@ export function parseSocialPolicy(input: unknown): SocialPolicy | undefined {
     .map((account) => account.owner_identity.replace(/^\+(?=\d+$)/, ""));
   if (new Set(whatsappOwners).size !== whatsappOwners.length)
     throw new Error("duplicate WhatsApp owner identity");
-  return { window_days: 30, accounts };
+  return { ...(history ? { history } : {}), window_days: 30, accounts };
 }
 export function socialAccount(
   policy: SocialPolicy,
@@ -281,10 +308,16 @@ export function assertSocialRead(
     throw new Error("social operation denied; reads only");
   return account;
 }
-export function socialWindow(now: Date): { start: string; end: string } {
+export function socialWindow(
+  now: Date,
+  policy?: Pick<SocialPolicy, "history">,
+): { start: string; end: string } {
   if (!Number.isFinite(now.getTime())) throw new Error("invalid social clock");
   return {
-    start: new Date(now.getTime() - 30 * 86400000).toISOString(),
+    start:
+      policy && allAvailableHistory(policy)
+        ? HISTORY_START
+        : new Date(now.getTime() - 30 * 86400000).toISOString(),
     end: now.toISOString(),
   };
 }

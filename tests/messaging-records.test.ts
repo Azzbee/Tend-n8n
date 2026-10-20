@@ -1238,3 +1238,31 @@ describe("LinkedIn raw activity compatibility", () => {
     ).toBe("expired");
   });
 });
+
+describe("approved historical message normalization", () => {
+  const history = { version: 1, mode: "all_available" } as const;
+  it("retains old authenticated messages only under explicit history scope and still rejects future data", () => {
+    const old = { ...msg(), timestamp: "2020-01-01T12:00:00Z" };
+    expect(normalizeUnipileMessage(old, ctx, "whatsapp_personal").kind).toBe(
+      "expired",
+    );
+    expect(
+      normalizeUnipileMessage(old, { ...ctx, history }, "whatsapp_personal")
+        .kind,
+    ).toBe("accepted");
+    expect(
+      normalizeUnipileMessage(
+        { ...old, timestamp: "2027-01-01T12:00:00Z" },
+        { ...ctx, history },
+        "whatsapp_personal",
+      ).kind,
+    ).toBe("quarantined");
+    expect(
+      normalizeUnipileMessage(
+        old,
+        { ...ctx, history: { version: 2, mode: "all_available" } as never },
+        "whatsapp_personal",
+      ).kind,
+    ).toBe("quarantined");
+  });
+});

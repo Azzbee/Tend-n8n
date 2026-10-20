@@ -14,6 +14,8 @@ import {
   type MessagingResult,
 } from "./messaging-records.ts";
 import {
+  parseHistoryScope,
+  type HistoryScope,
   socialAccount,
   type BusinessWhatsAppAccount,
   type SocialPolicy,
@@ -104,6 +106,7 @@ function boundEnvelope(
 
 export class SocialInbox {
   private readonly pool: Pool;
+  private readonly history: HistoryScope | undefined;
   private readonly principal: Principal;
   private readonly account: BusinessWhatsAppAccount;
   private readonly maxBodyBytes: number;
@@ -114,6 +117,7 @@ export class SocialInbox {
     account: BusinessWhatsAppAccount,
   ) {
     this.pool = pool;
+    this.history = parseHistoryScope(options.policy.history);
     this.principal = { ...options.principal };
     this.account = account;
     this.maxBodyBytes = options.max_body_bytes;
@@ -279,6 +283,7 @@ export class SocialInbox {
       );
       const results = normalizeMetaWebhook(envelope, {
         principal_id: this.principal.owner_id,
+        ...(this.history ? { history: this.history } : {}),
         account_id: this.account.account_id,
         owner_identity: this.account.owner_identity,
         now,
@@ -294,7 +299,7 @@ export class SocialInbox {
       });
       let expires = now.getTime() + 86400000;
       for (const result of results)
-        if (result.kind === "accepted")
+        if (result.kind === "accepted" && !this.history)
           expires = Math.min(
             expires,
             Date.parse(result.record.occurred_at) + 30 * 86400000,

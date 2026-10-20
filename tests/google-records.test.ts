@@ -1157,3 +1157,39 @@ describe("conservative attribution edge cases", () => {
     });
   });
 });
+
+describe("approved historical Google evidence", () => {
+  const policy = {
+    ...exampleLivePolicy,
+    history: { version: 1, mode: "all_available" } as const,
+  };
+  it("retains old mail and Calendar evidence without granting future messages or calendars", () => {
+    const oldMail = {
+      ...mail(),
+      internalDate: String(Date.parse("2020-01-01T12:00:00Z")),
+    };
+    expect(normalizeGmailMessage(oldMail, context).kind).toBe("expired");
+    expect(normalizeGmailMessage(oldMail, { ...context, policy }).kind).toBe(
+      "accepted",
+    );
+    const oldEvent = {
+      ...event(),
+      start: { dateTime: "2020-01-01T12:00:00Z", timeZone: "Europe/Paris" },
+      end: { dateTime: "2020-01-01T13:00:00Z", timeZone: "Europe/Paris" },
+    };
+    const cal = { ...context, calendar_id: "primary" };
+    expect(normalizeCalendarEvent(oldEvent, cal).kind).toBe("expired");
+    expect(normalizeCalendarEvent(oldEvent, { ...cal, policy }).kind).toBe(
+      "accepted",
+    );
+    expect(
+      normalizeGmailMessage(
+        {
+          ...oldMail,
+          internalDate: String(Date.parse("2027-01-01T12:00:00Z")),
+        },
+        { ...context, policy },
+      ).kind,
+    ).toBe("expired");
+  });
+});

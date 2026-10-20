@@ -865,3 +865,35 @@ it("accepts the bounded 1181-row INBOX export without widening other budgets", (
     }),
   ).toMatchObject({ kind: "quarantined", reason: "provider_payload_limit" });
 });
+
+describe("historical provider read plans", () => {
+  it("accepts a separate history checkpoint without an unsupported year-one after filter", () => {
+    const historical = {
+      ...state(),
+      coverage_start: "0001-01-01T00:00:00.000Z",
+      cursor: "history-next",
+    };
+    expect(() =>
+      planSocialProviderRead(
+        policy,
+        "whatsapp_personal",
+        historical.account_id,
+        historical,
+        "snapshot",
+        now,
+      ),
+    ).toThrow();
+    const p = planSocialProviderRead(
+      { ...policy, history: { version: 1, mode: "all_available" } },
+      "whatsapp_personal",
+      historical.account_id,
+      historical,
+      "snapshot",
+      now,
+    );
+    expect(p.kind).toBe("request");
+    if (p.kind !== "request") throw new Error("expected request");
+    expect(new URL(p.url).searchParams.has("after")).toBe(false);
+    expect(new URL(p.url).searchParams.get("cursor")).toBe("history-next");
+  });
+});

@@ -396,3 +396,20 @@ it("allows only one independently provider-verified owner profile per account", 
     }),
   ).toThrow("multiple provider owner profiles");
 });
+
+describe("explicit social history scope", () => {
+  it("keeps legacy windows but accepts only exact versioned all-history capability", () => {
+    const history = { version: 1, mode: "all_available" } as const;
+    const parsed = parseSocialPolicy({ ...example, history })!;
+    expect(parsed.history).toEqual(history);
+    expect(socialWindow(new Date("2026-10-14T12:00:00Z"), parsed).start).toBe(
+      "0001-01-01T00:00:00.000Z",
+    );
+    for (const bad of [
+      null,
+      { version: 2, mode: "all_available" },
+      { version: 1, mode: "all_available", extra: true },
+    ])
+      expect(() => parseSocialPolicy({ ...example, history: bad })).toThrow();
+  });
+});

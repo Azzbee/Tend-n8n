@@ -1,7 +1,8 @@
 import type { NormalizedRecord, Source } from "./engine.ts";
 import { createHash } from "node:crypto";
 import {
-  calendarWindow,
+  calendarHistoryWindow,
+  messageHistoryStart,
   validateLivePolicy,
   type LivePolicy,
   type VerifiedContactGroup,
@@ -360,7 +361,7 @@ function draftEligible(
   )
     return false;
   if (record.source === "calendar") {
-    const window = calendarWindow(policy, now);
+    const window = calendarHistoryWindow(policy, now);
     const allowed =
       policy.calendar_ids.includes(record.account_id) ||
       policy.manual_calendar_snapshots?.some(
@@ -384,7 +385,8 @@ function draftEligible(
         );
   return Boolean(
     accountAllowed &&
-    Date.parse(record.occurred_at) >= now.getTime() - 30 * 86400000 &&
+    Date.parse(record.occurred_at) >=
+      Date.parse(messageHistoryStart(policy, record.source, now)) &&
     Date.parse(record.occurred_at) <= now.getTime(),
   );
 }

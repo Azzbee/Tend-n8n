@@ -1,12 +1,18 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Contact, Identity } from "./engine.ts";
 import type { LiveRecord } from "./google-records.ts";
-import { validatedLinkedInProfileUrl } from "./social-policy.ts";
+import {
+  allAvailableHistory,
+  HISTORY_START,
+  type HistoryScope,
+  validatedLinkedInProfileUrl,
+} from "./social-policy.ts";
 import { authoredSpans } from "./authored-promises.ts";
 export type MessagingSource =
   "whatsapp_personal" | "whatsapp_business" | "linkedin";
 export type MessagingProvider = "unipile" | "meta" | "linkedin";
 export interface MessagingContext {
+  history?: HistoryScope;
   principal_id: string;
   account_id: string;
   owner_identity: string;
@@ -227,7 +233,9 @@ function message(
   context: MessagingContext,
 ): MessagingResult {
   const { source, provider, recordId, threadId, actor, when } = fields;
-  const start = new Date(context.now.getTime() - 30 * 86400000).toISOString();
+  const start = allAvailableHistory(context)
+    ? HISTORY_START
+    : new Date(context.now.getTime() - 30 * 86400000).toISOString();
   if (when.getTime() < Date.parse(start))
     return reject(
       source,
@@ -813,7 +821,10 @@ export function normalizeLinkedInSnapshot(
       throw new Error("foreign_account");
     const raw = obj(input);
     const when = instant(raw.DATE);
-    if (when.getTime() < context.now.getTime() - 30 * 86400000)
+    if (
+      !allAvailableHistory(context) &&
+      when.getTime() < context.now.getTime() - 30 * 86400000
+    )
       return reject(
         "linkedin",
         context,

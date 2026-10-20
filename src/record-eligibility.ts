@@ -1,5 +1,10 @@
 import type { NormalizedRecord, SourceState } from "./engine.ts";
-import { calendarWindow, type LivePolicy } from "./live-policy.ts";
+import {
+  calendarWindow,
+  calendarHistoryWindow,
+  messageHistoryStart,
+  type LivePolicy,
+} from "./live-policy.ts";
 export function eligibleRecords(
   records: NormalizedRecord[],
   now: Date,
@@ -7,8 +12,14 @@ export function eligibleRecords(
   states: SourceState[],
   owner: string,
   enforcePolicy: boolean,
+  purpose: "history" | "current" = "current",
 ): NormalizedRecord[] {
-  const window = calendarWindow(policy, now);
+  const window =
+    purpose === "history"
+      ? calendarHistoryWindow(policy, now)
+      : calendarWindow(policy, now);
+  const mailStart = Date.parse(messageHistoryStart(policy, "gmail", now));
+  const socialStart = Date.parse(messageHistoryStart(policy, "linkedin", now));
   return records.filter(
     (r) =>
       r.owner_id === owner &&
@@ -42,9 +53,10 @@ export function eligibleRecords(
       ) &&
       ["live", "snapshot"].includes(r.ingestion_mode) &&
       (r.source === "calendar"
-        ? Date.parse(r.end_at ?? r.occurred_at) > now.getTime() &&
+        ? Date.parse(r.end_at ?? r.occurred_at) > Date.parse(window.start) &&
           Date.parse(r.occurred_at) < Date.parse(window.end)
-        : Date.parse(r.occurred_at) >= now.getTime() - 30 * 86400000 &&
+        : Date.parse(r.occurred_at) >=
+            (r.source === "gmail" ? mailStart : socialStart) &&
           Date.parse(r.occurred_at) <= now.getTime()),
   );
 }

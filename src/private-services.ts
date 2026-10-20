@@ -3,7 +3,11 @@ import { statfs } from "node:fs/promises";
 import { Pool, type PoolConfig } from "pg";
 import type { Contact, NormalizedRecord, SourceState } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
-import type { LivePolicy, VerifiedContactGroup } from "./live-policy.ts";
+import {
+  allAvailableHistory,
+  type LivePolicy,
+  type VerifiedContactGroup,
+} from "./live-policy.ts";
 import { eligibleRecords } from "./record-eligibility.ts";
 import {
   localNormalModel,
@@ -95,13 +99,15 @@ export function createPrivateServices(options: {
         .update(JSON.stringify(policy))
         .digest("hex"),
       eligible: (record, states, now) =>
-        eligibleRecords([record], now, policy, states, owner, true).length ===
-        1,
-      expiresAt: (record) =>
+        eligibleRecords([record], now, policy, states, owner, true, "history")
+          .length === 1,
+      expiresAt: (record, now) =>
         new Date(
-          record.source === "calendar"
-            ? (record.end_at ?? record.occurred_at)
-            : Date.parse(record.occurred_at) + 30 * 86400000,
+          allAvailableHistory(policy)
+            ? now.getTime() + 30 * 86400000
+            : record.source === "calendar"
+              ? (record.end_at ?? record.occurred_at)
+              : Date.parse(record.occurred_at) + 30 * 86400000,
         ),
     },
     resources: async () => {
@@ -181,6 +187,7 @@ export function createPrivateServices(options: {
       await store.sourceStatus(owner),
       owner,
       true,
+      "history",
     ).filter(
       (record) =>
         (!ids ||
@@ -219,6 +226,7 @@ export function createPrivateServices(options: {
         text: "Read semantic search",
       },
       prepared,
+      policy,
     );
     if (JSON.stringify(checked) !== JSON.stringify(prepared.reply))
       throw new Error("Search evidence changed");

@@ -11,6 +11,8 @@ import {
   type MessagingSource,
 } from "./messaging-records.ts";
 import {
+  allAvailableHistory,
+  HISTORY_START,
   socialAccount,
   socialWindow,
   type SocialPolicy,
@@ -34,6 +36,7 @@ export interface SocialSyncRequest {
   reconcile: boolean;
 }
 export interface SocialSyncContext {
+  history_watermark?: string;
   principal_id: string;
   now: Date;
   authenticated: MessagingContext["authenticated"];
@@ -171,15 +174,24 @@ export function normalizeSocialBatch(
     !Number.isFinite(now) ||
     end > now ||
     end < start ||
-    end - start > 30 * 86400000
+    (!allAvailableHistory(policy) && end - start > 30 * 86400000) ||
+    start < Date.parse(HISTORY_START)
   )
     throw new Error("unapproved social window");
-  if (end < now - 30 * 86400000) throw new Error("expired social window");
+  if (!allAvailableHistory(policy) && end < now - 30 * 86400000)
+    throw new Error("expired social window");
+  if (
+    context.history_watermark !== undefined &&
+    (!allAvailableHistory(policy) ||
+      context.history_watermark !== request.coverage_end)
+  )
+    throw new Error("invalid history normalization watermark");
   const canonical = stable(request);
   const page_hash = createHash("sha256")
     .update(JSON.stringify([context.principal_id, canonical]))
     .digest("hex");
   const normalizeContext: MessagingContext = {
+    ...(policy.history ? { history: policy.history } : {}),
     principal_id: context.principal_id,
     account_id: account.account_id,
     owner_identity: account.owner_identity,
@@ -238,6 +250,7 @@ export function normalizeSocialBatch(
   for (const result of results) {
     if (result.kind === "accepted") {
       const occurred = Date.parse(result.record.occurred_at);
+      if (occurred > end && context.history_watermark !== undefined) continue;
       if (occurred < start || occurred > end) {
         quarantines.push({
           source_record_id: result.record.source_record_id,

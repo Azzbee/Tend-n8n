@@ -433,3 +433,81 @@ it("normalizes and replays1181LinkedIn URL rows inside the existing node budget"
     ),
   ).toThrow("social page limit");
 });
+
+describe("historical social pages", () => {
+  it("requires explicit history capability for old coverage and keeps authenticated provider checks", () => {
+    const historical = {
+      ...request(),
+      coverage_start: "0001-01-01T00:00:00.000Z",
+      items: [{ ...message(), timestamp: "2020-01-01T12:00:00Z" }],
+    };
+    expect(() => normalizeSocialBatch(policy, historical, context)).toThrow();
+    const approved = {
+      ...policy,
+      history: { version: 1, mode: "all_available" } as const,
+    };
+    expect(
+      normalizeSocialBatch(approved, historical, context).batch.records,
+    ).toHaveLength(1);
+    expect(() =>
+      normalizeSocialBatch(
+        approved,
+        { ...historical, coverage_end: "2027-01-01T12:00:00.000Z" },
+        context,
+      ),
+    ).toThrow();
+    expect(() =>
+      normalizeSocialBatch(approved, historical, {
+        ...context,
+        authenticated: { provider: "unipile", account_id: "foreign" },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("historical frozen watermark", () => {
+  it("defers post-watermark records to incremental ingestion only in the explicit history lane", () => {
+    const approved = {
+      ...policy,
+      history: { version: 1, mode: "all_available" } as const,
+    };
+    const historical = {
+      ...request(),
+      coverage_start: "0001-01-01T00:00:00.000Z",
+      coverage_end: "2026-10-12T12:00:00.000Z",
+    };
+    expect(
+      normalizeSocialBatch(approved, historical, context).batch
+        .evidence_incomplete,
+    ).toBe(true);
+    const deferred = normalizeSocialBatch(approved, historical, {
+      ...context,
+      history_watermark: historical.coverage_end,
+    });
+    expect(deferred.batch.records).toEqual([]);
+    expect(deferred.batch.quarantines).toEqual([]);
+    expect(deferred.batch.evidence_incomplete).toBe(false);
+    expect(() =>
+      normalizeSocialBatch(policy, historical, {
+        ...context,
+        history_watermark: historical.coverage_end,
+      }),
+    ).toThrow();
+    expect(() =>
+      normalizeSocialBatch(approved, historical, {
+        ...context,
+        history_watermark: context.now.toISOString(),
+      }),
+    ).toThrow();
+    expect(
+      normalizeSocialBatch(
+        approved,
+        {
+          ...historical,
+          items: [{ ...message(), timestamp: "2027-01-01T12:00:00Z" }],
+        },
+        { ...context, history_watermark: historical.coverage_end },
+      ).batch.evidence_incomplete,
+    ).toBe(true);
+  });
+});

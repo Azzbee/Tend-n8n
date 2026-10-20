@@ -1,4 +1,16 @@
-import { parseSocialPolicy, type SocialPolicy } from "./social-policy.ts";
+import {
+  parseSocialPolicy,
+  parseHistoryScope,
+  allAvailableHistory,
+  HISTORY_START,
+  type HistoryScope,
+  type SocialPolicy,
+} from "./social-policy.ts";
+export {
+  allAvailableHistory,
+  HISTORY_START,
+  type HistoryScope,
+} from "./social-policy.ts";
 import type { Source } from "./engine.ts";
 export interface VerifiedContactMember {
   contact_id: string;
@@ -16,6 +28,7 @@ export interface VerifiedContactGroup {
 }
 /** Private operator input only. This tracked example has fictional identities. */
 export interface LivePolicy {
+  history?: HistoryScope;
   social?: SocialPolicy;
   verified_contact_groups?: VerifiedContactGroup[];
   manual_calendar_snapshots?: {
@@ -85,6 +98,7 @@ export function parseLivePolicy(input: unknown): LivePolicy {
   const value = object(input);
   const keys = [
     "social",
+    "history",
     "verified_contact_groups",
     "manual_calendar_snapshots",
     "principal_id",
@@ -138,8 +152,12 @@ export function parseLivePolicy(input: unknown): LivePolicy {
     !aliases.includes(account)
   )
     throw new Error("invalid verified account/aliases");
+  const history = parseHistoryScope(value.history);
   const social = parseSocialPolicy(value.social);
+  if (social?.history && !history)
+    throw new Error("social history exceeds live policy scope");
   const policy: LivePolicy = {
+    ...(history ? { history } : {}),
     ...(social ? { social } : {}),
     principal_id: nonempty(value.principal_id),
     account_email: account,
@@ -442,7 +460,9 @@ export function gmailWindow(policy: LivePolicy, now: Date): LiveWindow {
   validateLivePolicy(policy);
   validNow(now);
   return {
-    start: new Date(now.getTime() - 30 * 86_400_000).toISOString(),
+    start: allAvailableHistory(policy)
+      ? HISTORY_START
+      : new Date(now.getTime() - 30 * 86_400_000).toISOString(),
     end: now.toISOString(),
   };
 }
@@ -488,4 +508,31 @@ export function calendarWindow(policy: LivePolicy, now: Date): LiveWindow {
   )
     end.setUTCMilliseconds(now.getUTCMilliseconds());
   return { start: now.toISOString(), end: end.toISOString() };
+}
+
+export function calendarHistoryWindow(
+  policy: LivePolicy,
+  now: Date,
+): LiveWindow {
+  const upcoming = calendarWindow(policy, now);
+  return {
+    start: allAvailableHistory(policy) ? HISTORY_START : upcoming.start,
+    end: upcoming.end,
+  };
+}
+
+export function messageHistoryStart(
+  policy: LivePolicy,
+  source: Source,
+  now: Date,
+): string {
+  validateLivePolicy(policy);
+  validNow(now);
+  const history =
+    source === "gmail"
+      ? allAvailableHistory(policy)
+      : Boolean(policy.social && allAvailableHistory(policy.social));
+  return history
+    ? HISTORY_START
+    : new Date(now.getTime() - 30 * 86400000).toISOString();
 }

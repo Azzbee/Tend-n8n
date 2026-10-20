@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertGoogleRead,
   calendarWindow,
+  calendarHistoryWindow,
+  HISTORY_START,
   exampleLivePolicy,
   gmailWindow,
   parseLivePolicy,
@@ -299,4 +301,34 @@ it("preserves colon-containing LinkedIn account namespaces and rejects canonical
     "linkedin:urn:li:person:owner:",
   ])
     expect(() => parse(identity)).toThrow();
+});
+
+describe("approved history policy", () => {
+  const now = new Date("2026-10-24T12:00:00Z");
+  const history = { version: 1, mode: "all_available" } as const;
+  it("accepts only the exact versioned extension and keeps legacy windows strict", () => {
+    const policy = parseLivePolicy({ ...exampleLivePolicy, history });
+    expect(policy.history).toEqual(history);
+    expect(gmailWindow(policy, now).start).toBe(HISTORY_START);
+    expect(calendarHistoryWindow(policy, now)).toEqual({
+      start: HISTORY_START,
+      end: calendarWindow(policy, now).end,
+    });
+    expect(calendarWindow(policy, now).start).toBe(now.toISOString());
+    expect(calendarHistoryWindow(exampleLivePolicy, now)).toEqual(
+      calendarWindow(exampleLivePolicy, now),
+    );
+    for (const bad of [
+      { version: 2, mode: "all_available" },
+      { version: 1, mode: "all" },
+      { version: 1, mode: "all_available", extra: true },
+      null,
+    ])
+      expect(() =>
+        parseLivePolicy({ ...exampleLivePolicy, history: bad }),
+      ).toThrow();
+    expect(() =>
+      parseLivePolicy({ ...exampleLivePolicy, history, mail_window_days: 365 }),
+    ).toThrow();
+  });
 });

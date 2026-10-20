@@ -4,6 +4,8 @@ import {
   assertSocialRead,
   socialAccount,
   socialWindow,
+  allAvailableHistory,
+  HISTORY_START,
   type SocialPolicy,
 } from "./social-policy.ts";
 import type { SocialSyncRequest } from "./social-sync.ts";
@@ -211,7 +213,7 @@ export function planSocialProviderRead(
     };
   const window =
     phase === "identity"
-      ? socialWindow(now)
+      ? socialWindow(now, policy)
       : {
           start: state.coverage_start,
           end: state.coverage_end,
@@ -221,8 +223,9 @@ export function planSocialProviderRead(
   if (
     start > end ||
     end > when ||
-    end - start > 30 * 86400000 ||
-    end < when - 30 * 86400000
+    start < Date.parse(HISTORY_START) ||
+    (!allAvailableHistory(policy) &&
+      (end - start > 30 * 86400000 || end < when - 30 * 86400000))
   )
     throw new Error("unapproved_provider_window");
   if (phase !== "identity" && state.cursor !== null) token(state.cursor);
@@ -259,7 +262,8 @@ export function planSocialProviderRead(
     if (phase !== "identity") {
       url.searchParams.set("account_id", accountId);
       url.searchParams.set("limit", String(count));
-      url.searchParams.set("after", new Date(start - 1).toISOString());
+      if (start > Date.parse(HISTORY_START))
+        url.searchParams.set("after", new Date(start - 1).toISOString());
       url.searchParams.set("before", new Date(end + 1).toISOString());
       if (state.cursor !== null) url.searchParams.set("cursor", state.cursor);
     }

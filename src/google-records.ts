@@ -10,7 +10,7 @@ import {
 import type { Contact, Identity, RawRecord } from "./engine.ts";
 import {
   assertGoogleRead,
-  calendarWindow,
+  calendarHistoryWindow,
   gmailWindow,
   zonedLocalInstant,
   validateLivePolicy,
@@ -969,7 +969,7 @@ function normalizeCalendarFields(
   input: unknown,
   context: NormalizationContext,
 ): NormalizationResult {
-  const window = calendarWindow(context.policy, context.now);
+  const window = calendarHistoryWindow(context.policy, context.now);
   try {
     const raw = object(input),
       source_record_id = id(raw.id);
