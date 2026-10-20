@@ -1,3 +1,5 @@
+import { createPrivateWebHandler } from "./private-web.ts";
+import type { PrivateSemanticSearch } from "./private-web-types.ts";
 import { SocialReadSessions } from "./social-read-session.ts";
 import { randomUUID } from "node:crypto";
 import { eligiblePromiseSpans } from "./authored-promises.ts";
@@ -30,6 +32,7 @@ import type { LiveStore } from "./live-store.ts";
 import {
   prepareNormalReply,
   type NormalModel,
+  type NormalSemanticSearch,
   type PreparedTelegramRead,
 } from "./telegram-normal.ts";
 
@@ -39,6 +42,8 @@ export interface LiveServerOptions {
   store: TendStore | LiveStore;
   clock?: () => Date;
   normalModel?: NormalModel;
+  normalSemanticSearch?: NormalSemanticSearch;
+  privateSemanticSearch?: PrivateSemanticSearch;
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
@@ -188,6 +193,17 @@ export function createLiveServer(options: LiveServerOptions): Server {
       return undefined;
     }
   };
+  const privateWeb = createPrivateWebHandler({
+    store,
+    policy,
+    clock,
+    ready,
+    resolveGroup,
+    ...(options.normalModel ? { normalModel: options.normalModel } : {}),
+    ...(options.privateSemanticSearch
+      ? { semanticSearch: options.privateSemanticSearch }
+      : {}),
+  });
   return createServer(async (req, res) => {
     const respond = (status: number, data: unknown) => {
       if (res.destroyed || res.writableEnded) return;
@@ -223,6 +239,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
       respond(403, { error: "Rejected" });
       return;
     }
+    if (await privateWeb(req, res)) return;
     if (url.pathname === "/setup") {
       if (auth.ready()) {
         respond(404, { error: "Setup closed" });
@@ -971,6 +988,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
             else {
               try {
                 prepared = await prepareNormalReply({
+                  ...(options.normalSemanticSearch
+                    ? { semanticSearch: options.normalSemanticSearch }
+                    : {}),
                   auth: envelope,
                   store,
                   ...(options.normalModel

@@ -5,3 +5,4 @@ bun.lock
 CLAUDE.md
 AGENTS.md
 evidence/*.log
+web/private/app.js

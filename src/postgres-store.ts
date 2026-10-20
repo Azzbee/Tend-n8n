@@ -1,3 +1,8 @@
+import type {
+  PrivateHistoryQuery,
+  PrivateHistoryPage,
+  PrivateContactActivity,
+} from "./private-web-types.ts";
 import {
   Pool,
   type PoolClient,
@@ -727,6 +732,170 @@ export class PostgresStore implements LiveStore {
         .map((x) => JSON.stringify(x.reply_data))
         .join("\n"),
     );
+  }
+  async validatePreparedRead(
+    auth: AuthCommand,
+    prepared: PreparedTelegramRead,
+  ): Promise<Reply> {
+    this.authorize(auth);
+    return this.run(async (s) =>
+      validatePreparedTelegramReply(
+        auth.owner_id,
+        prepared,
+        await s.interactions(auth.owner_id),
+        await s.contacts(auth.owner_id),
+        await s.commitments(auth.owner_id),
+        await s.sourceStatus(auth.owner_id),
+        s.clock(),
+      ),
+    );
+  }
+  async privateContacts(
+    owner: string,
+    query: string,
+    after: string,
+    limit: number,
+  ): Promise<(Contact & { emails: string[] })[]> {
+    this.owner(owner);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 51)
+      throw new Error("Invalid page limit");
+    return this.run(async (s) => {
+      const rows = await s.q<Contact & QueryResultRow>(
+        "SELECT c.* FROM live_contacts c WHERE c.owner_id=$1 AND c.contact_id<>'OWNER' AND c.contact_id>$2 AND (position(lower($3) in lower(c.name))>0 OR EXISTS(SELECT 1 FROM live_identities i WHERE i.owner_id=c.owner_id AND i.contact_id=c.contact_id AND position(lower($3) in lower(i.identity))>0)) ORDER BY c.contact_id LIMIT $4",
+        [owner, after, query, Math.min(51, limit)],
+      );
+      const out: (Contact & { emails: string[] })[] = [];
+      for (const c of rows)
+        out.push({
+          ...c,
+          emails: (
+            await s.q<{ identity: string }>(
+              "SELECT identity FROM live_identities WHERE owner_id=$1 AND contact_id=$2 ORDER BY identity",
+              [owner, c.contact_id],
+            )
+          ).map((i) => i.identity),
+        });
+      return out;
+    });
+  }
+  async privateHistory(
+    owner: string,
+    query: PrivateHistoryQuery,
+  ): Promise<PrivateHistoryPage> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 51)
+        throw new Error("Invalid page limit");
+      const values: unknown[] = [owner];
+      let where =
+        "r.owner_id=$1 AND NOT r.cancelled AND r.ingestion_mode IN ('live','snapshot')";
+      const value = (v: unknown): string => {
+        values.push(v);
+        return "$" + values.length;
+      };
+      if (query.contact_ids.length)
+        where +=
+          " AND (r.contact_id=ANY(" +
+          value(query.contact_ids) +
+          "::text[]) OR r.contact_ids && " +
+          value(query.contact_ids) +
+          "::text[])";
+      where +=
+        " AND (EXISTS(SELECT 1 FROM jsonb_array_elements(" +
+        value(JSON.stringify(query.accounts)) +
+        "::jsonb) a WHERE a->>'source'=r.source AND a->>'account_id'=r.account_id) OR (r.source='calendar' AND EXISTS(SELECT 1 FROM jsonb_array_elements(" +
+        value(JSON.stringify(query.snapshots ?? [])) +
+        "::jsonb) snap WHERE snap->>'calendar_id'=r.account_id AND snap->>'event_id'=r.source_record_id)))";
+      if (query.members)
+        where +=
+          " AND EXISTS(SELECT 1 FROM jsonb_array_elements(" +
+          value(JSON.stringify(query.members)) +
+          "::jsonb) m WHERE m->>'source'=r.source AND m->>'account_id'=r.account_id AND (m->>'contact_id'=r.contact_id OR m->>'contact_id'=ANY(r.contact_ids)))";
+      where +=
+        " AND EXISTS(SELECT 1 FROM live_accounts a WHERE a.owner_id=r.owner_id AND a.source=r.source AND a.account_id=r.account_id AND a.state->>'status'<>'revoked')";
+      const now = value(query.now),
+        end = value(query.calendar_end),
+        start = value(query.message_start);
+      where +=
+        " AND ((r.source='calendar' AND coalesce(r.end_at,r.occurred_at)>" +
+        now +
+        " AND r.occurred_at<" +
+        end +
+        ") OR (r.source<>'calendar' AND r.occurred_at>=" +
+        start +
+        " AND r.occurred_at<=" +
+        now +
+        "))";
+      for (const term of query.terms ?? [])
+        where +=
+          " AND position(lower(" + value(term) + ") in lower(r.body_text))>0";
+      if (query.source) where += " AND r.source=" + value(query.source);
+      if (query.direction)
+        where += " AND r.direction=" + value(query.direction);
+      if (query.from) where += " AND r.occurred_at>=" + value(query.from);
+      if (query.to) where += " AND r.occurred_at<" + value(query.to);
+      const summary = (
+        await s.q<{ total: string; revision: string }>(
+          "SELECT count(*)::text total,md5(coalesce(string_agg(r.record_key || ':' || r.content_hash,'|' ORDER BY r.record_key),'')) revision FROM live_records r WHERE " +
+            where,
+          values,
+        )
+      )[0]!;
+      let activity: Record<string, PrivateContactActivity> | undefined;
+      if (query.activity_for) {
+        if (query.activity_for.length > 50)
+          throw new Error("Too many activity selectors");
+        activity = Object.fromEntries(
+          query.activity_for.map((a) => [
+            a.selector,
+            { count: 0, last_at: null, sources: [] },
+          ]),
+        );
+        const aggregate = await s.q<{
+          selector: string;
+          count: string;
+          last_at: string;
+          sources: Source[];
+        }>(
+          "SELECT a->>'selector' selector,count(*)::text count,max(r.occurred_at) last_at,array_agg(DISTINCT r.source ORDER BY r.source) sources FROM live_records r JOIN jsonb_array_elements($" +
+            (values.length + 1) +
+            "::jsonb) a ON (r.contact_id IN (SELECT jsonb_array_elements_text(a->'contact_ids')) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(a->'contact_ids') ids WHERE ids=ANY(r.contact_ids))) AND (NOT a ? 'members' OR EXISTS(SELECT 1 FROM jsonb_array_elements(a->'members') m WHERE m->>'source'=r.source AND m->>'account_id'=r.account_id AND (m->>'contact_id'=r.contact_id OR m->>'contact_id'=ANY(r.contact_ids)))) WHERE " +
+            where +
+            " GROUP BY a->>'selector'",
+          [...values, JSON.stringify(query.activity_for)],
+        );
+        for (const row of aggregate)
+          activity[row.selector] = {
+            count: Number(row.count),
+            last_at: row.last_at,
+            sources: row.sources,
+          };
+      }
+      if (query.after) {
+        const t = value(query.after.occurred_at);
+        where +=
+          " AND (r.occurred_at<" +
+          t +
+          " OR (r.occurred_at=" +
+          t +
+          " AND r.record_key>" +
+          value(query.after.record_key) +
+          "))";
+      }
+      const rows = await s.q(
+        "SELECT r.* FROM live_records r WHERE " +
+          where +
+          " ORDER BY r.occurred_at DESC,r.record_key LIMIT " +
+          value(Math.min(51, query.limit)),
+        values,
+      );
+      return {
+        records: rows.map((r) => s.record(r)),
+        total: Number(summary.total),
+        revision: summary.revision,
+        ...(activity ? { activity } : {}),
+      };
+    });
   }
   async contacts(
     owner: string,

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Tend · Private workspace</title>
+    <link rel="stylesheet" href="/private/styles.css" />
+    <script src="/private/app.js" type="module"></script>
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to workspace</a>
+    <header class="topbar">
+      <a href="/private" class="brand" aria-label="Tend home"
+        ><span aria-hidden="true">✳</span> tend<span class="device-label"
+          >PRIVATE DEVICE</span
+        ></a
+      >
+      <span id="session-status" class="session-status"
+        >Local access · locked</span
+      >
+      <button id="lock" class="quiet" hidden>Lock workspace</button>
+    </header>
+    <main id="main">
+      <section id="locked" class="locked">
+        <div class="eyebrow">YOUR RELATIONSHIPS, IN CONTEXT</div>
+        <h1>A little more<br />presence.</h1>
+        <p>
+          Your private workspace lives on this laptop. Unlock to browse imported
+          conversations, prepare a briefing and review a draft.
+        </p>
+        <form action="/private/unlock" method="post">
+          <input type="hidden" name="nonce" value="__TEND_NONCE__" />
+          <button type="submit" class="primary">
+            Unlock this device for 30 minutes <span aria-hidden="true">↗</span>
+          </button>
+        </form>
+        <p class="small">
+          Read and prepare only. Nothing is sent to your contacts.
+        </p>
+      </section>
+      <div id="workspace" hidden>
+        <section class="workspace-intro">
+          <div>
+            <div class="eyebrow">RELATIONSHIP WORKSPACE</div>
+            <h1>Stay close.</h1>
+            <p id="freshness">Your imported context, with its sources.</p>
+          </div>
+          <div class="pixel-scene">
+            <canvas
+              id="pixel-art"
+              role="img"
+              aria-label="Two pixel silhouettes linked by a shared thread"
+            ></canvas
+            ><button id="pixel-motion" class="motion quiet" hidden>
+              Pause motion
+            </button>
+          </div>
+        </section>
+        <form id="search-form" class="searchbar" role="search">
+          <label class="sr-only" for="search-query"
+            >Search imported conversations</label
+          >
+          <input
+            id="search-query"
+            type="search"
+            maxlength="500"
+            placeholder="Find the conversation behind a thought…"
+            required
+          />
+          <label class="sr-only" for="search-mode">Search mode</label>
+          <select id="search-mode">
+            <option value="semantic">Semantic</option>
+            <option value="keyword">Keyword</option>
+          </select>
+          <button class="primary" type="submit">
+            Search <span aria-hidden="true">↗</span>
+          </button>
+        </form>
+        <p
+          id="notice"
+          class="notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+        <div class="workspace-grid">
+          <aside class="contacts-panel" aria-label="Contacts">
+            <div class="panel-heading">
+              <h2>People</h2>
+              <span id="contact-count" class="count"></span>
+            </div>
+            <form id="contact-form">
+              <label class="sr-only" for="contact-query">Find a contact</label
+              ><input
+                id="contact-query"
+                type="search"
+                maxlength="200"
+                placeholder="Name or email"
+              /><button class="quiet" type="submit">Find</button>
+            </form>
+            <p class="small identity-note">
+              Names stay separate unless a verified link connects them.
+            </p>
+            <div id="contacts" class="contact-list"></div>
+            <button id="more-contacts" class="quiet load-more" hidden>
+              More people
+            </button>
+          </aside>
+          <section class="history-panel" aria-labelledby="history-title">
+            <div class="panel-heading">
+              <div>
+                <div id="contact-kicker" class="eyebrow">SELECT A PERSON</div>
+                <h2 id="history-title">A thread of context.</h2>
+              </div>
+              <button id="back-history" class="quiet" hidden>
+                Back to history
+              </button>
+            </div>
+            <p id="contact-identities" class="small"></p>
+            <form id="filters" class="filters" hidden>
+              <label
+                >Source<select id="filter-source">
+                  <option value="">All sources</option>
+                  <option value="gmail">Email</option>
+                  <option value="calendar">Calendar</option>
+                  <option value="whatsapp_personal">WhatsApp personal</option>
+                  <option value="whatsapp_business">WhatsApp business</option>
+                  <option value="linkedin">LinkedIn</option>
+                </select></label
+              >
+              <label
+                >Direction<select id="filter-direction">
+                  <option value="">All directions</option>
+                  <option value="received">Received</option>
+                  <option value="sent">Sent</option>
+                  <option value="event">Meeting</option>
+                </select></label
+              >
+              <label>From<input id="filter-from" type="date" /></label
+              ><label>Before<input id="filter-to" type="date" /></label>
+              <button class="quiet" type="submit">Apply</button>
+            </form>
+            <p id="history-count" class="small">
+              Choose a contact to see their imported history and source
+              coverage.
+            </p>
+            <div
+              id="timeline"
+              class="timeline"
+              tabindex="0"
+              role="region"
+              aria-label="Imported conversation timeline"
+            ></div>
+            <button id="more-history" class="quiet load-more" hidden>
+              Load earlier context
+            </button>
+          </section>
+          <aside class="evidence-panel" aria-label="Evidence and preparation">
+            <div class="panel-heading"><h2>Before you reach out.</h2></div>
+            <p class="small">
+              Prepare with current evidence. Every draft stays here for your
+              review.
+            </p>
+            <div class="ai-actions">
+              <button id="briefing" class="primary" disabled>
+                Prepare briefing</button
+              ><button id="draft" class="quiet" disabled>
+                Write held draft
+              </button>
+            </div>
+            <section id="prepared" class="prepared" hidden>
+              <div class="eyebrow" id="prepared-label">FOR YOUR REVIEW</div>
+              <p id="prepared-status" class="small"></p>
+              <div id="prepared-message"></div>
+              <pre id="draft-text" hidden></pre>
+              <button id="copy-draft" class="quiet" hidden>
+                Check freshness &amp; copy
+              </button>
+              <div id="prepared-evidence"></div>
+            </section>
+            <section class="side-section">
+              <h3>Meetings</h3>
+              <div id="meetings"><p class="small">Select a contact.</p></div>
+            </section>
+            <section class="side-section">
+              <h3>Commitments</h3>
+              <div id="commitments">
+                <p class="small">No contact selected.</p>
+              </div>
+            </section>
+            <details class="side-section" open>
+              <summary>Source coverage</summary>
+              <div id="coverage">
+                <p class="small">Coverage appears with contact history.</p>
+              </div>
+            </details>
+            <p class="small boundary">
+              Private on this device. No contact sends. No task changes.
+            </p>
+          </aside>
+        </div>
+      </div>
+    </main>
+    <footer>
+      tend <span>Less remembering. More being there.</span
+      ><span>Times shown in Paris.</span>
+    </footer>
+  </body>
+</html>

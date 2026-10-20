@@ -1,3 +1,4 @@
+import { createPrivateServices } from "./private-services.ts";
 import { PostgresStore } from "./postgres-store.ts";
 import { createServer } from "node:http";
 import { readFileSync, mkdirSync } from "node:fs";
@@ -366,19 +367,41 @@ async function startLiveServer(): Promise<void> {
   const auth = new InternalAuth(
     process.env.TEND_LIVE_AUTH_FILE ?? ".scratch/live-private/auth.json",
   );
-  const server = createLiveServer({ policy, store, auth });
-  server.listen(18768, "127.0.0.1", () =>
+  const services = createPrivateServices({
+    policy,
+    store,
+    postgres: {
+      host: socket,
+      port: pgPort,
+      database: "tend_coursework",
+      ...(process.env.USER ? { user: process.env.USER } : {}),
+      connectionTimeoutMillis: 5000,
+    },
+  });
+  const server = createLiveServer({
+    policy,
+    store,
+    auth,
+    normalModel: services.normalModel,
+    normalSemanticSearch: services.normalSemanticSearch,
+    privateSemanticSearch: services.privateSemanticSearch,
+  });
+  server.listen(18768, "127.0.0.1", () => {
+    services.start();
     console.log(
       "Private Tend API listening on localhost:18768. Real ingestion requires the configured internal credential.",
-    ),
-  );
+    );
+  });
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.on(signal, () =>
       server.close(() => {
-        void store.close().then(
-          () => process.exit(0),
-          () => process.exit(1),
-        );
+        void services
+          .close()
+          .then(() => store.close())
+          .then(
+            () => process.exit(0),
+            () => process.exit(1),
+          );
       }),
     );
 }

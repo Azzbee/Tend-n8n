@@ -1,3 +1,4 @@
+import { eligibleRecords as eligible } from "./record-eligibility.ts";
 import type {
   AuthCommand,
   Commitment,
@@ -17,7 +18,6 @@ import {
   type PreparedLiveAI,
 } from "./live-ai.ts";
 import {
-  calendarWindow,
   exampleLivePolicy,
   type LivePolicy,
   type VerifiedContactGroup,
@@ -54,6 +54,21 @@ export type NormalModel = (
   request: NormalModelRequest,
   signal: AbortSignal,
 ) => Promise<unknown>;
+export type NormalSemanticSearch = (input: {
+  query: string;
+  records: NormalizedRecord[];
+  signal: AbortSignal;
+}) => Promise<{
+  records: NormalizedRecord[];
+  coverage?: unknown;
+  matches?: {
+    record_key: string;
+    start: number;
+    end: number;
+    text: string;
+    similarity: number;
+  }[];
+}>;
 export type NormalIntent =
   | { intent: "help" }
   | { intent: "status" }
@@ -209,58 +224,11 @@ function localDay(value: string | Date): string {
     .map((k) => parts.find((p) => p.type === k)?.value)
     .join("-");
 }
-function eligible(
-  records: NormalizedRecord[],
-  now: Date,
-  policy: LivePolicy,
-  states: SourceState[],
-  owner: string,
-  enforcePolicy: boolean,
-): NormalizedRecord[] {
-  const window = calendarWindow(policy, now);
-  return records.filter(
-    (r) =>
-      r.owner_id === owner &&
-      !r.cancelled &&
-      (!enforcePolicy ||
-        (r.source === "gmail"
-          ? r.account_id.toLowerCase() === policy.account_email.toLowerCase()
-          : r.source === "calendar"
-            ? policy.calendar_ids.includes(r.account_id) ||
-              Boolean(
-                policy.manual_calendar_snapshots?.some(
-                  (snapshot) =>
-                    snapshot.calendar_id === r.account_id &&
-                    snapshot.event_id === r.source_record_id,
-                ),
-              )
-            : Boolean(
-                policy.social?.accounts.some(
-                  (account) =>
-                    account.source === r.source &&
-                    account.account_id === r.account_id &&
-                    account.owner_verified,
-                ),
-              ))) &&
-      states.some(
-        (s) =>
-          s.owner_id === r.owner_id &&
-          s.source === r.source &&
-          s.account_id === r.account_id &&
-          s.status !== "revoked",
-      ) &&
-      ["live", "snapshot"].includes(r.ingestion_mode) &&
-      (r.source === "calendar"
-        ? Date.parse(r.end_at ?? r.occurred_at) > now.getTime() &&
-          Date.parse(r.occurred_at) < Date.parse(window.end)
-        : Date.parse(r.occurred_at) >= now.getTime() - 30 * 86400000 &&
-          Date.parse(r.occurred_at) <= now.getTime()),
-  );
-}
 export async function prepareNormalReply(input: {
   auth: AuthCommand;
   store: TendStore | LiveStore;
   model?: NormalModel;
+  semanticSearch?: NormalSemanticSearch;
   clock?: () => Date;
   signal?: AbortSignal;
   policy?: LivePolicy;
@@ -477,6 +445,75 @@ export async function prepareNormalReply(input: {
     );
   }
   if (intent.intent === "search") {
+    let semanticUnavailable = false;
+    if (input.semanticSearch) {
+      try {
+        const result = await input.semanticSearch({
+          query: intent.query,
+          records,
+          signal,
+        });
+        // Resolve hits against this request's eligible canonical snapshot.
+        const current = new Map(
+          records.map((record) => [record.record_key, record]),
+        );
+        const seen = new Set<string>();
+        const matches = result.records
+          .flatMap((candidate) => {
+            const record = current.get(candidate.record_key);
+            if (
+              !record ||
+              record.content_hash !== candidate.content_hash ||
+              seen.has(record.record_key)
+            )
+              return [];
+            seen.add(record.record_key);
+            return [record];
+          })
+          .slice(0, 10);
+        return read(
+          {
+            outbound_sent: false,
+            search_mode: "semantic",
+            search_query: intent.query,
+            search_limit: 10,
+            search_results: matches.map((record) => ({
+              date: record.occurred_at,
+              source: record.source,
+              reference: record.evidence_reference,
+              text: (() => {
+                const match = result.matches?.find(
+                  (match) =>
+                    match.record_key === record.record_key &&
+                    Number.isInteger(match.start) &&
+                    Number.isInteger(match.end) &&
+                    match.start >= 0 &&
+                    match.end > match.start &&
+                    match.end <= record.body_text.length &&
+                    record.body_text.slice(match.start, match.end) ===
+                      match.text,
+                );
+                return match
+                  ? match.text.slice(0, 500)
+                  : record.body_text.slice(0, 500);
+              })(),
+              attribution: record.attribution ?? "unknown",
+            })),
+            normal_message: matches.length
+              ? "Imported semantic matches. Similarity does not establish identity."
+              : "No indexed semantic match. Index and account coverage may be partial.",
+            search_note:
+              "Local embedding search over eligible imported evidence; similarity is relevance, not factual confidence.",
+            coverage: state.sources,
+            semantic_coverage: result.coverage,
+          },
+          matches,
+        );
+      } catch {
+        if (signal.aborted) throw signal.reason;
+        semanticUnavailable = true;
+      }
+    }
     const query = normalized(intent.query);
     const terms = [...new Set(query.match(/[\p{L}\p{N}]+/gu) ?? [])].slice(
       0,
@@ -511,6 +548,7 @@ export async function prepareNormalReply(input: {
     return read(
       {
         outbound_sent: false,
+        search_mode: "keyword",
         search_query: intent.query,
         search_limit: 10,
         search_results: ranked.map(({ record }) => ({
@@ -524,6 +562,9 @@ export async function prepareNormalReply(input: {
           ? "Imported keyword matches. People and channels remain separate."
           : "No imported keyword match. This does not establish absence from your accounts.",
         search_note:
+          (semanticUnavailable
+            ? "Semantic search unavailable. Labelled keyword fallback. "
+            : "") +
           "Bounded keyword ranking over the first 16,384 characters of eligible imported records; at most ten results. Not complete semantic search.",
         coverage: state.sources,
       },

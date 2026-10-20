@@ -1,3 +1,9 @@
+import { eligibleRecords } from "./record-eligibility.ts";
+import type {
+  PrivateHistoryQuery,
+  PrivateHistoryPage,
+  PrivateContactActivity,
+} from "./private-web-types.ts";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { canonicalEmail, type LiveRecord } from "./google-records.ts";
@@ -312,24 +318,13 @@ export function validatePreparedTelegramReply(
       canonical({ contacts, commitments, sources: states })
   )
     return fallback;
-  const window = calendarWindow(exampleLivePolicy, now);
-  const current = records.filter(
-    (record) =>
-      record.owner_id === owner &&
-      !record.cancelled &&
-      ["live", "snapshot"].includes(record.ingestion_mode) &&
-      states.some(
-        (state) =>
-          state.owner_id === owner &&
-          state.source === record.source &&
-          state.account_id === record.account_id &&
-          state.status !== "revoked",
-      ) &&
-      (record.source === "calendar"
-        ? Date.parse(record.end_at ?? record.occurred_at) > now.getTime() &&
-          Date.parse(record.occurred_at) < Date.parse(window.end)
-        : Date.parse(record.occurred_at) >= now.getTime() - 30 * 86400000 &&
-          Date.parse(record.occurred_at) <= now.getTime()),
+  const current = eligibleRecords(
+    [...records],
+    now,
+    exampleLivePolicy,
+    states,
+    owner,
+    false,
   );
   if (
     prepared.record_guards.some(
@@ -1452,6 +1447,166 @@ export class TendStore {
       .all(owner)
       .map((x) => String(x.reply_data))
       .join("\n");
+  }
+  validatePreparedRead(
+    auth: AuthCommand,
+    prepared: PreparedTelegramRead,
+  ): Reply {
+    this.authorizeCommand(auth);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const reply = validatePreparedTelegramReply(
+        auth.owner_id,
+        prepared,
+        this.interactions(auth.owner_id),
+        this.contacts(auth.owner_id),
+        this.commitments(auth.owner_id),
+        this.sourceStatus(auth.owner_id),
+        this.clock(),
+      );
+      this.db.exec("COMMIT");
+      return reply;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  privateContacts(
+    owner: string,
+    query: string,
+    after: string,
+    limit: number,
+  ): (Contact & { emails: string[] })[] {
+    this.assertOwner(owner);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 51)
+      throw new Error("Invalid page limit");
+    const rows = this.db
+      .prepare(
+        "SELECT owner_id,contact_id,name FROM contacts WHERE owner_id=? AND contact_id<> 'OWNER' AND contact_id>? AND (lower(name) LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM identities i WHERE i.owner_id=contacts.owner_id AND i.contact_id=contacts.contact_id AND lower(i.identity) LIKE ? ESCAPE '\\')) ORDER BY contact_id LIMIT ?",
+      )
+      .all(
+        owner,
+        after,
+        "%" + query.toLowerCase().replace(/[\\%_]/g, "\\$&") + "%",
+        "%" + query.toLowerCase().replace(/[\\%_]/g, "\\$&") + "%",
+        Math.min(51, limit),
+      ) as unknown as Contact[];
+    return rows.map((c) => ({
+      ...c,
+      emails: this.db
+        .prepare(
+          "SELECT identity FROM identities WHERE owner_id=? AND contact_id=? ORDER BY identity",
+        )
+        .all(owner, c.contact_id)
+        .map((i) => String(i.identity)),
+    }));
+  }
+  privateHistory(
+    owner: string,
+    query: PrivateHistoryQuery,
+  ): PrivateHistoryPage {
+    this.assertOwner(owner);
+    if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 51)
+      throw new Error("Invalid page limit");
+    const values: (string | number)[] = [owner];
+    let where = "owner_id=?";
+    const add = (sql: string, ...v: (string | number)[]): void => {
+      where += " AND " + sql;
+      values.push(...v);
+    };
+    add("json_extract(data,'$.cancelled')=0");
+    add("json_extract(data,'$.ingestion_mode') IN ('live','snapshot')");
+    if (query.contact_ids.length)
+      add(
+        "(json_extract(data,'$.contact_id') IN (SELECT value FROM json_each(?)) OR EXISTS (SELECT 1 FROM json_each(json_extract(data,'$.contact_ids')) ids WHERE ids.value IN (SELECT value FROM json_each(?))))",
+        JSON.stringify(query.contact_ids),
+        JSON.stringify(query.contact_ids),
+      );
+    add(
+      "(EXISTS (SELECT 1 FROM json_each(?) a WHERE json_extract(a.value,'$.source')=interactions.source AND json_extract(a.value,'$.account_id')=interactions.account_id) OR (source='calendar' AND EXISTS(SELECT 1 FROM json_each(?) snap WHERE json_extract(snap.value,'$.calendar_id')=interactions.account_id AND json_extract(snap.value,'$.event_id')=interactions.source_record_id)))",
+      JSON.stringify(query.accounts),
+      JSON.stringify(query.snapshots ?? []),
+    );
+    if (query.members)
+      add(
+        "EXISTS(SELECT 1 FROM json_each(?) m WHERE json_extract(m.value,'$.source')=interactions.source AND json_extract(m.value,'$.account_id')=interactions.account_id AND (json_extract(m.value,'$.contact_id')=json_extract(data,'$.contact_id') OR EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.contact_ids')) ids WHERE ids.value=json_extract(m.value,'$.contact_id'))))",
+        JSON.stringify(query.members),
+      );
+    add(
+      "EXISTS (SELECT 1 FROM live_sources s WHERE s.owner_id=interactions.owner_id AND s.source=interactions.source AND s.account_id=interactions.account_id AND json_extract(s.data,'$.status')<>'revoked')",
+    );
+    add(
+      "((source='calendar' AND coalesce(json_extract(data,'$.end_at'),json_extract(data,'$.occurred_at'))>? AND json_extract(data,'$.occurred_at')<?) OR (source<>'calendar' AND json_extract(data,'$.occurred_at')>=? AND json_extract(data,'$.occurred_at')<=?))",
+      query.now,
+      query.calendar_end,
+      query.message_start,
+      query.now,
+    );
+    for (const term of query.terms ?? [])
+      add(
+        "instr(lower(json_extract(data,'$.body_text')),?)>0",
+        term.toLowerCase(),
+      );
+    if (query.source) add("source=?", query.source);
+    if (query.direction)
+      add("json_extract(data,'$.direction')=?", query.direction);
+    if (query.from) add("json_extract(data,'$.occurred_at')>=?", query.from);
+    if (query.to) add("json_extract(data,'$.occurred_at')<?", query.to);
+    const rows = this.db
+      .prepare(
+        "SELECT count(*) total,group_concat(record_key || ':' || json_extract(data,'$.content_hash'),'|') fingerprint FROM (SELECT * FROM interactions WHERE " +
+          where +
+          " ORDER BY record_key)",
+      )
+      .get(...values)!;
+    const revision = createHash("sha256")
+      .update(String(rows.fingerprint ?? ""))
+      .digest("hex");
+    let activity: Record<string, PrivateContactActivity> | undefined;
+    if (query.activity_for) {
+      if (query.activity_for.length > 50)
+        throw new Error("Too many activity selectors");
+      activity = Object.fromEntries(
+        query.activity_for.map((a) => [
+          a.selector,
+          { count: 0, last_at: null, sources: [] },
+        ]),
+      );
+      const aggregate = this.db
+        .prepare(
+          "SELECT json_extract(a.value,'$.selector') selector,count(*) count,max(json_extract(data,'$.occurred_at')) last_at,group_concat(DISTINCT source) sources FROM interactions JOIN json_each(?) a ON (json_extract(data,'$.contact_id') IN (SELECT value FROM json_each(json_extract(a.value,'$.contact_ids'))) OR EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.contact_ids')) ids WHERE ids.value IN (SELECT value FROM json_each(json_extract(a.value,'$.contact_ids'))))) AND (json_type(a.value,'$.members') IS NULL OR EXISTS(SELECT 1 FROM json_each(json_extract(a.value,'$.members')) m WHERE json_extract(m.value,'$.source')=interactions.source AND json_extract(m.value,'$.account_id')=interactions.account_id AND (json_extract(m.value,'$.contact_id')=json_extract(data,'$.contact_id') OR EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.contact_ids')) ids WHERE ids.value=json_extract(m.value,'$.contact_id'))))) WHERE " +
+            where +
+            " GROUP BY json_extract(a.value,'$.selector')",
+        )
+        .all(JSON.stringify(query.activity_for), ...values);
+      for (const row of aggregate)
+        activity[String(row.selector)] = {
+          count: Number(row.count),
+          last_at: String(row.last_at),
+          sources: String(row.sources).split(",").sort() as Source[],
+        };
+    }
+    if (query.after)
+      add(
+        "(json_extract(data,'$.occurred_at')<? OR (json_extract(data,'$.occurred_at')=? AND record_key>?))",
+        query.after.occurred_at,
+        query.after.occurred_at,
+        query.after.record_key,
+      );
+    const records = this.db
+      .prepare(
+        "SELECT data FROM interactions WHERE " +
+          where +
+          " ORDER BY json_extract(data,'$.occurred_at') DESC,record_key LIMIT ?",
+      )
+      .all(...values, Math.min(51, query.limit))
+      .map((r) => JSON.parse(String(r.data)) as NormalizedRecord);
+    return {
+      records,
+      total: Number(rows.total),
+      revision,
+      ...(activity ? { activity } : {}),
+    };
   }
   contacts(owner: string, query = ""): (Contact & { emails: string[] })[] {
     this.assertOwner(owner);

@@ -1006,3 +1006,77 @@ describe("bounded context search and requested priorities", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("semantic normal-message retrieval", () => {
+  it("returns paraphrase evidence with canonical guards and rejects injected foreign matches", async () => {
+    const canonical = record({
+      body_text: "Please arrange accommodation near the conference venue.",
+    });
+    vi.spyOn(store, "interactions").mockReturnValue([canonical]);
+    const retrieve = vi.fn(async () => ({
+      records: [
+        canonical,
+        record({ record_key: "f".repeat(64), owner_id: "foreign" }),
+      ],
+      coverage: { indexed: 1 },
+    }));
+    const result = await prepareNormalReply({
+      auth: auth("Find hotel logistics"),
+      store,
+      model: model({ intent: "search", query: "hotel logistics" }),
+      clock: now,
+      semanticSearch: retrieve,
+    });
+    expect(result.reply.search_mode).toBe("semantic");
+    expect(result.reply.search_results).toHaveLength(1);
+    expect(result.record_guards).toEqual([
+      {
+        record_key: canonical.record_key,
+        content_hash: canonical.content_hash,
+      },
+    ]);
+    expect(retrieve).toHaveBeenCalledTimes(1);
+  });
+  it("labels lexical fallback when embeddings are unavailable", async () => {
+    vi.spyOn(store, "interactions").mockReturnValue([
+      record({ body_text: "hotel logistics" }),
+    ]);
+    const result = await prepareNormalReply({
+      auth: auth("Find hotel logistics"),
+      store,
+      model: model({ intent: "search", query: "hotel logistics" }),
+      clock: now,
+      semanticSearch: async () => {
+        throw new Error("offline");
+      },
+    });
+    expect(result.reply.search_mode).toBe("keyword");
+    expect(result.reply.search_note).toContain("Semantic search unavailable");
+    expect(result.reply.search_results).toHaveLength(1);
+  });
+});
+
+it("shows a validated semantic passage beyond the message opening", async () => {
+  const passage = "Book rooms near the conference";
+  const canonical = record({ body_text: "x".repeat(700) + passage });
+  vi.spyOn(store, "interactions").mockReturnValue([canonical]);
+  const result = await prepareNormalReply({
+    auth: auth("Find hotel logistics"),
+    store,
+    model: model({ intent: "search", query: "hotel logistics" }),
+    clock: now,
+    semanticSearch: async () => ({
+      records: [canonical],
+      matches: [
+        {
+          record_key: canonical.record_key,
+          start: 700,
+          end: 700 + passage.length,
+          text: passage,
+          similarity: 0.8,
+        },
+      ],
+    }),
+  });
+  expect(result.reply.search_results).toMatchObject([{ text: passage }]);
+});

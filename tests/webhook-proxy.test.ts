@@ -36,6 +36,12 @@ describe("webhook-only public boundary", () => {
       "/",
       "/rest/settings",
       "/api/status",
+      "/private",
+      "/private/unlock",
+      "/private/app.js",
+      "/private/api/session",
+      "/private/api/history?selector=F17",
+      "/private/api/search",
       "/webhook/other/webhook",
     ]) {
       const r = await fetch(`http://127.0.0.1:${port}${path}`, {
