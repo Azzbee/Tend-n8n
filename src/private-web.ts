@@ -574,7 +574,6 @@ export function createPrivateWebHandler(
         if (url.pathname === "/private/api/history-retry") {
           if (
             url.search ||
-            !allAvailableHistory(policy) ||
             Object.keys(data).length !== 3 ||
             Object.keys(data).some(
               (key) => !["source", "account_id", "confirm"].includes(key),
@@ -587,6 +586,10 @@ export function createPrivateWebHandler(
             throw new Error("Exact approved history retry required");
           const source = data.source as (typeof sources)[number],
             account = data.account_id;
+          const historyApproved =
+            source === "gmail" || source === "calendar"
+              ? allAvailableHistory(policy)
+              : Boolean(policy.social && allAvailableHistory(policy.social));
           const approved =
             source === "gmail"
               ? account === policy.account_email
@@ -605,6 +608,7 @@ export function createPrivateWebHandler(
             (entry) => entry.source === source && entry.account_id === account,
           );
           if (
+            !historyApproved ||
             !approved ||
             !state ||
             state.mode !== "live" ||

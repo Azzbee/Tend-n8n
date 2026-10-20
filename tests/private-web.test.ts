@@ -5,7 +5,7 @@ import {
   createPrivateWebHandler,
   samePrivateReply,
 } from "../src/private-web.ts";
-import { exampleLivePolicy } from "../src/live-policy.ts";
+import { exampleLivePolicy, type LivePolicy } from "../src/live-policy.ts";
 import type { LiveRecord } from "../src/google-records.ts";
 const policy = exampleLivePolicy,
   owner = policy.principal_id,
@@ -573,7 +573,12 @@ it("labels verified groups from an exact stored member without joining names", a
 
 describe("owner-only held history retry", () => {
   async function setup(
-    options: { history?: boolean; held?: boolean; revoked?: boolean } = {},
+    options: {
+      history?: boolean;
+      held?: boolean;
+      revoked?: boolean;
+      socialHistory?: boolean;
+    } = {},
   ) {
     const store = fixture();
     store.beginHistoryBackfill(
@@ -590,13 +595,62 @@ describe("owner-only held history retry", () => {
       "2026-10-21T12:00:00.000Z",
     );
     if (options.revoked) store.revokeSource(owner, "gmail");
+    const selectedPolicy: LivePolicy =
+      options.history === false
+        ? { ...policy }
+        : { ...policy, history: { version: 1, mode: "all_available" } };
+    if (options.socialHistory !== undefined) {
+      selectedPolicy.social = {
+        window_days: 30,
+        accounts: [
+          {
+            source: "whatsapp_personal",
+            provider: "unipile",
+            account_id: "wa-fixture",
+            owner_identity: "wa-owner",
+            owner_verified: true,
+            api_base_url: "https://api1.unipile.com",
+          },
+        ],
+        ...(options.socialHistory
+          ? { history: { version: 1 as const, mode: "all_available" as const } }
+          : {}),
+      };
+      store.seed(
+        [],
+        [],
+        [
+          {
+            owner_id: owner,
+            source: "whatsapp_personal",
+            account_id: "wa-fixture",
+            status: "partial",
+            mode: "live",
+            cursor: "incremental-wa",
+            last_success: null,
+            coverage_start: "2026-09-20T12:00:00Z",
+            coverage_end: clock().toISOString(),
+          },
+        ],
+      );
+      store.beginHistoryBackfill(
+        owner,
+        "whatsapp_personal",
+        "wa-fixture",
+        clock().toISOString(),
+      );
+      store.pauseHistoryBackfill(
+        owner,
+        "whatsapp_personal",
+        "wa-fixture",
+        "history_page_requires_review",
+        null,
+      );
+    }
     const handler = createPrivateWebHandler({
       store,
       clock,
-      policy:
-        options.history === false
-          ? policy
-          : { ...policy, history: { version: 1, mode: "all_available" } },
+      policy: selectedPolicy,
     });
     const server = createServer((req, res) => {
       void handler(req, res);
@@ -756,6 +810,35 @@ describe("owner-only held history retry", () => {
       await x.close();
     }
   });
+  it.each([false, true])(
+    "honours the separate social history approval (%s)",
+    async (socialHistory) => {
+      const x = await setup({ socialHistory });
+      try {
+        const headers = await unlockPrivate(x.base);
+        const response = await fetch(x.base + "/private/api/history-retry", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            ...request,
+            source: "whatsapp_personal",
+            account_id: "wa-fixture",
+          }),
+        });
+        expect(response.status).toBe(socialHistory ? 200 : 400);
+        const checkpoint = x.store
+          .historyBackfills(owner)
+          .find((entry) => entry.source === "whatsapp_personal");
+        expect(checkpoint?.last_error).toBe(
+          socialHistory
+            ? "owner_retry_requested"
+            : "history_page_requires_review",
+        );
+      } finally {
+        await x.close();
+      }
+    },
+  );
   it("requires an unlocked session and exact CSRF proof", async () => {
     const x = await setup();
     try {
