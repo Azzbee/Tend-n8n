@@ -537,14 +537,42 @@ describe("separate history and daily ledgers", () => {
             ...input,
             records: [],
             expected_cursor: "history-next",
-            cursor: null,
-            complete: true,
+            cursor: "fresh-delete",
+            complete: false,
             operation_hash: "b".repeat(64),
             removed_record_ids: [raw.source_record_id],
           });
           expect((await isolated.interactions(owner))[0]?.body_text).toBe(
             "Fresh incremental evidence",
           );
+          const fresh = {
+            ...input,
+            records: [],
+            expected_cursor: "fresh-delete",
+            cursor: null,
+            complete: true,
+            operation_hash: "c".repeat(64),
+            removed_record_ids: [raw.source_record_id],
+            withdrawals_observed_at: clock().toISOString(),
+          };
+          for (const invalid of [
+            "2026-10-20T09:59:00.000Z",
+            "2026-10-20T10:11:00.000Z",
+            "invalid",
+          ])
+            await expect(
+              Promise.resolve().then(() =>
+                isolated.commitHistoryBackfill({
+                  ...fresh,
+                  withdrawals_observed_at: invalid,
+                }),
+              ),
+            ).rejects.toThrow(/history/);
+          expect((await isolated.interactions(owner))[0]?.body_text).toBe(
+            "Fresh incremental evidence",
+          );
+          await isolated.commitHistoryBackfill(fresh);
+          expect(await isolated.interactions(owner)).toHaveLength(0);
         } finally {
           await isolated.close();
         }

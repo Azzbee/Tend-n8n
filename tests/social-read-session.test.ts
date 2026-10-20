@@ -271,6 +271,202 @@ describe.each(["sqlite", "postgres"] as const)(
         retry_after_until: "2026-10-14T12:02:00.000Z",
       });
     });
+    async function retainedHistoryEvidence() {
+      sessions = new SocialReadSessions({
+        policy: { ...policy, history: { version: 1, mode: "all_available" } },
+        historyResourceGate: async () => null,
+        store,
+        principal_id: owner,
+        clock: () => now,
+      });
+      const proof_id = await identity();
+      const raw = {
+        id: "retained-history",
+        account_id: personal.account_id,
+        chat_id: "retained-thread",
+        sender_id: "friend",
+        timestamp: "2026-10-13T12:00:00.000Z",
+        is_sender: false,
+        text: "Original retained source",
+        attendees: [
+          { attendee_provider_id: "owner-user" },
+          { attendee_provider_id: "friend" },
+        ],
+      };
+      const first = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: first.request_id,
+          status: 200,
+          body: {
+            object: "MessageList",
+            cursor: "retained-next",
+            items: [raw],
+          },
+        }),
+      ).toMatchObject({ kind: "page", accepted: 1 });
+      const record = (await store.interactions(owner))[0]!;
+      const prepared = {
+        reply: {
+          outbound_sent: false as const,
+          normal_message: "Original retained source",
+        },
+        record_guards: [
+          { record_key: record.record_key, content_hash: record.content_hash },
+        ],
+      };
+      const auth = {
+        owner_id: owner,
+        user_id: "u",
+        chat_id: "c",
+        chat_type: "private",
+        text: "Retained test briefing",
+      };
+      expect(await store.validatePreparedRead(auth, prepared)).toEqual(
+        prepared.reply,
+      );
+      now = new Date(now.getTime() + 30000);
+      await store.ingest({
+        ...record,
+        observed_at: now.toISOString(),
+      } as import("../src/google-records.ts").LiveRecord);
+      now = new Date(now.getTime() + 30000);
+      return { proof_id, raw, prepared, auth };
+    }
+    it.each([
+      ["provider deletion", { deleted: true }],
+      ["provider hiding", { hidden: true }],
+      ["edited content unavailable", { edited: true, text: null }],
+    ])(
+      "withdraws retained real-route test output after a confirmed %s",
+      async (_label, mutation) => {
+        const { proof_id, raw, prepared, auth } =
+          await retainedHistoryEvidence();
+        const before = await store.sourceStatus(owner);
+        const planned = request(
+          await sessions.plan({
+            ...personal,
+            phase: "snapshot",
+            proof_id,
+            lane: "history",
+          }),
+        );
+        expect(
+          await sessions.result({
+            request_id: planned.request_id,
+            status: 200,
+            body: {
+              object: "MessageList",
+              cursor: null,
+              items: [{ ...raw, ...mutation }],
+            },
+          }),
+        ).toMatchObject({ kind: "page", removed: 1, complete: true });
+        expect(
+          (await store.interactions(owner)).some(
+            (r) => r.source_record_id === raw.id,
+          ),
+        ).toBe(false);
+        expect(await store.validatePreparedRead(auth, prepared)).not.toEqual(
+          prepared.reply,
+        );
+        expect(
+          JSON.stringify(await store.validatePreparedRead(auth, prepared)),
+        ).not.toContain("Original retained source");
+        expect(await store.sourceStatus(owner)).toEqual(before);
+      },
+    );
+    it("accepts a freshly observed history edit while preserving the original message time", async () => {
+      const { proof_id, raw, prepared, auth } = await retainedHistoryEvidence();
+      const planned = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: planned.request_id,
+          status: 200,
+          body: {
+            object: "MessageList",
+            cursor: null,
+            items: [
+              {
+                ...raw,
+                edited: true,
+                timestamp: now.toISOString(),
+                text: "Changed provider source",
+              },
+            ],
+          },
+        }),
+      ).toMatchObject({
+        kind: "page",
+        accepted: 1,
+        removed: 0,
+        complete: true,
+      });
+      const record = (await store.interactions(owner))[0]!;
+      expect(record.body_text).toBe("Changed provider source");
+      expect(record.occurred_at).toBe(raw.timestamp);
+      expect(record.observed_at).toBe(now.toISOString());
+      expect(await store.validatePreparedRead(auth, prepared)).not.toEqual(
+        prepared.reply,
+      );
+    });
+    it("applies confirmed withdrawals on a quarantined page without advancing or ingesting unrelated records", async () => {
+      const { proof_id, raw, prepared, auth } = await retainedHistoryEvidence();
+      const planned = request(
+        await sessions.plan({
+          ...personal,
+          phase: "snapshot",
+          proof_id,
+          lane: "history",
+        }),
+      );
+      expect(
+        await sessions.result({
+          request_id: planned.request_id,
+          status: 200,
+          body: {
+            object: "MessageList",
+            cursor: null,
+            items: [
+              { ...raw, deleted: true },
+              {
+                ...raw,
+                id: "unrelated-new",
+                text: "Do not ingest this partial page",
+              },
+              { ...raw, id: "unknown-attachment", text: null },
+            ],
+          },
+        }),
+      ).toMatchObject({
+        kind: "blocked",
+        reason: "history_page_requires_review",
+      });
+      expect(await store.interactions(owner)).toHaveLength(0);
+      expect(await store.validatePreparedRead(auth, prepared)).not.toEqual(
+        prepared.reply,
+      );
+      expect((await store.historyBackfills(owner))[0]).toMatchObject({
+        cursor: "retained-next",
+        page_count: 1,
+        status: "paused",
+        last_error: "history_page_requires_review",
+      });
+    });
     it("requires a history resource measurement and rechecks it before committing a page", async () => {
       const approved = {
         ...policy,

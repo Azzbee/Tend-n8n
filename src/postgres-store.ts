@@ -874,7 +874,8 @@ export class PostgresStore implements LiveStore {
         )[0];
         if (
           prior &&
-          Date.parse(prior.observed_at) > Date.parse(current.watermark)
+          Date.parse(prior.observed_at) >
+            Date.parse(batch.withdrawals_observed_at ?? current.watermark)
         )
           continue;
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);

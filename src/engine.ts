@@ -770,6 +770,11 @@ export function advanceHistoryCheckpoint(
         (typeof c === "string" && c.length > 0 && c.length <= 8192),
     ) ||
     (batch.advance !== undefined && typeof batch.advance !== "boolean") ||
+    (batch.withdrawals_observed_at !== undefined &&
+      (!exactTimestamp(batch.withdrawals_observed_at) ||
+        Date.parse(batch.withdrawals_observed_at) <
+          Date.parse(current.watermark) ||
+        Date.parse(batch.withdrawals_observed_at) > now.getTime())) ||
     (advance
       ? batch.complete !== (batch.cursor === null)
       : batch.complete || batch.cursor !== batch.expected_cursor) ||
@@ -1770,7 +1775,8 @@ export class TendStore {
           .get(batch.owner_id, batch.source, batch.account_id, id);
         if (
           prior &&
-          Date.parse(String(prior.observed_at)) > Date.parse(current.watermark)
+          Date.parse(String(prior.observed_at)) >
+            Date.parse(batch.withdrawals_observed_at ?? current.watermark)
         )
           continue;
         this.removeLiveRecord(

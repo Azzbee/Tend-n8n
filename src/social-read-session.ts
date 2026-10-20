@@ -522,11 +522,34 @@ export class SocialReadSessions {
           },
           original_message_times,
         });
-        if (
-          normalized.batch.evidence_incomplete ||
-          normalized.invalidated_record_ids.length ||
-          (normalized.batch.removed_record_ids?.length ?? 0)
-        ) {
+        const removed = [
+          ...new Set([
+            ...(normalized.batch.removed_record_ids ?? []),
+            ...normalized.invalidated_record_ids,
+          ]),
+        ];
+        if (normalized.batch.evidence_incomplete) {
+          if (removed.length) {
+            await this.checkHistoryResources(
+              account.source,
+              account.account_id,
+            );
+            await this.store.commitHistoryBackfill({
+              owner_id: this.principal,
+              source: account.source,
+              account_id: account.account_id,
+              version: 1,
+              watermark: pending.plan.coverage_end,
+              expected_cursor: pending.plan.expected_cursor,
+              cursor: pending.plan.expected_cursor,
+              advance: false,
+              operation_hash: normalized.page_hash,
+              complete: false,
+              records: [],
+              removed_record_ids: removed,
+              withdrawals_observed_at: now.toISOString(),
+            });
+          }
           await this.store.pauseHistoryBackfill(
             this.principal,
             account.source,
@@ -536,11 +559,13 @@ export class SocialReadSessions {
           );
           throw new Error("history_page_requires_review");
         }
-        const historicalRecords = normalized.batch.records.filter(
-          (record) =>
-            Date.parse(record.occurred_at) <=
-            Date.parse(pending.plan.coverage_end),
-        );
+        const historicalRecords = normalized.batch.records
+          .filter(
+            (record) =>
+              Date.parse(record.occurred_at) <=
+              Date.parse(pending.plan.coverage_end),
+          )
+          .map((record) => ({ ...record, observed_at: now.toISOString() }));
         const historicalContacts = new Set([
           "OWNER",
           ...historicalRecords.flatMap((record) => record.contact_ids),
@@ -563,6 +588,8 @@ export class SocialReadSessions {
           operation_hash: normalized.page_hash,
           complete: normalized.batch.complete,
           records: historicalRecords,
+          removed_record_ids: removed,
+          withdrawals_observed_at: now.toISOString(),
           ...(normalized.batch.contacts
             ? {
                 contacts: normalized.batch.contacts.filter((contact) =>
@@ -584,7 +611,7 @@ export class SocialReadSessions {
           source: account.source,
           accepted: accepted.length,
           quarantined: 0,
-          removed: 0,
+          removed: removed.length,
           complete: normalized.batch.complete,
           pagination_complete: normalized.batch.complete,
           evidence_partial: false,

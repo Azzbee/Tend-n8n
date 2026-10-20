@@ -21,6 +21,7 @@ export interface HistoryCheckpoint {
 }
 export interface HistoryPageCommit {
   advance?: boolean;
+  withdrawals_observed_at?: string;
   owner_id: string;
   source: Source;
   account_id: string;
