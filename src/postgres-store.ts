@@ -1021,10 +1021,19 @@ export class PostgresStore implements LiveStore {
       const row: HistoryCheckpoint = {
         ...current,
         status: "paused",
-        retry_after_until: resourceOnly
-          ? current.retry_after_until
-          : retryAfter,
-        last_error: error,
+        retry_after_until:
+          resourceOnly ||
+          (current.retry_after_until !== null &&
+            Date.parse(current.retry_after_until) > s.clock().getTime() &&
+            (retryAfter === null ||
+              Date.parse(current.retry_after_until) > Date.parse(retryAfter)))
+            ? current.retry_after_until
+            : retryAfter,
+        last_error:
+          current.last_error?.endsWith("requires_review") &&
+          !error.endsWith("requires_review")
+            ? current.last_error
+            : error,
         updated_at: s.clock().toISOString(),
       };
       await s.q(

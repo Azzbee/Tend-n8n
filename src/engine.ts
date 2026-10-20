@@ -784,10 +784,6 @@ export function advanceHistoryCheckpoint(
     (batch.removed_record_ids?.length ?? 0) > 1000
   )
     throw new Error("invalid bounded history page");
-  const hash = createHash("sha256").update(payload).digest("hex");
-  if (current.last_operation_hash === hash) return null;
-  if (current.status === "complete" || current.cursor !== batch.expected_cursor)
-    throw new Error("stale history cursor or completed backfill");
   const withdrawalOnly =
     !advance &&
     batch.records.length === 0 &&
@@ -795,6 +791,12 @@ export function advanceHistoryCheckpoint(
     (batch.identities?.length ?? 0) === 0 &&
     (batch.removed_record_ids?.length ?? 0) > 0 &&
     batch.withdrawals_observed_at !== undefined;
+  if (!withdrawalOnly && current.last_error?.endsWith("requires_review"))
+    throw new Error("history page requires review");
+  const hash = createHash("sha256").update(payload).digest("hex");
+  if (current.last_operation_hash === hash) return null;
+  if (current.status === "complete" || current.cursor !== batch.expected_cursor)
+    throw new Error("stale history cursor or completed backfill");
   if (
     !withdrawalOnly &&
     current.retry_after_until &&
@@ -1971,10 +1973,19 @@ export class TendStore {
       const row: HistoryCheckpoint = {
         ...current,
         status: "paused",
-        retry_after_until: resourceOnly
-          ? current.retry_after_until
-          : retryAfter,
-        last_error: error,
+        retry_after_until:
+          resourceOnly ||
+          (current.retry_after_until !== null &&
+            Date.parse(current.retry_after_until) > this.clock().getTime() &&
+            (retryAfter === null ||
+              Date.parse(current.retry_after_until) > Date.parse(retryAfter)))
+            ? current.retry_after_until
+            : retryAfter,
+        last_error:
+          current.last_error?.endsWith("requires_review") &&
+          !error.endsWith("requires_review")
+            ? current.last_error
+            : error,
         updated_at: this.clock().toISOString(),
       };
       this.db

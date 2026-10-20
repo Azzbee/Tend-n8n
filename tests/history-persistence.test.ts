@@ -95,17 +95,18 @@ describe("separate history and daily ledgers", () => {
   let runtime: Awaited<ReturnType<typeof postgresTestRuntime>>;
   let pg: PostgresStore;
   let sqlite: TendStore;
+  const clocks = { sqlite: now, postgres: now };
   beforeAll(async () => {
     runtime = await postgresTestRuntime();
     pg = await PostgresStore.open({
       connectionString: runtime.connectionString,
       principal,
-      clock: () => new Date(now),
+      clock: () => new Date(clocks.postgres),
     });
     sqlite = new TendStore(":memory:", {
       mode: "live",
       principal,
-      clock: () => new Date(now),
+      clock: () => new Date(clocks.sqlite),
     });
     for (const store of [pg, sqlite])
       await store.seed(
@@ -304,6 +305,7 @@ describe("separate history and daily ledgers", () => {
       kind +
         " completes once, counts overlapping records once and applies explicit deletion",
       async () => {
+        clocks[kind] = "2026-10-20T11:00:00.000Z";
         await store().pauseHistoryBackfill(
           principal.owner_id,
           "gmail",
@@ -342,6 +344,7 @@ describe("separate history and daily ledgers", () => {
           newest_at: null,
         });
         expect((await store().counts()).interactions).toBe(0);
+        clocks[kind] = now;
         expect(
           (await store().sourceStatus(principal.owner_id))[0]?.cursor,
         ).toBe("incremental-kept");
