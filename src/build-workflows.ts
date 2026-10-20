@@ -794,7 +794,7 @@ function addCommitPage(
   const branch = condition("Independent history page", "history_lane", x - 180);
   const historyPage = code(
     "Bound whole history page",
-    `const x=$input.first().json,ctx=x;const raw=${recordsExpression};if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const records=raw.map(r=>Buffer.byteLength(JSON.stringify(r),'utf8')>Math.floor(x.budget.max_body_bytes/12)?{id:r.id,oversized:true}:r);const page={lane:'history',history_version:1,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,previous_cursor:x.cursor,cursor:x.next_cursor,complete:x.next_cursor===null,window_start:x.window_start,window_end:x.window_end};if(Buffer.byteLength(JSON.stringify(page),'utf8')>x.budget.max_body_bytes)throw new Error('History storage bound exceeded');return [{json:page}];`,
+    `const x=$input.first().json,ctx=x;const raw=${recordsExpression};if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const page=(records,advance)=>({lane:'history',history_version:1,deadline_at:x.deadline_at,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,advance,previous_cursor:x.cursor,cursor:advance?x.next_cursor:x.cursor,complete:advance&&x.next_cursor===null,window_start:x.window_start,window_end:x.window_end});const fits=records=>Buffer.byteLength(JSON.stringify(page(records,true)),'utf8')+32<=x.budget.max_body_bytes;const groups=[];let current=[];for(const record of raw){if(!record||typeof record.id!=='string'||!record.id)throw new Error('Missing history record ID');const bounded=fits([record])?record:{id:record.id,oversized:true};if(!fits([...current,bounded])&&current.length){groups.push(current);current=[];}current.push(bounded);}groups.push(current);return groups.map((records,i)=>({json:page(records,i===groups.length-1)}));`,
     x + 100,
   );
   const historyCommit = liveHttp(
@@ -803,10 +803,32 @@ function addCommitPage(
     x + 350,
     "={{ JSON.stringify($json) }}",
   );
+  historyCommit.parameters.options = { timeout: 5000 };
+  const historyLoop = node(
+    "Store one history chunk at a time",
+    "splitInBatches",
+    { batchSize: 1, options: { reset: false } },
+    x + 200,
+    0,
+    3,
+  );
+  const historyBudget = code(
+    "Check history storage deadline",
+    "const x=$input.first().json;if(!Number.isFinite(x.deadline_at)||Date.now()+5000>x.deadline_at)throw new Error('History storage deadline exhausted; provider cursor unchanged');return [{json:x}];",
+    x + 270,
+  );
+  const historyDone = code(
+    "History provider page acknowledged",
+    "return $input.all();",
+    x + 500,
+  );
   w.nodes.push(
     lane,
     branch,
     historyPage,
+    historyLoop,
+    historyBudget,
+    historyDone,
     historyCommit,
     fan,
     empty,
@@ -817,7 +839,11 @@ function addCommitPage(
   connect(w, from, lane.name);
   connect(w, lane.name, branch.name);
   connect(w, branch.name, historyPage.name);
-  connect(w, historyPage.name, historyCommit.name);
+  connect(w, historyPage.name, historyLoop.name);
+  connect(w, historyLoop.name, historyDone.name, 0);
+  connect(w, historyLoop.name, historyBudget.name, 1);
+  connect(w, historyBudget.name, historyCommit.name);
+  connect(w, historyCommit.name, historyLoop.name);
   connect(w, branch.name, fan.name, 1);
   connect(w, fan.name, empty.name);
   connect(w, empty.name, collect.name);

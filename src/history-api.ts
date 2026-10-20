@@ -123,13 +123,13 @@ export function createHistoryAPI(options: Options) {
       request_allowed:
         !blocked &&
         !waiting &&
-        checkpoint.last_error !== "history_page_requires_review",
+        !checkpoint.last_error?.endsWith("requires_review"),
       reason:
         blocked ??
         (waiting
           ? "provider_retry_not_due"
-          : checkpoint.last_error === "history_page_requires_review"
-            ? "history_page_requires_review"
+          : checkpoint.last_error?.endsWith("requires_review")
+            ? checkpoint.last_error
             : null),
       page_size: Math.min(
         10,
@@ -193,6 +193,9 @@ export function createHistoryAPI(options: Options) {
       value.window_end !== end ||
       value.previous_cursor !== checkpoint.cursor ||
       typeof value.complete !== "boolean" ||
+      (value.advance !== undefined && typeof value.advance !== "boolean") ||
+      (value.advance === false &&
+        (value.cursor !== value.previous_cursor || value.complete)) ||
       !(value.cursor === null || typeof value.cursor === "string") ||
       (value.complete && value.cursor !== null) ||
       !Array.isArray(value.records) ||
@@ -261,10 +264,14 @@ export function createHistoryAPI(options: Options) {
       cursor: value.cursor as string | null,
       operation_hash,
       complete: value.complete,
+      ...(value.advance !== undefined
+        ? { advance: value.advance as boolean }
+        : {}),
       records,
       contacts,
       identities,
       removed_record_ids: removed,
+      withdrawals_observed_at: clock().toISOString(),
     });
     return {
       accepted: records.length,
@@ -294,16 +301,27 @@ export function createHistoryAPI(options: Options) {
     const seconds =
       typeof value.retry_after_seconds === "number" &&
       Number.isFinite(value.retry_after_seconds)
-        ? Math.min(86400, Math.max(60, value.retry_after_seconds))
+        ? Math.max(60, value.retry_after_seconds)
         : 60;
+    const retryAt = clock().getTime() + seconds * 1000;
+    const representable =
+      Number.isFinite(retryAt) && retryAt <= 8640000000000000;
     await store.pauseHistoryBackfill(
       owner,
       source as "gmail" | "calendar",
       account,
-      "provider_" + value.status_code,
-      new Date(clock().getTime() + seconds * 1000).toISOString(),
+      representable
+        ? "provider_" + value.status_code
+        : "provider_wait_requires_review",
+      representable ? new Date(retryAt).toISOString() : null,
     );
-    return { recorded: true, lane: "history" };
+    const revoked =
+      value.reconnect_required === true ||
+      value.status_code === 401 ||
+      value.status_code === 403;
+    if (revoked)
+      await store.revokeSource(owner, source as "gmail" | "calendar");
+    return { recorded: true, lane: "history", reconnect_required: revoked };
   }
   return { state, commit, error, gate };
 }

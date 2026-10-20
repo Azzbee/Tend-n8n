@@ -844,12 +844,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
         url.pathname === "/api/live/sync-error"
       ) {
         if (value.lane === "history") {
-          respond(
-            200,
-            url.pathname.endsWith("sync-error")
-              ? await historyAPI.error(value)
-              : await historyAPI.commit(value),
-          );
+          const result = url.pathname.endsWith("sync-error")
+            ? await historyAPI.error(value)
+            : await historyAPI.commit(value);
+          respond(result.paused === true ? 409 : 200, result);
           return;
         }
         const source = value.source;

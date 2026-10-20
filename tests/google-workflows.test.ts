@@ -813,3 +813,45 @@ it.each(files.slice(0, 2))(
     });
   },
 );
+it("splits large history pages without changing or truncating source records", () => {
+  const w = load(files[0]!),
+    n = w.nodes.find((n) => n.name === "Bound whole history page")!;
+  const records = [
+    { id: "one", body: "x".repeat(80000) },
+    { id: "two", body: "y".repeat(80000) },
+  ];
+  const context = {
+    lane: "history",
+    history_version: 1,
+    watermark: "2026-10-20T10:00:00.000Z",
+    source: "gmail",
+    account_email: "owner@example.invalid",
+    profile_account_email: "owner@example.invalid",
+    cursor: "page1",
+    next_cursor: "page2",
+    window_start: "0001-01-01T00:00:00.000Z",
+    window_end: "2026-10-20T10:00:00.000Z",
+    budget: { max_body_bytes: 100000 },
+    provider_records: records,
+  };
+  const result = evaluate(String(n.parameters.jsCode), context) as {
+    json: Record<string, unknown>;
+  }[];
+  expect(result).toHaveLength(2);
+  expect(result[0]?.json).toMatchObject({
+    advance: false,
+    cursor: "page1",
+    complete: false,
+    records: [records[0]],
+  });
+  expect(result[1]?.json).toMatchObject({
+    advance: true,
+    cursor: "page2",
+    complete: false,
+    records: [records[1]],
+  });
+  for (const item of result)
+    expect(Buffer.byteLength(JSON.stringify(item.json))).toBeLessThanOrEqual(
+      100000,
+    );
+});

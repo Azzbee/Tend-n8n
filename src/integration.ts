@@ -805,8 +805,8 @@ try {
       "import",
     );
     assert(
-      imported.includes("Successfully imported 19 workflows"),
-      "nineteen-workflow import failed",
+      imported.includes("Successfully imported 20 workflows"),
+      "twenty-workflow import failed",
     );
     checks.push({
       name: "Clean n8n import",

@@ -794,8 +794,34 @@
       "typeVersion": 2,
       "position": [5900, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json,ctx=x;const raw=ctx.provider_records;if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const records=raw.map(r=>Buffer.byteLength(JSON.stringify(r),'utf8')>Math.floor(x.budget.max_body_bytes/12)?{id:r.id,oversized:true}:r);const page={lane:'history',history_version:1,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,previous_cursor:x.cursor,cursor:x.next_cursor,complete:x.next_cursor===null,window_start:x.window_start,window_end:x.window_end};if(Buffer.byteLength(JSON.stringify(page),'utf8')>x.budget.max_body_bytes)throw new Error('History storage bound exceeded');return [{json:page}];"
+        "jsCode": "const x=$input.first().json,ctx=x;const raw=ctx.provider_records;if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const page=(records,advance)=>({lane:'history',history_version:1,deadline_at:x.deadline_at,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,advance,previous_cursor:x.cursor,cursor:advance?x.next_cursor:x.cursor,complete:advance&&x.next_cursor===null,window_start:x.window_start,window_end:x.window_end});const fits=records=>Buffer.byteLength(JSON.stringify(page(records,true)),'utf8')+32<=x.budget.max_body_bytes;const groups=[];let current=[];for(const record of raw){if(!record||typeof record.id!=='string'||!record.id)throw new Error('Missing history record ID');const bounded=fits([record])?record:{id:record.id,oversized:true};if(!fits([...current,bounded])&&current.length){groups.push(current);current=[];}current.push(bounded);}groups.push(current);return groups.map((records,i)=>({json:page(records,i===groups.length-1)}));"
       }
+    },
+    {
+      "id": "store-one-history-chunk-at-a-time",
+      "name": "Store one history chunk at a time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [6000, 0],
+      "parameters": { "batchSize": 1, "options": { "reset": false } }
+    },
+    {
+      "id": "check-history-storage-deadline",
+      "name": "Check history storage deadline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6070, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!Number.isFinite(x.deadline_at)||Date.now()+5000>x.deadline_at)throw new Error('History storage deadline exhausted; provider cursor unchanged');return [{json:x}];"
+      }
+    },
+    {
+      "id": "history-provider-page-acknowledged",
+      "name": "History provider page acknowledged",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6300, 0],
+      "parameters": { "jsCode": "return $input.all();" }
     },
     {
       "id": "commit-independent-history-page",
@@ -1268,7 +1294,47 @@
       "main": [
         [
           {
+            "node": "Store one history chunk at a time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store one history chunk at a time": {
+      "main": [
+        [
+          {
+            "node": "History provider page acknowledged",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check history storage deadline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check history storage deadline": {
+      "main": [
+        [
+          {
             "node": "Commit independent history page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit independent history page": {
+      "main": [
+        [
+          {
+            "node": "Store one history chunk at a time",
             "type": "main",
             "index": 0
           }

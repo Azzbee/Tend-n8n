@@ -172,3 +172,111 @@ it("allows exact acknowledged-page retries without writing again", async () => {
     store.close();
   }
 });
+it("keeps long provider waits and immediately withdraws a lost Google grant", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    await api.state("gmail");
+    await api.error({
+      source: "gmail",
+      status_code: 429,
+      retry_after_seconds: 172800,
+    });
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0]?.retry_after_until,
+    ).toBe("2026-10-22T10:00:00.000Z");
+    expect((await api.state("gmail")).request_allowed).toBe(false);
+    await api.error({
+      source: "gmail",
+      status_code: 401,
+      reconnect_required: true,
+    });
+    expect((await store.sourceStatus(policy.principal_id))[0]?.status).toBe(
+      "revoked",
+    );
+    expect((await api.state("gmail")).reason).toBe("source_revoked");
+  } finally {
+    store.close();
+  }
+});
+it("holds a quarantined page until reviewed instead of retrying it every poll", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail");
+    await api.commit({
+      ...state,
+      profile_account_email: policy.account_email,
+      records: [{ id: "bad", oversized: true }],
+      previous_cursor: null,
+      cursor: null,
+      complete: true,
+    });
+    expect(await api.state("gmail")).toMatchObject({
+      request_allowed: false,
+      reason: "history_page_requires_review",
+    });
+  } finally {
+    store.close();
+  }
+});
+it("counts one provider page after partial storage chunks finish", async () => {
+  const store = await setup();
+  try {
+    const api = createHistoryAPI({
+      store,
+      policy,
+      clock: now,
+      resources: async () => ({
+        free_bytes: 3 * 1024 ** 3,
+        database_bytes: 0,
+        index_bytes: 0,
+      }),
+    });
+    const state = await api.state("gmail"),
+      base = {
+        ...state,
+        profile_account_email: policy.account_email,
+        records: [],
+        previous_cursor: null,
+      };
+    await api.commit({
+      ...base,
+      advance: false,
+      cursor: null,
+      complete: false,
+    });
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0]?.page_count,
+    ).toBe(0);
+    await api.commit({
+      ...base,
+      advance: true,
+      cursor: "next",
+      complete: false,
+    });
+    expect(
+      (await store.historyBackfills(policy.principal_id))[0]?.page_count,
+    ).toBe(1);
+  } finally {
+    store.close();
+  }
+});
