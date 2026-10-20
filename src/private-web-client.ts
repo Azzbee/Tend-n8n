@@ -305,6 +305,8 @@ export function mountPrivateWorkspace(): void {
       "meetings",
       "commitments",
       "coverage",
+      "history-progress",
+      "daily-progress",
     ])
       get(id).replaceChildren();
     removeView();
@@ -1069,14 +1071,56 @@ export function mountPrivateWorkspace(): void {
             "small",
           ),
         );
-      for (const item of result.history.filter(plain))
-        area.append(
+      for (const item of result.history.filter(plain)) {
+        const row = node("div");
+        row.append(
           node(
             "p",
             `${sourceName(String(item.source))} · ${String(item.account_id)}: ${String(item.status)} · ${String(item.page_count)} pages · ${String(item.record_count)} records${item.oldest_at ? ` · oldest ${parisTime(String(item.oldest_at))}` : ""}${item.newest_at ? ` · newest ${parisTime(String(item.newest_at))}` : ""} · frozen at ${parisTime(String(item.watermark))} · ${item.cursor ? "more pages remain" : item.status === "complete" ? "pagination finished" : "not yet complete"}${item.last_error ? ` · paused: ${String(item.last_error)}` : ""}`,
             "small",
           ),
         );
+        if (
+          item.status === "paused" &&
+          item.last_error === "history_page_requires_review" &&
+          typeof item.source === "string" &&
+          typeof item.account_id === "string"
+        ) {
+          row.append(
+            node(
+              "p",
+              "This saved page needs review. A retry keeps its position and provider wait. No records are skipped.",
+              "small",
+            ),
+          );
+          const retry = node("button", "Retry this held page", "quiet");
+          retry.type = "button";
+          retry.addEventListener("click", () => {
+            if (!session || retry.disabled) return;
+            retry.disabled = true;
+            void api("history-retry", {
+              source: item.source,
+              account_id: item.account_id,
+              confirm: "RETRY_HELD_HISTORY_PAGE",
+            })
+              .then(async () => {
+                if (!session) return;
+                status(
+                  "Retry requested from the same saved position. Scheduled imports still respect provider waits.",
+                );
+                await loadProgress();
+              })
+              .catch((error: unknown) => {
+                if (session) report(error);
+              })
+              .finally(() => {
+                if (session) retry.disabled = false;
+              });
+          });
+          row.append(retry);
+        }
+        area.append(row);
+      }
     } catch {
       if (session)
         setText(

@@ -10,6 +10,7 @@ import {
 } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
+  allAvailableHistory,
   calendarWindow,
   calendarHistoryWindow,
   gmailWindow,
@@ -258,6 +259,7 @@ export function createPrivateWebHandler(
         "/private/api/briefing",
         "/private/api/draft",
         "/private/api/revalidate",
+        "/private/api/history-retry",
       ];
       if (!allowed.includes(url.pathname)) {
         send(404, { error: "Unknown private route" });
@@ -569,6 +571,67 @@ export function createPrivateWebHandler(
         }
         const data: unknown = JSON.parse(await body(req));
         if (!isRecord(data)) throw new Error("Invalid request");
+        if (url.pathname === "/private/api/history-retry") {
+          if (
+            url.search ||
+            !allAvailableHistory(policy) ||
+            Object.keys(data).length !== 3 ||
+            Object.keys(data).some(
+              (key) => !["source", "account_id", "confirm"].includes(key),
+            ) ||
+            data.confirm !== "RETRY_HELD_HISTORY_PAGE" ||
+            typeof data.source !== "string" ||
+            !sources.includes(data.source as (typeof sources)[number]) ||
+            typeof data.account_id !== "string"
+          )
+            throw new Error("Exact approved history retry required");
+          const source = data.source as (typeof sources)[number],
+            account = data.account_id;
+          const approved =
+            source === "gmail"
+              ? account === policy.account_email
+              : source === "calendar"
+                ? policy.calendar_ids.includes(account)
+                : policy.social?.accounts.some(
+                    (binding) =>
+                      binding.source === source &&
+                      binding.account_id === account &&
+                      binding.owner_verified,
+                  );
+          const state = (await store.sourceStatus(owner)).find(
+            (state) => state.source === source && state.account_id === account,
+          );
+          const checkpoint = (await store.historyBackfills(owner)).find(
+            (entry) => entry.source === source && entry.account_id === account,
+          );
+          if (
+            !approved ||
+            !state ||
+            state.mode !== "live" ||
+            state.status === "revoked" ||
+            !checkpoint ||
+            checkpoint.status !== "paused" ||
+            checkpoint.last_error !== "history_page_requires_review"
+          )
+            throw new Error("Approved live page must still be held for review");
+          if (
+            !(await store.retryHistoryBackfill(
+              owner,
+              source,
+              account,
+              "history_page_requires_review",
+            ))
+          )
+            throw new Error(
+              "History hold changed; reload progress before retrying",
+            );
+          send(200, {
+            retry_requested: true,
+            provider_called: false,
+            skipped_records: 0,
+          });
+          return true;
+        }
         if (url.pathname === "/private/api/revalidate") {
           const v =
             typeof data.view_id === "string"

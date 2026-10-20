@@ -570,3 +570,220 @@ it("labels verified groups from an exact stored member without joining names", a
     store.close();
   }
 });
+
+describe("owner-only held history retry", () => {
+  async function setup(
+    options: { history?: boolean; held?: boolean; revoked?: boolean } = {},
+  ) {
+    const store = fixture();
+    store.beginHistoryBackfill(
+      owner,
+      "gmail",
+      policy.account_email,
+      clock().toISOString(),
+    );
+    store.pauseHistoryBackfill(
+      owner,
+      "gmail",
+      policy.account_email,
+      options.held === false ? "provider_429" : "history_page_requires_review",
+      "2026-10-21T12:00:00.000Z",
+    );
+    if (options.revoked) store.revokeSource(owner, "gmail");
+    const handler = createPrivateWebHandler({
+      store,
+      clock,
+      policy:
+        options.history === false
+          ? policy
+          : { ...policy, history: { version: 1, mode: "all_available" } },
+    });
+    const server = createServer((req, res) => {
+      void handler(req, res);
+    });
+    const base = await listen(server);
+    return {
+      store,
+      base,
+      close: async () => {
+        await new Promise<void>((ok) => server.close(() => ok()));
+        store.close();
+      },
+    };
+  }
+  const request = {
+    source: "gmail",
+    account_id: policy.account_email,
+    confirm: "RETRY_HELD_HISTORY_PAGE",
+  };
+  it("retries only the same held page without changing counts, cursor or provider wait", async () => {
+    const x = await setup();
+    try {
+      const before = x.store.historyBackfills(owner)[0]!;
+      const headers = await unlockPrivate(x.base);
+      const response = await fetch(x.base + "/private/api/history-retry", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        retry_requested: true,
+        provider_called: false,
+        skipped_records: 0,
+      });
+      const after = x.store.historyBackfills(owner)[0]!;
+      expect(after).toEqual({ ...before, last_error: "owner_retry_requested" });
+      expect(x.store.sourceStatus(owner)[0]!.cursor).toBe("partial");
+      expect(
+        (
+          await fetch(x.base + "/private/api/history-retry", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(request),
+          })
+        ).status,
+      ).toBe(400);
+    } finally {
+      await x.close();
+    }
+  });
+  it.each([
+    { ...request, source: "unapproved" },
+    { ...request, account_id: "foreign@example.invalid" },
+    { ...request, confirm: "skip" },
+    { ...request, cursor: "replace" },
+  ])("rejects an unapproved or non-exact request %#", async (input) => {
+    const x = await setup();
+    try {
+      const before = x.store.historyBackfills(owner);
+      const headers = await unlockPrivate(x.base);
+      expect(
+        (
+          await fetch(x.base + "/private/api/history-retry", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(400);
+      expect(x.store.historyBackfills(owner)).toEqual(before);
+    } finally {
+      await x.close();
+    }
+  });
+  it.each([{ history: false }, { held: false }, { revoked: true }])(
+    "rejects a non-approved or no-longer-held source %#",
+    async (options) => {
+      const x = await setup(options);
+      try {
+        const headers = await unlockPrivate(x.base);
+        expect(
+          (
+            await fetch(x.base + "/private/api/history-retry", {
+              method: "POST",
+              headers,
+              body: JSON.stringify(request),
+            })
+          ).status,
+        ).toBe(400);
+      } finally {
+        await x.close();
+      }
+    },
+  );
+  it("does not replace a concurrent provider error or its new quota deadline", async () => {
+    const x = await setup();
+    try {
+      const headers = await unlockPrivate(x.base);
+      const read = x.store.historyBackfills.bind(x.store);
+      vi.spyOn(x.store, "historyBackfills").mockImplementationOnce((id) => {
+        const stale = read(id);
+        x.store.pauseHistoryBackfill(
+          owner,
+          "gmail",
+          policy.account_email,
+          "provider_429",
+          "2026-10-22T12:00:00.000Z",
+        );
+        return stale;
+      });
+      const response = await fetch(x.base + "/private/api/history-retry", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      });
+      expect(response.status).toBe(400);
+      expect(read(owner)[0]).toMatchObject({
+        last_error: "provider_429",
+        retry_after_until: "2026-10-22T12:00:00.000Z",
+        cursor: null,
+        page_count: 0,
+      });
+    } finally {
+      await x.close();
+    }
+  });
+  it("preserves a newer quota deadline even if the review hold remains the same", async () => {
+    const x = await setup();
+    try {
+      const headers = await unlockPrivate(x.base);
+      const read = x.store.historyBackfills.bind(x.store);
+      vi.spyOn(x.store, "historyBackfills").mockImplementationOnce((id) => {
+        const stale = read(id);
+        x.store.pauseHistoryBackfill(
+          owner,
+          "gmail",
+          policy.account_email,
+          "history_page_requires_review",
+          "2026-10-22T12:00:00.000Z",
+        );
+        return stale;
+      });
+      const response = await fetch(x.base + "/private/api/history-retry", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      });
+      expect(response.status).toBe(200);
+      expect(read(owner)[0]).toMatchObject({
+        last_error: "owner_retry_requested",
+        retry_after_until: "2026-10-22T12:00:00.000Z",
+        cursor: null,
+        page_count: 0,
+      });
+    } finally {
+      await x.close();
+    }
+  });
+  it("requires an unlocked session and exact CSRF proof", async () => {
+    const x = await setup();
+    try {
+      expect(
+        (
+          await fetch(x.base + "/private/api/history-retry", {
+            method: "POST",
+            headers: { Origin: x.base, "Content-Type": "application/json" },
+            body: JSON.stringify(request),
+          })
+        ).status,
+      ).toBe(401);
+      const headers = await unlockPrivate(x.base);
+      headers["X-Tend-CSRF"] = "wrong";
+      expect(
+        (
+          await fetch(x.base + "/private/api/history-retry", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(request),
+          })
+        ).status,
+      ).toBe(403);
+      expect(x.store.historyBackfills(owner)[0]!.last_error).toBe(
+        "history_page_requires_review",
+      );
+    } finally {
+      await x.close();
+    }
+  });
+});

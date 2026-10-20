@@ -210,7 +210,7 @@ class TestChannel {
   }
 }
 function browserFixture(
-  options: { revoked?: boolean; contact?: boolean } = {},
+  options: { revoked?: boolean; contact?: boolean; history?: unknown[] } = {},
 ): {
   elements: Map<string, BrowserElement>;
   window: EventTarget;
@@ -254,6 +254,11 @@ function browserFixture(
             expires_at: expires,
           });
     }
+    if (path === "/private/api/progress")
+      return Response.json({
+        history: options.history ?? [],
+        daily: { enabled: false },
+      });
     if (path.startsWith("/private/api/contacts"))
       return Response.json({
         contacts: options.contact
@@ -372,5 +377,81 @@ describe("mounted private session withdrawal", () => {
     expect(browser.elements.get("notice")?.textContent).toContain(
       "Select the draft text",
     );
+  });
+});
+
+describe("manual history review retry control", () => {
+  const held = {
+    source: "gmail",
+    account_id: "owner@example.invalid",
+    status: "paused",
+    last_error: "history_page_requires_review",
+    page_count: 1,
+    record_count: 10,
+    watermark: "2026-10-20T10:00:00Z",
+    cursor: "saved-page",
+  };
+  it("does not retry automatically and posts the exact saved account only after the owner clicks", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture({ history: [held] });
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const area = browser.elements.get("history-progress")!;
+    const button = area.children[0]?.children.find(
+      (child) => child.textContent === "Retry this held page",
+    );
+    expect(button).toBeDefined();
+    expect(
+      browser.fetch.mock.calls.filter(
+        (call) => call[0] === "/private/api/history-retry",
+      ),
+    ).toHaveLength(0);
+    button!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = browser.fetch.mock.calls.filter(
+      (call) => call[0] === "/private/api/history-retry",
+    );
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse((calls[0]![1] as RequestInit).body as string)).toEqual({
+      source: "gmail",
+      account_id: "owner@example.invalid",
+      confirm: "RETRY_HELD_HISTORY_PAGE",
+    });
+    expect((calls[0]![1] as RequestInit).headers).toMatchObject({
+      "X-Tend-CSRF": "fictional-csrf",
+    });
+  });
+  it("withdraws import account details and retry controls immediately on lock", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture({ history: [held] });
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const area = browser.elements.get("history-progress")!;
+    expect(area.children.length).toBe(1);
+    browser.elements.get("lock")!.dispatchEvent(new Event("click"));
+    expect(area.children).toHaveLength(0);
+    expect(browser.elements.get("daily-progress")!.textContent).toBeNull();
+    expect(
+      browser.fetch.mock.calls.filter(
+        (call) => call[0] === "/private/api/history-retry",
+      ),
+    ).toHaveLength(0);
+  });
+  it("does not offer clearing quota errors or an active page", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture({
+      history: [
+        { ...held, last_error: "provider_429" },
+        { ...held, status: "running" },
+      ],
+    });
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const area = browser.elements.get("history-progress")!;
+    expect(
+      area.children
+        .flatMap((child) => child.children)
+        .some((child) => child.textContent === "Retry this held page"),
+    ).toBe(false);
   });
 });
