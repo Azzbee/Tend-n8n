@@ -181,6 +181,7 @@ export async function retrieveRelevantEvidence(input: {
   owner: string;
   query: string;
   records: NormalizedRecord[];
+  actorNames?: ReadonlyMap<string, string>;
   search: (signal: AbortSignal) => Promise<SemanticSearchResult>;
   infer: NormalModel;
   signal: AbortSignal;
@@ -208,6 +209,14 @@ export async function retrieveRelevantEvidence(input: {
         id: "C" + index,
         source: hit.record.source,
         date: hit.record.occurred_at,
+        actor_identity: hit.record.actor_identity.slice(0, 1024),
+        ...(input.actorNames?.has(hit.record.record_key)
+          ? {
+              actor_name: input.actorNames
+                .get(hit.record.record_key)!
+                .slice(0, 120),
+            }
+          : {}),
         passage: hit.passage.text,
       })),
     });
@@ -260,14 +269,14 @@ export async function retrieveRelevantEvidence(input: {
         ),
         ids,
       );
-      // Explicitly named query entities require literal source support, even if the model selects a generic match.
+      // Named topics need literal body or exact actor support; names never establish a new identity.
       const entities = [
         ...input.query.matchAll(/(?<![\p{L}\p{N}])[\p{Lu}][\p{L}\p{N}]{2,}/gu),
       ]
         .map((match) => normalized(match[0]))
         .filter(
           (word) =>
-            !/^(?:what|when|where|which|who|how|find|search|show|give|tell|please|can|could|about|organising|organizing|messages|calls|cherche|trouve|montre|quand|quels|quelle|quelles|pour|des|les|peux|bonjour)$/u.test(
+            !/^(?:what|when|where|which|who|how|did|does|do|has|have|had|is|are|was|were|any|recent|latest|find|search|show|give|tell|please|can|could|about|organising|organizing|messages|calls|cherche|trouve|montre|quand|quels|quelle|quelles|pour|des|les|peux|bonjour)$/u.test(
               word,
             ),
         );
@@ -276,7 +285,13 @@ export async function retrieveRelevantEvidence(input: {
           relevant.includes(ids[index]!) &&
           entities.every((entity) =>
             new Set<string>(
-              normalized(hit.record.body_text).match(/[\p{L}\p{N}]+/gu) ?? [],
+              normalized(
+                [
+                  hit.record.body_text,
+                  hit.record.actor_identity,
+                  input.actorNames?.get(hit.record.record_key) ?? "",
+                ].join(" "),
+              ).match(/[\p{L}\p{N}]+/gu) ?? [],
             ).has(entity),
           ),
       );
@@ -298,7 +313,7 @@ export async function retrieveRelevantEvidence(input: {
       mode: "semantic",
       coverage,
       warning: selected.length
-        ? "Local AI checked relevance of at most twelve eligible candidate passages. Relevance does not verify identity or factual claims. Imported and indexed coverage may be partial."
+        ? "Local AI checked relevance of at most twelve eligible candidate passages. Capitalised topic checks use source text and existing actor metadata; they are not full entity recognition. Relevance does not verify identity or factual claims. Imported and indexed coverage may be partial."
         : "No relevant passage was found in the checked imported candidates. This does not establish absence from your accounts.",
     };
   } catch {

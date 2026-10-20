@@ -25,6 +25,28 @@ import {
 export const PRIVATE_EMBEDDING_DIGEST =
   "1a37926bf842899cbf90583e3932f3820548716d9d07661ba622199ffe95c552";
 export { guardSemanticRecords } from "./semantic-relevance.ts";
+/** Display names only support relevance after an exact stored actor binding. */
+export function semanticActorNames(
+  owner: string,
+  records: NormalizedRecord[],
+  contacts: (Contact & { emails: string[] })[],
+): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const record of records) {
+    if (record.owner_id !== owner) continue;
+    const ids = new Set([record.contact_id, ...(record.contact_ids ?? [])]);
+    const matches = contacts.filter(
+      (contact) =>
+        contact.owner_id === owner &&
+        contact.contact_id !== "OWNER" &&
+        ids.has(contact.contact_id) &&
+        contact.emails.includes(record.actor_identity),
+    );
+    if (matches.length === 1 && matches[0]!.name.trim())
+      names.set(record.record_key, matches[0]!.name.slice(0, 120));
+  }
+  return names;
+}
 export async function resolvePrivateSearchSelection(
   selector: string | undefined,
   policy: LivePolicy,
@@ -137,8 +159,14 @@ export function createPrivateServices(options: {
     signal: AbortSignal,
     ids?: string[],
     group?: VerifiedContactGroup,
+    contacts?: (Contact & { emails: string[] })[],
   ) =>
     retrieveRelevantEvidence({
+      actorNames: semanticActorNames(
+        owner,
+        records,
+        contacts ?? (await store.contacts(owner)),
+      ),
       owner,
       query,
       records,
@@ -212,6 +240,7 @@ export function createPrivateServices(options: {
       AbortSignal.timeout(45000),
       ids,
       group,
+      contacts,
     );
     const records = result.records;
     const prepared = {

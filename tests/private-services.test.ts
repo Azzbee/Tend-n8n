@@ -3,6 +3,7 @@ import {
   createPrivateServices,
   resolvePrivateSearchSelection,
   guardSemanticRecords,
+  semanticActorNames,
 } from "../src/private-services.ts";
 import { exampleLivePolicy, type LivePolicy } from "../src/live-policy.ts";
 import { fixtureContacts } from "../src/fixtures.ts";
@@ -170,4 +171,96 @@ describe("per-source semantic retention", () => {
       }
     },
   );
+});
+
+describe("semantic actor display names", () => {
+  it("uses only the exact owner-scoped actor binding", () => {
+    const record = {
+      owner_id: "owner",
+      record_key: "record",
+      actor_identity: "opaque-actor",
+      contact_id: "mira",
+      contact_ids: ["mira", "alex"],
+    } as NormalizedRecord;
+    const contacts = [
+      {
+        owner_id: "owner",
+        contact_id: "mira",
+        name: "Mira Tan",
+        emails: ["opaque-actor"],
+      },
+      {
+        owner_id: "owner",
+        contact_id: "alex",
+        name: "Alex",
+        emails: ["participant"],
+      },
+      {
+        owner_id: "foreign",
+        contact_id: "mira",
+        name: "Foreign name",
+        emails: ["opaque-actor"],
+      },
+    ];
+    expect([...semanticActorNames("owner", [record], contacts)]).toEqual([
+      ["record", "Mira Tan"],
+    ]);
+  });
+  it("does not use recipient, unrelated, ambiguous or foreign contact metadata", () => {
+    const r = {
+      owner_id: "owner",
+      record_key: "record",
+      actor_identity: "actual-actor",
+      contact_id: "mira",
+      contact_ids: ["mira"],
+    } as NormalizedRecord;
+    expect(
+      semanticActorNames(
+        "owner",
+        [r],
+        [
+          {
+            owner_id: "owner",
+            contact_id: "mira",
+            name: "Mira",
+            emails: ["participant"],
+          },
+        ],
+      ).size,
+    ).toBe(0);
+    expect(
+      semanticActorNames(
+        "owner",
+        [{ ...r, owner_id: "foreign" }],
+        [
+          {
+            owner_id: "owner",
+            contact_id: "mira",
+            name: "Mira",
+            emails: ["actual-actor"],
+          },
+        ],
+      ).size,
+    ).toBe(0);
+    expect(
+      semanticActorNames(
+        "owner",
+        [r],
+        [
+          {
+            owner_id: "owner",
+            contact_id: "mira",
+            name: "Mira",
+            emails: ["actual-actor"],
+          },
+          {
+            owner_id: "owner",
+            contact_id: "mira",
+            name: "Other name",
+            emails: ["actual-actor"],
+          },
+        ],
+      ).size,
+    ).toBe(0);
+  });
 });

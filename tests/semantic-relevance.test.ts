@@ -242,3 +242,54 @@ it("does not infer a named organisation from a generic call passage", async () =
   );
   expect(result.records.map((r) => r.record_key)).toEqual(["right"]);
 });
+
+it.each(["Did", "Has", "Any", "Recent", "Latest"])(
+  "keeps %s as question wording while checking the literal actor identity",
+  async (opening) => {
+    const r = {
+      ...record("budget", "Budget confirmed"),
+      actor_identity: "mira@example.invalid",
+    };
+    const result = await retrieveRelevantEvidence({
+      ...input([r]),
+      query: `${opening} Mira confirm the budget?`,
+    });
+    expect(result.records).toEqual([r]);
+  },
+);
+it("supports a saved exact actor display name for an opaque source identity", async () => {
+  const r = {
+    ...record("budget", "Budget confirmed"),
+    actor_identity: "unipile:account:opaque-person",
+  };
+  const infer = vi.fn<NormalModel>(async () => ({ relevant_ids: ["C0"] }));
+  const result = await retrieveRelevantEvidence({
+    ...input([r], infer),
+    query: "Did Mira confirm the budget?",
+    actorNames: new Map([[r.record_key, "Mira Tan"]]),
+  });
+  expect(result.records).toEqual([r]);
+  expect(infer.mock.calls[0]![0].messages.at(-1)!.content).toContain(
+    "Mira Tan",
+  );
+});
+it("does not substitute an unrelated participant for the actual actor", async () => {
+  const r = {
+    ...record("budget", "Budget confirmed"),
+    actor_identity: "alex@example.invalid",
+    participant_identities: ["mira@example.invalid"],
+  };
+  const result = await retrieveRelevantEvidence({
+    ...input([r]),
+    query: "Did Mira confirm the budget?",
+  });
+  expect(result.records).toEqual([]);
+});
+it("still requires an explicitly named organisation after question wording", async () => {
+  const r = record("generic", "Let us organise a call about the plan.");
+  const result = await retrieveRelevantEvidence({
+    ...input([r]),
+    query: "Recent Unaite calls",
+  });
+  expect(result.records).toEqual([]);
+});
