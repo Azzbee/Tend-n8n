@@ -746,7 +746,7 @@ describe("owner-only held history retry", () => {
       }
     },
   );
-  it("does not replace a concurrent provider error or its new quota deadline", async () => {
+  it("preserves a concurrent provider wait when explicitly retrying the same held page", async () => {
     const x = await setup();
     try {
       const headers = await unlockPrivate(x.base);
@@ -767,9 +767,9 @@ describe("owner-only held history retry", () => {
         headers,
         body: JSON.stringify(request),
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(200);
       expect(read(owner)[0]).toMatchObject({
-        last_error: "provider_429",
+        last_error: "owner_retry_requested",
         retry_after_until: "2026-10-22T12:00:00.000Z",
         cursor: null,
         page_count: 0,
