@@ -527,8 +527,14 @@ export class PostgresStore implements LiveStore {
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
       if (completion.complete && batch.reconcile) {
         const missing = await s.q<{ source_record_id: string }>(
-          "SELECT source_record_id FROM live_records r WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND NOT EXISTS(SELECT 1 FROM live_seen v WHERE v.owner_id=r.owner_id AND v.source=r.source AND v.account_id=r.account_id AND v.record_id=r.source_record_id)",
-          [batch.owner_id, batch.source, batch.account_id],
+          "SELECT source_record_id FROM live_records r WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND ((source='calendar' AND coalesce(end_at,occurred_at)::timestamptz>$4::timestamptz AND occurred_at::timestamptz<$5::timestamptz) OR (source<>'calendar' AND occurred_at::timestamptz>=$4::timestamptz AND occurred_at::timestamptz<=$5::timestamptz)) AND NOT EXISTS(SELECT 1 FROM live_seen v WHERE v.owner_id=r.owner_id AND v.source=r.source AND v.account_id=r.account_id AND v.record_id=r.source_record_id)",
+          [
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            batch.coverage_start,
+            batch.coverage_end,
+          ],
         );
         for (const r of missing)
           await s.remove(

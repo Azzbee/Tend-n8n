@@ -1273,14 +1273,30 @@ export class TendStore {
         );
         for (const record of this.interactions(batch.owner_id).filter(
           (x) => x.source === batch.source && x.account_id === batch.account_id,
-        ))
-          if (!seen.has(record.source_record_id))
+        )) {
+          if (
+            !exactTimestamp(record.occurred_at) ||
+            (record.source === "calendar" &&
+              record.end_at !== undefined &&
+              !exactTimestamp(record.end_at))
+          )
+            throw new Error("invalid reconciliation timestamp");
+          const start = Date.parse(batch.coverage_start),
+            end = Date.parse(batch.coverage_end),
+            occurred = Date.parse(record.occurred_at);
+          const covered =
+            record.source === "calendar"
+              ? Date.parse(record.end_at ?? record.occurred_at) > start &&
+                occurred < end
+              : occurred >= start && occurred <= end;
+          if (covered && !seen.has(record.source_record_id))
             this.removeLiveRecord(
               batch.owner_id,
               batch.source,
               batch.account_id,
               record.source_record_id,
             );
+        }
       }
       if (batch.complete)
         this.db

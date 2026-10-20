@@ -578,6 +578,176 @@ describe("separate history and daily ledgers", () => {
         }
       },
     );
+    it.each(["gmail", "whatsapp_personal", "calendar"] as const)(
+      kind + " reconciles only the incremental coverage window for %s",
+      async (source) => {
+        const owner = "reconcile-" + kind + "-" + source;
+        const account =
+          source === "gmail"
+            ? state.account_id
+            : source === "calendar"
+              ? "primary"
+              : "personal-account";
+        const principal2 = { ...principal, owner_id: owner };
+        const isolated =
+          kind === "sqlite"
+            ? new TendStore(":memory:", {
+                mode: "live",
+                principal: principal2,
+                clock: () => new Date(now),
+              })
+            : await PostgresStore.open({
+                connectionString: runtime.connectionString,
+                principal: principal2,
+                clock: () => new Date(now),
+              });
+        try {
+          const coverage_start =
+            source === "calendar" ? now : state.coverage_start;
+          const coverage_end =
+            source === "calendar" ? "2026-10-27T10:00:00.000Z" : now;
+          await isolated.seed(
+            [
+              { owner_id: owner, contact_id: "OWNER", name: "Owner" },
+              { owner_id: owner, contact_id: "peer", name: "Peer" },
+            ],
+            [
+              {
+                owner_id: owner,
+                identity: state.account_id,
+                contact_id: "OWNER",
+              },
+              {
+                owner_id: owner,
+                identity: "peer@example.invalid",
+                contact_id: "peer",
+              },
+            ],
+            [
+              {
+                ...state,
+                owner_id: owner,
+                source,
+                account_id: account,
+                coverage_start,
+                coverage_end,
+              },
+            ],
+          );
+          const old = {
+            ...page().records[0]!,
+            owner_id: owner,
+            source,
+            account_id: account,
+            ...(source === "calendar"
+              ? {
+                  kind: "meeting",
+                  direction: "event" as const,
+                  actor_identity: state.account_id,
+                  participant_identities: ["peer@example.invalid"],
+                  end_at: "2024-01-01T11:00:00.000Z",
+                }
+              : {}),
+          };
+          const recent = {
+            ...old,
+            source_record_id: "missing-in-window",
+            occurred_at:
+              source === "calendar"
+                ? "2026-10-19T23:00:00.000Z"
+                : "2026-10-19T10:00:00.000Z",
+            body_text: "Missing source inside coverage",
+            authored_text: "Missing source inside coverage",
+            ...(source === "calendar"
+              ? { end_at: "2026-10-20T11:00:00.000Z" }
+              : {}),
+          };
+          await isolated.beginHistoryBackfill(owner, source, account, now);
+          await isolated.commitHistoryBackfill({
+            ...page(),
+            owner_id: owner,
+            source,
+            account_id: account,
+            records: [old],
+            contacts: [],
+            identities: [],
+          });
+          await isolated.ingest(recent);
+          const before = await isolated.interactions(owner);
+          const prepared = (id: string) => {
+            const record = before.find((r) => r.source_record_id === id)!;
+            return {
+              reply: {
+                outbound_sent: false as const,
+                normal_message: record.body_text,
+              },
+              record_guards: [
+                {
+                  record_key: record.record_key,
+                  content_hash: record.content_hash,
+                },
+              ],
+            };
+          };
+          const oldView = prepared(old.source_record_id),
+            recentView = prepared(recent.source_record_id);
+          const policy: LivePolicy = {
+            ...exampleLivePolicy,
+            principal_id: owner,
+            history: { version: 1, mode: "all_available" },
+            social: {
+              window_days: 30,
+              history: { version: 1, mode: "all_available" },
+              accounts: [
+                {
+                  source: "whatsapp_personal",
+                  provider: "unipile",
+                  account_id: "personal-account",
+                  owner_identity: "123",
+                  owner_verified: true,
+                  api_base_url: "https://api1.unipile.com",
+                },
+              ],
+            },
+          };
+          const auth = {
+            ...principal2,
+            chat_type: "private",
+            text: "Retained evidence test",
+          };
+          expect(
+            await isolated.validatePreparedRead(auth, oldView, policy),
+          ).toEqual(oldView.reply);
+          expect(
+            await isolated.validatePreparedRead(auth, recentView, policy),
+          ).toEqual(recentView.reply);
+          await isolated.commitLiveBatch({
+            owner_id: owner,
+            source,
+            account_id: account,
+            records: [],
+            cursor: null,
+            expected_cursor: "incremental-kept",
+            complete: true,
+            reconcile: true,
+            coverage_start,
+            coverage_end,
+            seen_record_ids: [],
+          });
+          expect(
+            (await isolated.interactions(owner)).map((r) => r.source_record_id),
+          ).toEqual([old.source_record_id]);
+          expect(
+            await isolated.validatePreparedRead(auth, oldView, policy),
+          ).toEqual(oldView.reply);
+          expect(
+            await isolated.validatePreparedRead(auth, recentView, policy),
+          ).not.toEqual(recentView.reply);
+        } finally {
+          await isolated.close();
+        }
+      },
+    );
     it(
       kind + " keeps social history bounded when only Google history expands",
       async () => {
