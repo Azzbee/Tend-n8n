@@ -378,6 +378,12 @@ async function startLiveServer(): Promise<void> {
       connectionTimeoutMillis: 5000,
     },
   });
+  const dailyOwnerId = process.env.TEND_DAILY_OWNER_ID;
+  const dailyEnabledAt = process.env.TEND_DAILY_ENABLED_AT;
+  if (Boolean(dailyOwnerId) !== Boolean(dailyEnabledAt))
+    throw new Error(
+      "Daily briefing requires its persisted owner and activation timestamp together",
+    );
   const server = createLiveServer({
     policy,
     store,
@@ -385,6 +391,16 @@ async function startLiveServer(): Promise<void> {
     normalModel: services.normalModel,
     normalSemanticSearch: services.normalSemanticSearch,
     privateSemanticSearch: services.privateSemanticSearch,
+    ...(dailyOwnerId && dailyEnabledAt
+      ? {
+          dailyOwner: {
+            owner_id: policy.principal_id,
+            user_id: dailyOwnerId,
+            chat_id: dailyOwnerId,
+          },
+          dailyEnabledAt,
+        }
+      : {}),
   });
   server.listen(18768, "127.0.0.1", () => {
     services.start();

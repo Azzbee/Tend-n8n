@@ -233,6 +233,7 @@ function localDay(value: string | Date): string {
 export async function prepareNormalReply(input: {
   auth: AuthCommand;
   exactContactIntent?: { intent: "briefing" | "draft_preview"; query: string };
+  exactDailyIntent?: "digest";
   store: TendStore | LiveStore;
   model?: NormalModel;
   semanticSearch?: NormalSemanticSearch;
@@ -279,7 +280,15 @@ export async function prepareNormalReply(input: {
     }
   };
   let intent: NormalIntent | null;
-  if (input.exactContactIntent) {
+  if (input.exactDailyIntent !== undefined) {
+    if (
+      input.exactDailyIntent !== "digest" ||
+      input.exactContactIntent ||
+      auth.text !== "Daily owner priority briefing"
+    )
+      throw new Error("Invalid scheduled daily action");
+    intent = { intent: "digest" };
+  } else if (input.exactContactIntent) {
     const exact = input.exactContactIntent;
     if (
       !["briefing", "draft_preview"].includes(exact.intent) ||
@@ -420,6 +429,9 @@ export async function prepareNormalReply(input: {
     state.sources,
     auth.owner_id,
     input.policy !== undefined,
+    ["briefing", "draft_preview", "search", "contacts"].includes(intent.intent)
+      ? "history"
+      : "current",
   );
   const promiseKeys = new Set(
     [...promises.commitments, ...promises.pending].map((c) => c.record_key),
@@ -820,6 +832,9 @@ export async function prepareNormalReply(input: {
     await store.sourceStatus(auth.owner_id),
     auth.owner_id,
     input.policy !== undefined,
+    ["briefing", "draft_preview", "search", "contacts"].includes(intent.intent)
+      ? "history"
+      : "current",
   );
   const currentGroup = input.resolveGroup
     ? await input.resolveGroup(query)

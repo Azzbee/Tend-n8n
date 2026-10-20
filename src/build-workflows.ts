@@ -1,6 +1,7 @@
 import { isExplicitCommitment } from "./authored-promises.ts";
 import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
+import { buildDailyBriefingWorkflow } from "./daily-workflow.ts";
 import {
   telegramGuardCode,
   telegramReplyCode,
@@ -529,9 +530,9 @@ function privateWorkflow(id: string, title: string): Workflow {
   w.settings.saveManualExecutions = false;
   return w;
 }
-const approvedStateCode = `const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000)||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.reconnect_required!==true&&wait<=Date.now()}}];`;
+const approvedStateCode = `const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||(x.lane==='history'?(x.history_version!==1||x.window_start!=='0001-01-01T00:00:00.000Z'||!Number.isFinite(Date.parse(x.watermark))):end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000))||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.request_allowed!==false&&x.reconnect_required!==true&&wait<=Date.now()}}];`;
 const failureBody =
-  "={{ JSON.stringify({source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}";
+  "={{ JSON.stringify({...($json.lane==='history'?{lane:'history',history_version:1,watermark:$json.watermark}:{}),source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}";
 function addReadStage(
   w: Workflow,
   phase: string,
@@ -638,7 +639,7 @@ function addSyncStart(w: Workflow, source: "gmail" | "calendar"): string {
   );
   const state = liveHttp(
     "Read approved sync state",
-    `/api/live/sync-state?source=${source}`,
+    `/api/live/sync-state?source=${source}&lane=auto`,
     360,
   );
   const validate = code(
@@ -785,8 +786,39 @@ function addCommitPage(
     x + 980,
     "={{ JSON.stringify($json) }}",
   );
-  w.nodes.push(fan, empty, child, collect, final);
-  connect(w, from, fan.name);
+  const lane = code(
+    "Choose independent history lane",
+    "return [{json:{...$json,history_lane:$json.lane==='history'}}];",
+    x - 350,
+  );
+  const branch = condition("Independent history page", "history_lane", x - 180);
+  const historyPage = code(
+    "Bound whole history page",
+    `const x=$input.first().json,ctx=x;const raw=${recordsExpression};if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const records=raw.map(r=>Buffer.byteLength(JSON.stringify(r),'utf8')>Math.floor(x.budget.max_body_bytes/12)?{id:r.id,oversized:true}:r);const page={lane:'history',history_version:1,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,previous_cursor:x.cursor,cursor:x.next_cursor,complete:x.next_cursor===null,window_start:x.window_start,window_end:x.window_end};if(Buffer.byteLength(JSON.stringify(page),'utf8')>x.budget.max_body_bytes)throw new Error('History storage bound exceeded');return [{json:page}];`,
+    x + 100,
+  );
+  const historyCommit = liveHttp(
+    "Commit independent history page",
+    "/api/live/sync",
+    x + 350,
+    "={{ JSON.stringify($json) }}",
+  );
+  w.nodes.push(
+    lane,
+    branch,
+    historyPage,
+    historyCommit,
+    fan,
+    empty,
+    child,
+    collect,
+    final,
+  );
+  connect(w, from, lane.name);
+  connect(w, lane.name, branch.name);
+  connect(w, branch.name, historyPage.name);
+  connect(w, historyPage.name, historyCommit.name);
+  connect(w, branch.name, fan.name, 1);
   connect(w, fan.name, empty.name);
   connect(w, empty.name, collect.name);
   connect(w, empty.name, child.name, 1);
@@ -814,7 +846,7 @@ const gList = addReadStage(
   gmailCredential,
   `if(!body||typeof body!=='object'||(!Array.isArray(body.messages)&&body.resultSizeEstimate!==0)||!(body.nextPageToken===undefined||typeof body.nextPageToken==='string'))throw new Error('message page shape');const refs=body.messages||[];if(refs.length>ctx.page_size||refs.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(refs.map(r=>r.id)).size!==refs.length)throw new Error('message references');out={...out,ok:true,message_refs:refs,next_cursor:body.nextPageToken||null,retry_allowed:false,reconnect_required:false};`,
   2200,
-  "={{ JSON.stringify({q:'after:'+Math.floor(Date.parse($json.window_start)/1000)+' before:'+Math.ceil(Date.parse($json.window_end)/1000)+' -in:spam -in:trash -is:draft',includeSpamTrash:false,maxResults:$json.page_size,...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+  "={{ JSON.stringify({q:($json.lane==='history'?'':'after:'+Math.floor(Date.parse($json.window_start)/1000)+' ')+'before:'+Math.ceil(Date.parse($json.window_end)/1000)+' -in:spam -in:trash -is:draft',includeSpamTrash:false,maxResults:$json.page_size,...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
 );
 connect(liveGmail, gProfile.success, gList.start);
 const gmailDetailBatch = { batchSize: 1, batchInterval: 500 };
@@ -933,7 +965,7 @@ const cEvents = addReadStage(
   calendarCredential,
   `if(!body||body.kind!=='calendar#events'||!(body.items===undefined||Array.isArray(body.items))||!(body.nextPageToken===undefined||typeof body.nextPageToken==='string'))throw new Error('event page shape');const items=body.items||[];if(items.length>ctx.page_size||items.some(r=>!r||typeof r.id!=='string'||!r.id)||new Set(items.map(r=>r.id)).size!==items.length)throw new Error('event references');out={...out,ok:true,provider_records:items,next_cursor:body.nextPageToken||null,retry_allowed:false,reconnect_required:false};`,
   4600,
-  "={{ JSON.stringify({timeMin:$json.window_start,timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+  "={{ JSON.stringify({...($json.lane==='history'?{}:{timeMin:$json.window_start}),timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
 );
 connect(liveCalendar, cChosen.success, cEvents.start);
 addCommitPage(liveCalendar, cEvents.success, "ctx.provider_records", 5800);
@@ -1553,6 +1585,10 @@ for (let i = 0; i < workflows.length; i++)
     `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly", "business-whatsapp-readonly"][i]}.json`,
     workflows[i],
   );
+await writeJson(
+  "workflows/20-daily-owner-briefing.json",
+  buildDailyBriefingWorkflow(),
+);
 await mkdir("fixtures", { recursive: true });
 await writeJson("fixtures/local-ollama.json", [
   {
@@ -1572,5 +1608,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 1} inactive workflow exports and fictional fixture data.`,
 );

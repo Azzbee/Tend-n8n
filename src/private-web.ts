@@ -11,6 +11,9 @@ import {
 import type { LiveStore } from "./live-store.ts";
 import {
   calendarWindow,
+  calendarHistoryWindow,
+  gmailWindow,
+  messageHistoryStart,
   type LivePolicy,
   type VerifiedContactGroup,
 } from "./live-policy.ts";
@@ -32,6 +35,8 @@ interface Options {
   normalModel?: NormalModel;
   semanticSearch?: PrivateSemanticSearch;
   ready?: Promise<unknown>;
+  dailyStatus?: () => Promise<unknown>;
+  historyStatus?: () => Promise<unknown>;
   resolveGroup?: (id: string) => Promise<VerifiedContactGroup | undefined>;
 }
 const token = (): string => randomBytes(24).toString("base64url");
@@ -217,6 +222,15 @@ export function createPrivateWebHandler(
         });
         return true;
       }
+      if (req.method === "GET" && url.pathname === "/private/api/progress") {
+        send(200, {
+          history: options.historyStatus ? await options.historyStatus() : [],
+          daily: options.dailyStatus
+            ? await options.dailyStatus()
+            : { enabled: false },
+        });
+        return true;
+      }
       if (
         req.method === "POST" &&
         (req.headers.origin !== origin ||
@@ -357,10 +371,10 @@ export function createPrivateWebHandler(
                 contact_ids: [],
                 accounts,
                 now: now.toISOString(),
-                message_start: new Date(
-                  now.getTime() - 30 * 86400000,
-                ).toISOString(),
+                message_start: gmailWindow(policy, now).start,
+                social_start: messageHistoryStart(policy, "linkedin", now),
                 calendar_end: calendarWindow(policy, now).end,
+                calendar_start: calendarHistoryWindow(policy, now).start,
                 snapshots:
                   policy.manual_calendar_snapshots?.map(
                     ({ calendar_id, event_id }) => ({ calendar_id, event_id }),
@@ -461,10 +475,10 @@ export function createPrivateWebHandler(
                 )
               : approved,
             now: now.toISOString(),
-            message_start: new Date(
-              now.getTime() - 30 * 86400000,
-            ).toISOString(),
+            message_start: gmailWindow(policy, now).start,
+            social_start: messageHistoryStart(policy, "linkedin", now),
             calendar_end: window.end,
+            calendar_start: calendarHistoryWindow(policy, now).start,
             limit: 51,
           };
           for (const key of ["source", "direction", "from", "to"] as const) {
@@ -569,7 +583,11 @@ export function createPrivateWebHandler(
               (await options.resolveGroup?.(
                 v.prepared.ai_guard.prepared.contact_id,
               )) ?? null;
-          const reply = await store.validatePreparedRead(v.auth, v.prepared);
+          const reply = await store.validatePreparedRead(
+            v.auth,
+            v.prepared,
+            policy,
+          );
           const valid = samePrivateReply(
             v.prepared.reply,
             reply,
@@ -686,10 +704,10 @@ export function createPrivateWebHandler(
                 ({ calendar_id, event_id }) => ({ calendar_id, event_id }),
               ) ?? [],
             now: now.toISOString(),
-            message_start: new Date(
-              now.getTime() - 30 * 86400000,
-            ).toISOString(),
+            message_start: gmailWindow(policy, now).start,
+            social_start: messageHistoryStart(policy, "linkedin", now),
             calendar_end: calendarWindow(policy, now).end,
+            calendar_start: calendarHistoryWindow(policy, now).start,
             terms,
             limit: 10,
           });
@@ -752,7 +770,7 @@ export function createPrivateWebHandler(
           });
           return true;
         }
-        const reply = await store.validatePreparedRead(auth, prepared);
+        const reply = await store.validatePreparedRead(auth, prepared, policy);
         if (
           !samePrivateReply(
             prepared.reply,

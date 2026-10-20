@@ -260,8 +260,25 @@ export async function retrieveRelevantEvidence(input: {
         ),
         ids,
       );
-      selected = candidates.filter((_, index) =>
-        relevant.includes(ids[index]!),
+      // Explicitly named query entities require literal source support, even if the model selects a generic match.
+      const entities = [
+        ...input.query.matchAll(/(?<![\p{L}\p{N}])[\p{Lu}][\p{L}\p{N}]{2,}/gu),
+      ]
+        .map((match) => normalized(match[0]))
+        .filter(
+          (word) =>
+            !/^(?:what|when|where|which|who|how|find|search|show|give|tell|please|can|could|about|organising|organizing|messages|calls|cherche|trouve|montre|quand|quels|quelle|quelles|pour|des|les|peux|bonjour)$/u.test(
+              word,
+            ),
+        );
+      selected = candidates.filter(
+        (hit, index) =>
+          relevant.includes(ids[index]!) &&
+          entities.every((entity) =>
+            new Set<string>(
+              normalized(hit.record.body_text).match(/[\p{L}\p{N}]+/gu) ?? [],
+            ).has(entity),
+          ),
       );
     }
     if (!selected.length && coverage.state !== "complete")

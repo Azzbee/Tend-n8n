@@ -232,3 +232,13 @@ it("stops waiting for a nonresponsive injected model when the owner request abor
   controller.abort(new Error("Owner cancelled"));
   await expect(result).rejects.toThrow("Owner cancelled");
 });
+it("does not infer a named organisation from a generic call passage", async () => {
+  const records = [
+    record("right", "Organisons les appels de coordination Lumen Guild."),
+    record("wrong", "On organise un appel pour partager nos nouvelles."),
+  ];
+  const result = await retrieveRelevantEvidence(
+    input(records, async () => ({ relevant_ids: ["C0", "C1"] })),
+  );
+  expect(result.records.map((r) => r.record_key)).toEqual(["right"]);
+});

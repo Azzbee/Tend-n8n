@@ -1141,3 +1141,31 @@ it("does not claim AI relevance review for keyword results after canonical rejec
   expect(result.reply.search_note).toContain("Labelled keyword fallback");
   expect(result.reply.search_note).not.toContain("Local AI checked relevance");
 });
+
+describe("explicit scheduled digest preparation", () => {
+  it("skips interpretation only for the exact internal daily action", async () => {
+    const infer = vi.fn<NormalModel>(async () => {
+      throw new Error("Classifier must not run");
+    });
+    const result = await prepareNormalReply({
+      auth: auth("Daily owner priority briefing"),
+      store,
+      model: infer,
+      clock: now,
+      exactDailyIntent: "digest",
+    });
+    expect(result.reply.outbound_sent).toBe(false);
+    expect(result.reply).toHaveProperty("priorities");
+    expect(infer).not.toHaveBeenCalled();
+  });
+  it("rejects supplying a daily override for another request", async () => {
+    await expect(
+      prepareNormalReply({
+        auth: auth("Send everyone a note"),
+        store,
+        clock: now,
+        exactDailyIntent: "digest",
+      }),
+    ).rejects.toThrow("Invalid scheduled daily action");
+  });
+});

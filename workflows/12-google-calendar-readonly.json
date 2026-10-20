@@ -36,7 +36,7 @@
       "typeVersion": 4.2,
       "position": [360, 0],
       "parameters": {
-        "url": "http://host.docker.internal:18768/api/live/sync-state?source=calendar",
+        "url": "http://host.docker.internal:18768/api/live/sync-state?source=calendar&lane=auto",
         "options": { "timeout": 5000 },
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
@@ -60,7 +60,7 @@
       "typeVersion": 2,
       "position": [540, 0],
       "parameters": {
-        "jsCode": "const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000)||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.reconnect_required!==true&&wait<=Date.now()}}];"
+        "jsCode": "const x=$input.first().json;if(!x||typeof x.account_email!=='string'||!x.account_email.includes('@')||!['gmail','calendar'].includes(x.source))throw new Error('invalid approved sync state');const start=Date.parse(x.window_start),end=Date.parse(x.window_end);const b=x.budget;const valid=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end||(x.lane==='history'?(x.history_version!==1||x.window_start!=='0001-01-01T00:00:00.000Z'||!Number.isFinite(Date.parse(x.watermark))):end-start>(x.source==='gmail'?30*86400000:7*86400000+7200000))||!(x.cursor===null||typeof x.cursor==='string')||!b||!valid(b.max_run_ms,1000,300000)||!valid(b.max_attempts,1,5)||!valid(b.max_records_per_run,1,1000)||!valid(b.max_page_size,1,500)||!valid(b.max_body_bytes,1,1048576)||!valid(x.page_size,1,500))throw new Error('invalid approved sync state');if(x.source==='calendar'&&(typeof x.calendar_id!=='string'||!x.calendar_id))throw new Error('missing approved calendar');const started_at=$('Set sync clock').item.json.started_at;if(!Number.isFinite(started_at))throw new Error('invalid sync clock');const wait=x.retry_after_until===null||x.retry_after_until===undefined?0:Date.parse(x.retry_after_until);if(!Number.isFinite(wait))throw new Error('invalid provider retry time');return [{json:{...x,account_email:x.account_email.toLowerCase(),profile_account_email:null,started_at,deadline_at:started_at+b.max_run_ms,page_size:Math.min(20,x.page_size,b.max_records_per_run,b.max_page_size),attempts:{},request_allowed:x.request_allowed!==false&&x.reconnect_required!==true&&wait<=Date.now()}}];"
       }
     },
     {
@@ -115,7 +115,7 @@
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}",
+        "body": "={{ JSON.stringify({...($json.lane==='history'?{lane:'history',history_version:1,watermark:$json.watermark}:{}),source:$json.source,account_email:$json.account_email,profile_account_email:$json.profile_account_email??null,...($json.calendar_id?{calendar_id:$json.calendar_id}:{}),cursor:$json.cursor,status_code:$json.status_code??599,retry_after_seconds:$json.retry_delay_seconds??0,reconnect_required:$json.reconnect_required===true}) }}",
         "options": { "timeout": 5000 },
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth"
@@ -644,7 +644,7 @@
         "nodeCredentialType": "googleCalendarOAuth2Api",
         "sendQuery": true,
         "specifyQuery": "json",
-        "jsonQuery": "={{ JSON.stringify({timeMin:$json.window_start,timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
+        "jsonQuery": "={{ JSON.stringify({...($json.lane==='history'?{}:{timeMin:$json.window_start}),timeMax:$json.window_end,singleEvents:true,showDeleted:true,maxResults:$json.page_size,timeZone:'Europe/Paris',...($json.cursor?{pageToken:$json.cursor}:{})}) }}",
         "options": {
           "timeout": 5000,
           "response": {
@@ -746,6 +746,85 @@
         "amount": "={{ $json.retry_delay_seconds }}",
         "unit": "seconds"
       }
+    },
+    {
+      "id": "choose-independent-history-lane",
+      "name": "Choose independent history lane",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5450, 0],
+      "parameters": {
+        "jsCode": "return [{json:{...$json,history_lane:$json.lane==='history'}}];"
+      }
+    },
+    {
+      "id": "independent-history-page",
+      "name": "Independent history page",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [5620, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "condition",
+              "leftValue": "={{ $json.history_lane }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bound-whole-history-page",
+      "name": "Bound whole history page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5900, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json,ctx=x;const raw=ctx.provider_records;if(!Array.isArray(raw)||raw.length>10)throw new Error('History page size exceeded');const records=raw.map(r=>Buffer.byteLength(JSON.stringify(r),'utf8')>Math.floor(x.budget.max_body_bytes/12)?{id:r.id,oversized:true}:r);const page={lane:'history',history_version:1,watermark:x.watermark,source:x.source,account_email:x.account_email,profile_account_email:x.profile_account_email,...(x.calendar_id?{calendar_id:x.calendar_id}:{}),records,previous_cursor:x.cursor,cursor:x.next_cursor,complete:x.next_cursor===null,window_start:x.window_start,window_end:x.window_end};if(Buffer.byteLength(JSON.stringify(page),'utf8')>x.budget.max_body_bytes)throw new Error('History storage bound exceeded');return [{json:page}];"
+      }
+    },
+    {
+      "id": "commit-independent-history-page",
+      "name": "Commit independent history page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [6150, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/sync",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
     },
     {
       "id": "prepare-bounded-provider-records",
@@ -1137,7 +1216,7 @@
       "main": [
         [
           {
-            "node": "Prepare bounded provider records",
+            "node": "Choose independent history lane",
             "type": "main",
             "index": 0
           }
@@ -1166,6 +1245,34 @@
     "Wait Calendar event page Retry-After": {
       "main": [
         [{ "node": "Prepare Calendar event page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Choose independent history lane": {
+      "main": [
+        [{ "node": "Independent history page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Independent history page": {
+      "main": [
+        [{ "node": "Bound whole history page", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Prepare bounded provider records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bound whole history page": {
+      "main": [
+        [
+          {
+            "node": "Commit independent history page",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Prepare bounded provider records": {

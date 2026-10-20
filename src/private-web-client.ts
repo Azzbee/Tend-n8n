@@ -1040,9 +1040,55 @@ export function mountPrivateWorkspace(): void {
     get<HTMLCanvasElement>("pixel-art"),
     get<HTMLButtonElement>("pixel-motion"),
   );
+  async function loadProgress(): Promise<void> {
+    try {
+      const result = await api<{ history: unknown[]; daily: unknown }>(
+        "progress",
+      );
+      if (!session) return;
+      const plain = (v: unknown): v is Record<string, unknown> =>
+        typeof v === "object" && v !== null && !Array.isArray(v);
+      const daily = result.daily;
+      if (plain(daily) && plain(daily.schedule)) {
+        const latest = plain(daily.last_sent_delivery)
+          ? daily.last_sent_delivery
+          : null;
+        const delivery = plain(daily.delivery) ? daily.delivery : null;
+        setText(
+          "daily-progress",
+          `Daily briefing: 09:00 Paris. Next: ${parisTime(String(daily.schedule.next_scheduled_at))}. ${latest ? `Last delivered: ${String(latest.paris_date)}.` : "No delivery recorded yet."} ${delivery ? `Today: ${String(delivery.state)}${delivery.failure ? ` (${String(delivery.failure)})` : ""}.` : ""}`,
+        );
+      } else setText("daily-progress", "Daily briefing is not enabled yet.");
+      const area = get("history-progress");
+      area.replaceChildren();
+      if (!result.history.length)
+        area.append(
+          node(
+            "p",
+            "History backfill has not started. Current imports remain bounded by their shown coverage.",
+            "small",
+          ),
+        );
+      for (const item of result.history.filter(plain))
+        area.append(
+          node(
+            "p",
+            `${sourceName(String(item.source))} · ${String(item.account_id)}: ${String(item.status)} · ${String(item.page_count)} pages · ${String(item.record_count)} records${item.oldest_at ? ` · oldest ${parisTime(String(item.oldest_at))}` : ""}${item.newest_at ? ` · newest ${parisTime(String(item.newest_at))}` : ""} · frozen at ${parisTime(String(item.watermark))} · ${item.cursor ? "more pages remain" : item.status === "complete" ? "pagination finished" : "not yet complete"}${item.last_error ? ` · paused: ${String(item.last_error)}` : ""}`,
+            "small",
+          ),
+        );
+    } catch {
+      if (session)
+        setText(
+          "daily-progress",
+          "Import and delivery status is unavailable. No delivery is assumed.",
+        );
+    }
+  }
   void api<PrivateSessionResponse>("session")
     .then((value) => {
       session = value;
+      void loadProgress();
       locked.hidden = true;
       workspace.hidden = false;
       visible("lock", true);

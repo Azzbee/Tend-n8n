@@ -1,3 +1,5 @@
+import { createDailyAPI } from "./daily-api.ts";
+import { createHistoryAPI } from "./history-api.ts";
 import { createPrivateWebHandler } from "./private-web.ts";
 import type { PrivateSemanticSearch } from "./private-web-types.ts";
 import { SocialReadSessions } from "./social-read-session.ts";
@@ -15,6 +17,8 @@ import {
   assertGoogleRead,
   gmailWindow,
   calendarWindow,
+  calendarHistoryWindow,
+  messageHistoryStart,
   validateLivePolicy,
   parseLivePolicy,
   type VerifiedContactGroup,
@@ -44,6 +48,8 @@ export interface LiveServerOptions {
   normalModel?: NormalModel;
   normalSemanticSearch?: NormalSemanticSearch;
   privateSemanticSearch?: PrivateSemanticSearch;
+  dailyOwner?: { owner_id: string; user_id: string; chat_id: string };
+  dailyEnabledAt?: string;
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
@@ -120,10 +126,31 @@ export function createLiveServer(options: LiveServerOptions): Server {
     () => true,
     () => false,
   );
+  const historyAPI = createHistoryAPI({ store, policy, clock });
+  const dailyAPI = options.dailyOwner
+    ? createDailyAPI({
+        store,
+        policy,
+        owner: options.dailyOwner,
+        clock,
+        ...(options.dailyEnabledAt
+          ? { enabledAt: options.dailyEnabledAt }
+          : {}),
+        ...(options.normalModel ? { normalModel: options.normalModel } : {}),
+      })
+    : null;
+  const incrementalPolicy = { ...policy };
+  delete incrementalPolicy.history;
   const enforceRetention = async () => {
     const m = gmailWindow(policy, clock()),
-      c = calendarWindow(policy, clock());
-    await store.expireLiveEvidence(owner, m.start, c.start, c.end);
+      c = calendarHistoryWindow(policy, clock());
+    await store.expireLiveEvidence(
+      owner,
+      m.start,
+      c.start,
+      c.end,
+      messageHistoryStart(policy, "linkedin", clock()),
+    );
   };
   const command = (input: Record<string, unknown>): AuthCommand => {
     if (
@@ -143,6 +170,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         store,
         principal_id: owner,
         clock,
+        historyResourceGate: historyAPI.gate,
       })
     : null;
   let calendarTurn = 0;
@@ -199,6 +227,8 @@ export function createLiveServer(options: LiveServerOptions): Server {
     clock,
     ready,
     resolveGroup,
+    historyStatus: async () => store.historyBackfills(owner),
+    ...(dailyAPI ? { dailyStatus: () => dailyAPI.status() } : {}),
     ...(options.normalModel ? { normalModel: options.normalModel } : {}),
     ...(options.privateSemanticSearch
       ? { semanticSearch: options.privateSemanticSearch }
@@ -301,9 +331,17 @@ export function createLiveServer(options: LiveServerOptions): Server {
         return;
       }
       await enforceRetention();
+      if (req.method === "GET" && url.pathname === "/api/live/daily/status") {
+        respond(200, dailyAPI ? await dailyAPI.status() : { enabled: false });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/live/status") {
         respond(200, {
           mode: "PRIVATE LIVE GOOGLE",
+          history_backfills: await store.historyBackfills(owner),
+          daily_briefing: dailyAPI
+            ? await dailyAPI.status()
+            : { enabled: false },
           counts: await store.counts(owner),
           sources: await store.sourceStatus(owner),
           telegram_delivery: await store.telegramDeliveryCounts(),
@@ -347,6 +385,18 @@ export function createLiveServer(options: LiveServerOptions): Server {
         const source = url.searchParams.get("source");
         if (source !== "gmail" && source !== "calendar")
           throw new Error("invalid source");
+        if (
+          url.searchParams.get("lane") === "history" ||
+          (policy.history &&
+            url.searchParams.get("lane") === "auto" &&
+            clock().getUTCMinutes() % 2 === 0)
+        ) {
+          const historical = await historyAPI.state(source);
+          if (historical.reason !== "history_complete") {
+            respond(200, historical);
+            return;
+          }
+        }
         const states = (await store.sourceStatus(owner)).filter(
           (x) =>
             x.source === source &&
@@ -367,7 +417,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         if (!selected) throw new Error("source missing");
         const range =
           source === "gmail"
-            ? gmailWindow(policy, clock())
+            ? gmailWindow(incrementalPolicy, clock())
             : calendarWindow(policy, clock());
         const state = await store.prepareLiveSnapshot(
           owner,
@@ -403,11 +453,19 @@ export function createLiveServer(options: LiveServerOptions): Server {
           !socialReads ||
           [...url.searchParams.keys()].some(
             (k) =>
-              !["source", "account_id", "phase", "proof_id"].includes(k) ||
-              url.searchParams.getAll(k).length !== 1,
+              !["source", "account_id", "phase", "proof_id", "lane"].includes(
+                k,
+              ) || url.searchParams.getAll(k).length !== 1,
           )
         )
           throw new Error("Configured explicit social read required");
+        if (url.searchParams.get("lane") === "history") {
+          const reason = await historyAPI.gate();
+          if (reason) {
+            respond(200, { available: false, reason });
+            return;
+          }
+        }
         respond(200, {
           ...(await socialReads.plan(Object.fromEntries(url.searchParams))),
           max_result_bytes: policy.limits.max_body_bytes,
@@ -567,6 +625,25 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      if (url.pathname.startsWith("/api/live/daily/")) {
+        if (!dailyAPI) {
+          respond(409, { error: "Daily briefing is not configured" });
+          return;
+        }
+        const action = url.pathname.slice("/api/live/daily/".length);
+        if (action === "prepare") {
+          if (Object.keys(value).length)
+            throw new Error("Daily preparation takes no input");
+          respond(200, await dailyAPI.prepare());
+        } else if (action === "claim")
+          respond(200, await dailyAPI.claim(value));
+        else if (action === "ack")
+          respond(200, await dailyAPI.acknowledge(value));
+        else if (action === "uncertain")
+          respond(200, await dailyAPI.uncertain(value));
+        else respond(404, { error: "Unknown daily action" });
+        return;
+      }
       if (url.pathname === "/api/live/linkedin-withdraw") {
         if (
           url.search ||
@@ -698,7 +775,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           throw new Error("fresh operator profile proof required");
         const range =
           source === "gmail"
-            ? gmailWindow(policy, clock())
+            ? gmailWindow(incrementalPolicy, clock())
             : calendarWindow(policy, clock());
         await store.reconnectLiveSource(
           owner,
@@ -766,6 +843,15 @@ export function createLiveServer(options: LiveServerOptions): Server {
         url.pathname === "/api/live/sync" ||
         url.pathname === "/api/live/sync-error"
       ) {
+        if (value.lane === "history") {
+          respond(
+            200,
+            url.pathname.endsWith("sync-error")
+              ? await historyAPI.error(value)
+              : await historyAPI.commit(value),
+          );
+          return;
+        }
         const source = value.source;
         if (source !== "gmail" && source !== "calendar")
           throw new Error("invalid source");
@@ -1048,6 +1134,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
               update,
               prepared,
               disconnected.signal,
+              policy,
             );
             if (!res.destroyed) respond(200, result);
           } finally {

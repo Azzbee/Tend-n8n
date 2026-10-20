@@ -1,0 +1,319 @@
+{
+  "id": "TendDailyOwnerBriefing",
+  "name": "Tend: Daily private owner briefing at 09:00 Paris",
+  "active": false,
+  "nodes": [
+    {
+      "id": "daily-paris-schedule-and-bounded-catch-up",
+      "name": "Daily Paris schedule and bounded catch-up",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 0 9 * * *" },
+            { "field": "cronExpression", "expression": "0 */5 9-12 * * *" }
+          ]
+        }
+      },
+      "position": [0, 0],
+      "retryOnFail": false
+    },
+    {
+      "id": "prepare-dated-priority-digest",
+      "name": "Prepare dated priority digest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18768/api/live/daily/prepare",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "{}",
+        "options": { "timeout": 55000 }
+      },
+      "position": [240, 0],
+      "retryOnFail": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "continue-only-a-pending-dated-digest",
+      "name": "Continue only a pending dated digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(x.state!=='pending'||typeof x.paris_date!=='string'||typeof x.delivery_id!=='string')return [];return [{json:{paris_date:x.paris_date,delivery_id:x.delivery_id}}];"
+      },
+      "position": [480, 0],
+      "retryOnFail": false
+    },
+    {
+      "id": "claim-once-after-current-evidence-validation",
+      "name": "Claim once after current evidence validation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18768/api/live/daily/claim",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 55000 }
+      },
+      "position": [720, 0],
+      "retryOnFail": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "validate-exact-owner-transport",
+      "name": "Validate exact owner transport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const ownerUser='CONFIGURE_OWNER_USER_ID',ownerChat='CONFIGURE_OWNER_CHAT_ID';\nif(!/^[1-9]\\d{0,15}$/.test(ownerUser)||ownerChat!==ownerUser)throw new Error('Exact configured owner required');\nconst t=$input.first().json.transport;if(t===null)return [];\nif(!t||typeof t!=='object'||Object.keys(t).sort().join(',')!=='chat_id,delivery_id,paris_date,text'||t.chat_id!==ownerChat||typeof t.text!=='string'||!t.text.trim()||t.text.length>4096||typeof t.paris_date!=='string'||!/^\\d{4}-\\d{2}-\\d{2}$/.test(t.paris_date)||typeof t.delivery_id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(t.delivery_id))throw new Error('Exact private owner transport required');\nreturn [{json:t}];"
+      },
+      "position": [960, 0],
+      "retryOnFail": false
+    },
+    {
+      "id": "send-one-private-daily-briefing",
+      "name": "Send one private daily briefing",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "position": [1200, 0],
+      "retryOnFail": false,
+      "credentials": {
+        "telegramApi": {
+          "id": "CONFIGURE_TELEGRAM_CREDENTIAL_ID",
+          "name": "CONFIGURE_TELEGRAM_CREDENTIAL"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "inspect-actual-telegram-receipt",
+      "name": "Inspect actual Telegram receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const ownerUser='CONFIGURE_OWNER_USER_ID',ownerChat='CONFIGURE_OWNER_CHAT_ID';\nconst selected=$('Validate exact owner transport').first().json,raw=$input.first().json;\nconst object=v=>v&&typeof v==='object'&&!Array.isArray(v);const wrapped=object(raw)&&Object.hasOwn(raw,'result');\nconst receipt=wrapped?raw.result:raw;\nconst valid=/^[1-9]\\d{0,15}$/.test(ownerUser)&&ownerUser===ownerChat&&object(raw)&&(!wrapped?!Object.hasOwn(raw,'ok'):raw.ok===true)&&object(receipt)&&Number.isSafeInteger(receipt.message_id)&&receipt.message_id>0&&object(receipt.chat)&&receipt.chat.type==='private'&&['string','number'].includes(typeof receipt.chat.id)&&String(receipt.chat.id)===ownerChat;\nreturn [{json:{paris_date:selected.paris_date,delivery_id:selected.delivery_id,receipt_valid:Boolean(valid),...(valid?{receipt:raw}:{})}}];"
+      },
+      "position": [1440, 0],
+      "retryOnFail": false
+    },
+    {
+      "id": "actual-matching-receipt-available",
+      "name": "Actual matching receipt available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "actual-receipt",
+              "leftValue": "={{ $json.receipt_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1680, 0],
+      "retryOnFail": false
+    },
+    {
+      "id": "record-actual-owner-acknowledgement",
+      "name": "Record actual owner acknowledgement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18768/api/live/daily/ack",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({paris_date:$json.paris_date,delivery_id:$json.delivery_id,receipt:$json.receipt}) }}",
+        "options": { "timeout": 55000 }
+      },
+      "position": [1920, 0],
+      "retryOnFail": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "hold-uncertain-owner-delivery",
+      "name": "Hold uncertain owner delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18768/api/live/daily/uncertain",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({paris_date:$json.paris_date,delivery_id:$json.delivery_id}) }}",
+        "options": { "timeout": 55000 }
+      },
+      "position": [1920, 180],
+      "retryOnFail": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Paris schedule and bounded catch-up": {
+      "main": [
+        [
+          {
+            "node": "Prepare dated priority digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare dated priority digest": {
+      "main": [
+        [
+          {
+            "node": "Continue only a pending dated digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue only a pending dated digest": {
+      "main": [
+        [
+          {
+            "node": "Claim once after current evidence validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim once after current evidence validation": {
+      "main": [
+        [
+          {
+            "node": "Validate exact owner transport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate exact owner transport": {
+      "main": [
+        [
+          {
+            "node": "Send one private daily briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send one private daily briefing": {
+      "main": [
+        [
+          {
+            "node": "Inspect actual Telegram receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect actual Telegram receipt": {
+      "main": [
+        [
+          {
+            "node": "Actual matching receipt available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Actual matching receipt available": {
+      "main": [
+        [
+          {
+            "node": "Record actual owner acknowledgement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hold uncertain owner delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "executionTimeout": 180,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "tags": []
+}

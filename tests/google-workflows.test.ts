@@ -781,3 +781,35 @@ describe("read-only Google workflow contracts", () => {
     );
   });
 });
+it.each(files.slice(0, 2))(
+  "executes the whole history-page branch for %s",
+  (file) => {
+    const w = load(file),
+      n = w.nodes.find((n) => n.name === "Bound whole history page")!;
+    const context = {
+      lane: "history",
+      history_version: 1,
+      watermark: "2026-10-20T10:00:00.000Z",
+      source: file.startsWith("11") ? "gmail" : "calendar",
+      account_email: "owner@example.invalid",
+      profile_account_email: "owner@example.invalid",
+      calendar_id: "primary",
+      cursor: null,
+      next_cursor: "page2",
+      window_start: "0001-01-01T00:00:00.000Z",
+      window_end: "2026-10-20T10:00:00.000Z",
+      budget: { max_body_bytes: 262144 },
+      provider_records: [{ id: "old-record" }],
+    };
+    const result = evaluate(String(n.parameters.jsCode), context) as {
+      json: Record<string, unknown>;
+    }[];
+    expect(result[0]?.json).toMatchObject({
+      lane: "history",
+      records: [{ id: "old-record" }],
+      previous_cursor: null,
+      cursor: "page2",
+      complete: false,
+    });
+  },
+);
