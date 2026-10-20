@@ -1002,15 +1002,6 @@ export class TendStore {
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),mode TEXT NOT NULL,principal_id TEXT NOT NULL)",
     );
-    if (
-      !this.db
-        .prepare("PRAGMA table_info(live_quarantines)")
-        .all()
-        .some((column) => column.name === "original_reference")
-    )
-      this.db.exec(
-        "ALTER TABLE live_quarantines ADD COLUMN original_reference TEXT",
-      );
     const binding = this.db
       .prepare("SELECT mode,principal_id FROM store_metadata WHERE singleton=1")
       .get();
@@ -1032,6 +1023,15 @@ export class TendStore {
       this.db.close();
       throw new Error("database mode or principal mismatch");
     }
+    if (
+      !this.db
+        .prepare("PRAGMA table_info(live_quarantines)")
+        .all()
+        .some((column) => column.name === "original_reference")
+    )
+      this.db.exec(
+        "ALTER TABLE live_quarantines ADD COLUMN original_reference TEXT",
+      );
     this.db
       .prepare("INSERT OR IGNORE INTO store_metadata VALUES(1,?,?)")
       .run(this.mode, expectedPrincipal);
@@ -1296,7 +1296,7 @@ export class TendStore {
       for (const raw of batch.records) {
         const quarantined = this.db
           .prepare(
-            "SELECT observed_at FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
+            "SELECT observed_at,original_reference FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
           )
           .get(
             batch.owner_id,
@@ -1311,6 +1311,21 @@ export class TendStore {
         )
           continue;
         out.push(this.writeRecord(raw, true));
+        if (
+          quarantined?.original_reference ===
+          `tend-source:${batch.source}/${encodeURIComponent(batch.account_id)}/${encodeURIComponent(raw.source_record_id)}`
+        )
+          this.db
+            .prepare(
+              "INSERT OR IGNORE INTO live_history_seen(owner_id,source,account_id,version,record_id) SELECT owner_id,source,account_id,1,? FROM live_history_backfills WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+            )
+            .run(
+              raw.source_record_id,
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+            );
+
         this.db
           .prepare(
             "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND julianday(observed_at)<=julianday(?)",
@@ -1843,12 +1858,15 @@ export class TendStore {
     if (this.mode !== "live") throw new Error("live mode required");
     return this.db
       .prepare(
-        "SELECT b.data,(SELECT count(*) FROM live_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count FROM live_history_backfills b WHERE owner_id=? ORDER BY source,account_id",
+        "SELECT b.data,(SELECT count(*) FROM live_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count,count(i.record_key) record_count,strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(json_extract(i.data,'$.occurred_at')))) oldest_at,strftime('%Y-%m-%dT%H:%M:%fZ',max(julianday(json_extract(i.data,'$.occurred_at')))) newest_at FROM live_history_backfills b LEFT JOIN live_history_seen h ON h.owner_id=b.owner_id AND h.source=b.source AND h.account_id=b.account_id AND h.version=b.version LEFT JOIN interactions i ON i.owner_id=h.owner_id AND i.source=h.source AND i.account_id=h.account_id AND i.source_record_id=h.record_id WHERE b.owner_id=? GROUP BY b.owner_id,b.source,b.account_id,b.version ORDER BY b.source,b.account_id",
       )
       .all(owner)
       .map((r) => ({
         ...(JSON.parse(String(r.data)) as HistoryCheckpoint),
         quarantined_count: Number(r.quarantined_count),
+        record_count: Number(r.record_count),
+        oldest_at: r.oldest_at === null ? null : String(r.oldest_at),
+        newest_at: r.newest_at === null ? null : String(r.newest_at),
       }));
   }
   historyQuarantines(

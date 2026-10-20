@@ -416,6 +416,10 @@ describe.each(["sqlite", "postgres"] as const)(
           incremental(null, "i1", "2026-10-20T17:30:00.000Z"),
         );
         expect(await f.store.interactions(f.owner)).toHaveLength(0);
+        expect((await f.store.historyBackfills(f.owner))[0]).toMatchObject({
+          record_count: 0,
+          quarantined_count: 1,
+        });
         expect(
           (await f.store.historyQuarantines(f.owner, "gmail", f.account)).items,
         ).toEqual([f.quarantine()]);
@@ -432,6 +436,12 @@ describe.each(["sqlite", "postgres"] as const)(
         await f.store.commitLiveBatch(incremental("i3", "i4", now));
         expect(await f.store.interactions(f.owner)).toHaveLength(1);
         expect(await f.store.quarantineCount(f.owner)).toBe(0);
+        expect((await f.store.historyBackfills(f.owner))[0]).toMatchObject({
+          record_count: 1,
+          quarantined_count: 0,
+          oldest_at: "2026-10-20T16:00:00.000Z",
+          newest_at: "2026-10-20T16:00:00.000Z",
+        });
       } finally {
         await f.store.close();
       }
@@ -662,5 +672,89 @@ describe.each(["sqlite", "postgres"] as const)(
         rmSync(dir, { recursive: true, force: true });
       }
     });
+    it.skipIf(kind !== "sqlite")(
+      "rejects a wrong principal before upgrading a legacy SQLite quarantine table",
+      () => {
+        const dir = mkdtempSync(join(tmpdir(), "history-owner-upgrade-")),
+          path = join(dir, "legacy.sqlite");
+        try {
+          const owner = "bound-owner",
+            principal = { owner_id: owner, user_id: "u", chat_id: "c" };
+          const correct = new TendStore(path, { mode: "live", principal });
+          correct.close();
+          const legacy = new DatabaseSync(path);
+          try {
+            legacy.exec(
+              "ALTER TABLE live_quarantines DROP COLUMN original_reference",
+            );
+          } finally {
+            legacy.close();
+          }
+          expect(
+            () =>
+              new TendStore(path, {
+                mode: "live",
+                principal: { ...principal, owner_id: "other-owner" },
+              }),
+          ).toThrow(/principal/);
+          expect(() => new TendStore(path, { mode: "fixture" })).toThrow(
+            /mode/,
+          );
+          const inspected = new DatabaseSync(path, { readOnly: true });
+          try {
+            expect(
+              inspected
+                .prepare("PRAGMA table_info(live_quarantines)")
+                .all()
+                .some((r) => r.name === "original_reference"),
+            ).toBe(false);
+          } finally {
+            inspected.close();
+          }
+          const reopened = new TendStore(path, { mode: "live", principal });
+          reopened.close();
+          const upgraded = new DatabaseSync(path, { readOnly: true });
+          try {
+            expect(
+              upgraded
+                .prepare("PRAGMA table_info(live_quarantines)")
+                .all()
+                .some((r) => r.name === "original_reference"),
+            ).toBe(true);
+          } finally {
+            upgraded.close();
+          }
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+    it.skipIf(kind !== "postgres")(
+      "opens an already migrated PostgreSQL quarantine table without an exclusive DDL lock",
+      async () => {
+        const f = await fixture();
+        const pool = new Pool({ connectionString: runtime.connectionString }),
+          client = await pool.connect();
+        let opened: PostgresStore | undefined;
+        try {
+          await client.query("BEGIN");
+          await client.query(
+            "LOCK TABLE live_review_quarantines IN ACCESS SHARE MODE",
+          );
+          opened = await PostgresStore.open({
+            connectionString: runtime.connectionString,
+            principal: f.principal,
+            options: "-c lock_timeout=300ms",
+          });
+          expect(await opened.quarantineCount(f.owner)).toBe(0);
+        } finally {
+          await client.query("ROLLBACK");
+          client.release();
+          await opened?.close();
+          await pool.end();
+          await f.store.close();
+        }
+      },
+    );
   },
 );

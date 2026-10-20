@@ -134,15 +134,20 @@ export class PostgresStore implements LiveStore {
           "utf8",
         ),
       );
-      await pool.query(
-        readFileSync(
-          new URL(
-            "../schema/006-history-quarantine-reference.sql",
-            import.meta.url,
-          ),
-          "utf8",
-        ),
+      const referenceColumn = await pool.query(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='live_review_quarantines' AND column_name='original_reference'",
       );
+      if (referenceColumn.rowCount === 0) {
+        await pool.query(
+          readFileSync(
+            new URL(
+              "../schema/006-history-quarantine-reference.sql",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+      }
       await pool.query(
         "INSERT INTO live_runtime_principal VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
         [principal.owner_id, principal.user_id, principal.chat_id],
@@ -514,8 +519,8 @@ export class PostgresStore implements LiveStore {
       const out: NormalizedRecord[] = [];
       for (const raw of batch.records) {
         const quarantined = (
-          await s.q<{ observed_at: string }>(
-            "SELECT observed_at FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4",
+          await s.q<{ observed_at: string; original_reference: string | null }>(
+            "SELECT observed_at,original_reference FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4",
             [
               batch.owner_id,
               batch.source,
@@ -530,6 +535,20 @@ export class PostgresStore implements LiveStore {
         )
           continue;
         out.push(await s.write(raw, true));
+        if (
+          quarantined?.original_reference ===
+          `tend-source:${batch.source}/${encodeURIComponent(batch.account_id)}/${encodeURIComponent(raw.source_record_id)}`
+        )
+          await s.q(
+            "INSERT INTO live_history_seen(owner_id,source,account_id,version,record_id) SELECT owner_id,source,account_id,1,$4 FROM live_history_backfills WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1 ON CONFLICT DO NOTHING",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              raw.source_record_id,
+            ],
+          );
+
         await s.q(
           "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at::timestamptz<=$5::timestamptz",
           [
@@ -877,13 +896,24 @@ export class PostgresStore implements LiveStore {
     this.owner(owner);
     return this.run(async (s) =>
       (
-        await s.q<{ data: HistoryCheckpoint; quarantined_count: string }>(
-          "SELECT b.data,(SELECT count(*)::text FROM live_review_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count FROM live_history_backfills b WHERE owner_id=$1 ORDER BY source,account_id",
+        await s.q<{
+          data: HistoryCheckpoint;
+          quarantined_count: string;
+          record_count: string;
+          oldest_at: string | null;
+          newest_at: string | null;
+        }>(
+          "SELECT b.data,(SELECT count(*)::text FROM live_review_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count,count(r.record_key)::text record_count,min(r.occurred_at::timestamptz)::text oldest_at,max(r.occurred_at::timestamptz)::text newest_at FROM live_history_backfills b LEFT JOIN live_history_seen h ON h.owner_id=b.owner_id AND h.source=b.source AND h.account_id=b.account_id AND h.version=b.version LEFT JOIN live_records r ON r.owner_id=h.owner_id AND r.source=h.source AND r.account_id=h.account_id AND r.source_record_id=h.record_id WHERE b.owner_id=$1 GROUP BY b.owner_id,b.source,b.account_id,b.version ORDER BY b.source,b.account_id",
           [owner],
         )
       ).map((r) => ({
         ...r.data,
         quarantined_count: Number(r.quarantined_count),
+        record_count: Number(r.record_count),
+        oldest_at:
+          r.oldest_at === null ? null : new Date(r.oldest_at).toISOString(),
+        newest_at:
+          r.newest_at === null ? null : new Date(r.newest_at).toISOString(),
       })),
     );
   }
