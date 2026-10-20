@@ -7,7 +7,13 @@ import type {
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { canonicalEmail, type LiveRecord } from "./google-records.ts";
-import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
+import {
+  calendarWindow,
+  exampleLivePolicy,
+  type LivePolicy,
+} from "./live-policy.ts";
+import type { HistoryCheckpoint, HistoryPageCommit } from "./live-store.ts";
+import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { chmodSync } from "node:fs";
 import { validateLiveAI, liveAIRecordFingerprint } from "./live-ai.ts";
 import type { VerifiedContactGroup } from "./live-policy.ts";
@@ -291,6 +297,7 @@ export function validatePreparedTelegramReply(
   commitments: Commitment[],
   states: SourceState[],
   now: Date,
+  policy?: LivePolicy,
 ): Reply {
   const fallback: Reply = {
     outbound_sent: false,
@@ -321,10 +328,11 @@ export function validatePreparedTelegramReply(
   const current = eligibleRecords(
     [...records],
     now,
-    exampleLivePolicy,
+    policy ?? exampleLivePolicy,
     states,
     owner,
-    false,
+    policy !== undefined,
+    policy?.history ? "history" : "current",
   );
   if (
     prepared.record_guards.some(
@@ -704,6 +712,188 @@ export function validateLiveCandidate(
     isExplicitCommitment,
   );
 }
+export function initialHistoryCheckpoint(
+  owner: string,
+  source: Source,
+  account: string,
+  watermark: string,
+  now: Date,
+): HistoryCheckpoint {
+  if (
+    !owner ||
+    !account ||
+    !sources.includes(source) ||
+    !exactTimestamp(watermark) ||
+    Date.parse(watermark) > now.getTime()
+  )
+    throw new Error("invalid history watermark/account");
+  return {
+    owner_id: owner,
+    source,
+    account_id: account,
+    version: 1,
+    watermark,
+    cursor: null,
+    page_count: 0,
+    record_count: 0,
+    oldest_at: null,
+    newest_at: null,
+    status: "pending",
+    retry_after_until: null,
+    last_error: null,
+    last_operation_hash: null,
+    last_request_hash: null,
+    updated_at: now.toISOString(),
+  };
+}
+export function advanceHistoryCheckpoint(
+  current: HistoryCheckpoint,
+  batch: HistoryPageCommit,
+  now: Date,
+): HistoryCheckpoint | null {
+  const payload = JSON.stringify(batch);
+  if (
+    Buffer.byteLength(payload) > 1048576 ||
+    !/^[a-f0-9]{64}$/.test(batch.operation_hash) ||
+    batch.version !== 1 ||
+    batch.watermark !== current.watermark ||
+    batch.owner_id !== current.owner_id ||
+    batch.source !== current.source ||
+    batch.account_id !== current.account_id ||
+    !Array.isArray(batch.records) ||
+    batch.records.length > 1000 ||
+    typeof batch.complete !== "boolean" ||
+    ![batch.expected_cursor, batch.cursor].every(
+      (c) =>
+        c === null ||
+        (typeof c === "string" && c.length > 0 && c.length <= 8192),
+    ) ||
+    batch.complete !== (batch.cursor === null) ||
+    (batch.contacts?.length ?? 0) > 1000 ||
+    (batch.identities?.length ?? 0) > 1000 ||
+    (batch.removed_record_ids?.length ?? 0) > 1000
+  )
+    throw new Error("invalid bounded history page");
+  const hash = createHash("sha256").update(payload).digest("hex");
+  if (current.last_operation_hash === hash) return null;
+  if (current.status === "complete" || current.cursor !== batch.expected_cursor)
+    throw new Error("stale history cursor or completed backfill");
+  if (
+    current.retry_after_until &&
+    Date.parse(current.retry_after_until) > now.getTime()
+  )
+    throw new Error("history provider wait required");
+  if (!batch.complete && batch.cursor === batch.expected_cursor)
+    throw new Error("history cursor did not advance");
+  if (
+    batch.records.some(
+      (r) =>
+        r.owner_id !== current.owner_id ||
+        r.source !== current.source ||
+        r.account_id !== current.account_id ||
+        !exactTimestamp(r.occurred_at) ||
+        Date.parse(r.occurred_at) > Date.parse(current.watermark) ||
+        Date.parse(r.occurred_at) < Date.parse("0001-01-01T00:00:00.000Z"),
+    ) ||
+    batch.contacts?.some((c) => c.owner_id !== current.owner_id) ||
+    batch.identities?.some((i) => i.owner_id !== current.owner_id) ||
+    batch.removed_record_ids?.some(
+      (id) => typeof id !== "string" || !id || id.length > 8192,
+    ) ||
+    batch.removed_record_ids?.some((id) =>
+      batch.records.some((r) => r.source_record_id === id),
+    )
+  )
+    throw new Error("history page account, timestamp or removal mismatch");
+  const times = batch.records.map((r) => r.occurred_at);
+  const oldest = [current.oldest_at, ...times]
+    .filter((t): t is string => t !== null)
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return {
+    ...current,
+    cursor: batch.cursor,
+    page_count: current.page_count + 1,
+    oldest_at: oldest[0] ?? null,
+    newest_at: oldest.at(-1) ?? null,
+    status: batch.complete ? "complete" : "running",
+    retry_after_until: null,
+    last_error: null,
+    last_operation_hash: hash,
+    last_request_hash: batch.operation_hash,
+    updated_at: now.toISOString(),
+  };
+}
+export function validateDailyBriefingRow(row: DailyBriefingRow): void {
+  if (
+    !row.owner_id ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(row.paris_date) ||
+    !Number.isFinite(Date.parse(row.paris_date)) ||
+    new Date(row.paris_date).toISOString().slice(0, 10) !== row.paris_date ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      row.delivery_id,
+    ) ||
+    !Number.isSafeInteger(row.revision) ||
+    row.revision < 0 ||
+    !Number.isSafeInteger(row.attempts) ||
+    row.attempts < 0 ||
+    row.attempts > 3 ||
+    !exactTimestamp(row.scheduled_at) ||
+    !exactTimestamp(row.updated_at) ||
+    (row.prepared_at !== null && !exactTimestamp(row.prepared_at)) ||
+    !["pending", "sending", "sent", "uncertain", "missed"].includes(
+      row.state,
+    ) ||
+    ![
+      null,
+      "preparation_failed",
+      "evidence_changed",
+      "validation_failed",
+      "delivery_uncertain",
+    ].includes(row.failure) ||
+    (row.state === "sent"
+      ? !Number.isSafeInteger(row.telegram_message_id) ||
+        row.telegram_message_id! <= 0
+      : row.telegram_message_id !== null) ||
+    (row.state !== "pending" && row.prepared !== null) ||
+    (row.prepared !== null &&
+      (!isRecord(row.prepared) ||
+        !isRecord(row.prepared.reply) ||
+        row.prepared.reply.outbound_sent !== false)) ||
+    Buffer.byteLength(JSON.stringify(row)) > 1048576
+  )
+    throw new Error("invalid daily briefing row");
+}
+export function validateDailyBriefingTransition(
+  current: DailyBriefingRow,
+  expected: number,
+  row: DailyBriefingRow,
+): void {
+  validateDailyBriefingRow(row);
+  if (
+    row.delivery_id !== current.delivery_id ||
+    row.scheduled_at !== current.scheduled_at ||
+    row.owner_id !== current.owner_id ||
+    row.paris_date !== current.paris_date
+  )
+    throw new Error("daily briefing identity changed");
+  const transitions: Record<
+    DailyBriefingRow["state"],
+    DailyBriefingRow["state"][]
+  > = {
+    pending: ["pending", "sending", "missed"],
+    sending: ["sent", "uncertain"],
+    uncertain: ["sent"],
+    sent: [],
+    missed: [],
+  };
+  if (
+    row.revision !== expected + 1 ||
+    !transitions[current.state].includes(row.state) ||
+    row.attempts < current.attempts ||
+    Date.parse(row.updated_at) < Date.parse(current.updated_at)
+  )
+    throw new Error("invalid daily briefing transition");
+}
 export class TendStore {
   private db: DatabaseSync;
   private readonly mode: "fixture" | "live";
@@ -738,6 +928,10 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS live_sync_seen(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
  CREATE TABLE IF NOT EXISTS live_telegram_updates(owner_id TEXT NOT NULL,channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(owner_id,channel_id,update_id));
  CREATE TABLE IF NOT EXISTS live_extraction_attempts(owner_id TEXT NOT NULL,record_key TEXT NOT NULL,content_hash TEXT NOT NULL,attempted_at TEXT NOT NULL,PRIMARY KEY(owner_id,record_key));`);
+    this.db.exec(`
+ CREATE TABLE IF NOT EXISTS live_history_backfills(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,version INTEGER NOT NULL CHECK(version=1),data TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,version));
+ CREATE TABLE IF NOT EXISTS live_history_seen(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,version INTEGER NOT NULL CHECK(version=1),record_id TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,version,record_id));
+ CREATE TABLE IF NOT EXISTS live_daily_briefings(owner_id TEXT NOT NULL,paris_date TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0),state TEXT NOT NULL CHECK(state IN ('pending','sending','sent','uncertain','missed')),data TEXT NOT NULL,PRIMARY KEY(owner_id,paris_date));`);
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),mode TEXT NOT NULL,principal_id TEXT NOT NULL)",
     );
@@ -1451,6 +1645,7 @@ export class TendStore {
   validatePreparedRead(
     auth: AuthCommand,
     prepared: PreparedTelegramRead,
+    policy?: LivePolicy,
   ): Reply {
     this.authorizeCommand(auth);
     this.db.exec("BEGIN IMMEDIATE");
@@ -1463,6 +1658,7 @@ export class TendStore {
         this.commitments(auth.owner_id),
         this.sourceStatus(auth.owner_id),
         this.clock(),
+        policy,
       );
       this.db.exec("COMMIT");
       return reply;
@@ -1470,6 +1666,225 @@ export class TendStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+  historyResourceUsage(owner: string): {
+    db_bytes: number;
+    index_bytes: number;
+  } {
+    this.assertOwner(owner);
+    return {
+      db_bytes:
+        Number(this.db.prepare("PRAGMA page_count").get()?.page_count ?? 0) *
+        Number(this.db.prepare("PRAGMA page_size").get()?.page_size ?? 0),
+      index_bytes: 0,
+    };
+  }
+  historyBackfills(owner: string): HistoryCheckpoint[] {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    return this.db
+      .prepare(
+        "SELECT data FROM live_history_backfills WHERE owner_id=? ORDER BY source,account_id",
+      )
+      .all(owner)
+      .map((r) => JSON.parse(String(r.data)) as HistoryCheckpoint);
+  }
+  beginHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    watermark: string,
+  ): HistoryCheckpoint {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    const initial = initialHistoryCheckpoint(
+      owner,
+      source,
+      account,
+      watermark,
+      this.clock(),
+    );
+    const state = this.sourceStatus(owner).find(
+      (s) => s.source === source && s.account_id === account,
+    );
+    if (!state || state.mode !== "live" || state.status === "revoked")
+      throw new Error("unregistered history source account");
+    this.db
+      .prepare("INSERT OR IGNORE INTO live_history_backfills VALUES(?,?,?,?,?)")
+      .run(owner, source, account, 1, JSON.stringify(initial));
+    return this.historyBackfills(owner).find(
+      (s) => s.source === source && s.account_id === account,
+    )!;
+  }
+  commitHistoryBackfill(batch: HistoryPageCommit): NormalizedRecord[] {
+    this.assertOwner(batch.owner_id);
+    if (this.mode !== "live") throw new Error("live mode required");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.historyBackfills(batch.owner_id).find(
+        (s) => s.source === batch.source && s.account_id === batch.account_id,
+      );
+      if (!current) throw new Error("history checkpoint missing");
+      const state = this.sourceStatus(batch.owner_id).find(
+        (s) => s.source === batch.source && s.account_id === batch.account_id,
+      );
+      if (!state || state.status === "revoked" || state.mode !== "live")
+        throw new Error("history source revoked");
+      const next = advanceHistoryCheckpoint(current, batch, this.clock());
+      if (!next) {
+        this.db.exec("COMMIT");
+        return [];
+      }
+      this.seed(batch.contacts ?? [], batch.identities ?? [], []);
+      const records = batch.records.map((record) => this.writeRecord(record));
+      for (const record of records)
+        this.db
+          .prepare("INSERT OR IGNORE INTO live_history_seen VALUES(?,?,?,?,?)")
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            1,
+            record.source_record_id,
+          );
+      for (const id of batch.removed_record_ids ?? []) {
+        this.removeLiveRecord(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          id,
+        );
+        this.db
+          .prepare(
+            "DELETE FROM live_history_seen WHERE owner_id=? AND source=? AND account_id=? AND version=1 AND record_id=?",
+          )
+          .run(batch.owner_id, batch.source, batch.account_id, id);
+      }
+      const coverage = this.db
+        .prepare(
+          "SELECT count(*) n,strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(json_extract(i.data,'$.occurred_at')))) oldest_at,strftime('%Y-%m-%dT%H:%M:%fZ',max(julianday(json_extract(i.data,'$.occurred_at')))) newest_at FROM live_history_seen h JOIN interactions i ON i.owner_id=h.owner_id AND i.source=h.source AND i.account_id=h.account_id AND i.source_record_id=h.record_id WHERE h.owner_id=? AND h.source=? AND h.account_id=? AND h.version=1",
+        )
+        .get(batch.owner_id, batch.source, batch.account_id)!;
+      next.record_count = Number(coverage.n);
+      next.oldest_at =
+        coverage.oldest_at === null ? null : String(coverage.oldest_at);
+      next.newest_at =
+        coverage.newest_at === null ? null : String(coverage.newest_at);
+      this.db
+        .prepare(
+          "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+        )
+        .run(
+          JSON.stringify(next),
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+        );
+      this.db.exec("COMMIT");
+      return records;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  pauseHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    error: string,
+    retryAfter: string | null = null,
+  ): HistoryCheckpoint {
+    this.assertOwner(owner);
+    if (
+      !/^[a-z0-9_:-]{1,120}$/.test(error) ||
+      (retryAfter !== null && !exactTimestamp(retryAfter))
+    )
+      throw new Error("invalid history pause");
+    const current = this.historyBackfills(owner).find(
+      (s) => s.source === source && s.account_id === account,
+    );
+    if (!current || current.status === "complete")
+      throw new Error("history checkpoint unavailable");
+    const row: HistoryCheckpoint = {
+      ...current,
+      status: "paused",
+      retry_after_until: retryAfter,
+      last_error: error,
+      updated_at: this.clock().toISOString(),
+    };
+    this.db
+      .prepare(
+        "UPDATE live_history_backfills SET data=? WHERE owner_id=? AND source=? AND account_id=? AND version=1",
+      )
+      .run(JSON.stringify(row), owner, source, account);
+    return row;
+  }
+  dailyBriefingGet(owner: string, day: string): DailyBriefingRow | null {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    const row = this.db
+      .prepare(
+        "SELECT data FROM live_daily_briefings WHERE owner_id=? AND paris_date=?",
+      )
+      .get(owner, day);
+    return row ? (JSON.parse(String(row.data)) as DailyBriefingRow) : null;
+  }
+  dailyBriefingLatest(
+    owner: string,
+    sentOnly = false,
+  ): DailyBriefingRow | null {
+    this.assertOwner(owner);
+    if (this.mode !== "live") throw new Error("live mode required");
+    const row = this.db
+      .prepare(
+        "SELECT data FROM live_daily_briefings WHERE owner_id=?" +
+          (sentOnly ? " AND state='sent'" : "") +
+          " ORDER BY paris_date DESC LIMIT 1",
+      )
+      .get(owner);
+    return row ? (JSON.parse(String(row.data)) as DailyBriefingRow) : null;
+  }
+  dailyBriefingInsert(row: DailyBriefingRow): boolean {
+    this.assertOwner(row.owner_id);
+    if (this.mode !== "live") throw new Error("live mode required");
+    validateDailyBriefingRow(row);
+    if (
+      row.revision !== 0 ||
+      row.attempts > (row.state === "pending" ? 1 : 0) ||
+      !["pending", "missed"].includes(row.state)
+    )
+      throw new Error("invalid initial daily state");
+    return (
+      this.db
+        .prepare("INSERT OR IGNORE INTO live_daily_briefings VALUES(?,?,?,?,?)")
+        .run(
+          row.owner_id,
+          row.paris_date,
+          row.revision,
+          row.state,
+          JSON.stringify(row),
+        ).changes === 1
+    );
+  }
+  dailyBriefingReplace(expected: number, row: DailyBriefingRow): boolean {
+    this.assertOwner(row.owner_id);
+    const current = this.dailyBriefingGet(row.owner_id, row.paris_date);
+    if (!current || current.revision !== expected) return false;
+    validateDailyBriefingTransition(current, expected, row);
+    return (
+      this.db
+        .prepare(
+          "UPDATE live_daily_briefings SET revision=?,state=?,data=? WHERE owner_id=? AND paris_date=? AND revision=?",
+        )
+        .run(
+          row.revision,
+          row.state,
+          JSON.stringify(row),
+          row.owner_id,
+          row.paris_date,
+          expected,
+        ).changes === 1
+    );
   }
   privateContacts(
     owner: string,
@@ -1537,7 +1952,7 @@ export class TendStore {
     );
     add(
       "((source='calendar' AND coalesce(json_extract(data,'$.end_at'),json_extract(data,'$.occurred_at'))>? AND json_extract(data,'$.occurred_at')<?) OR (source<>'calendar' AND json_extract(data,'$.occurred_at')>=? AND json_extract(data,'$.occurred_at')<=?))",
-      query.now,
+      query.calendar_start ?? query.now,
       query.calendar_end,
       query.message_start,
       query.now,
@@ -1946,6 +2361,7 @@ export class TendStore {
     updateId: number,
     prepared: PreparedTelegramRead,
     signal?: AbortSignal,
+    policy?: LivePolicy,
   ): { accepted: boolean; reply?: Reply } {
     signal?.throwIfAborted();
     this.authorizeCommand(auth);
@@ -1970,6 +2386,7 @@ export class TendStore {
         this.commitments(auth.owner_id),
         this.sourceStatus(auth.owner_id),
         this.clock(),
+        policy,
       );
       signal?.throwIfAborted();
       this.db

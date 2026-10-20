@@ -29,11 +29,21 @@ import {
   liveBatchCompletion,
   resetLiveCompleteness,
   validatePreparedTelegramReply,
+  initialHistoryCheckpoint,
+  advanceHistoryCheckpoint,
+  validateDailyBriefingRow,
+  validateDailyBriefingTransition,
 } from "./engine.ts";
 import type { PreparedTelegramRead } from "./telegram-normal.ts";
 import type { LiveRecord } from "./google-records.ts";
 import { canonicalEmail } from "./google-records.ts";
-import { calendarWindow, exampleLivePolicy } from "./live-policy.ts";
+import {
+  calendarWindow,
+  exampleLivePolicy,
+  type LivePolicy,
+} from "./live-policy.ts";
+import type { HistoryCheckpoint, HistoryPageCommit } from "./live-store.ts";
+import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { eligiblePromiseSpans } from "./authored-promises.ts";
 import type { LiveStore, Principal } from "./live-store.ts";
 export interface PostgresOptions extends PoolConfig {
@@ -111,6 +121,12 @@ export class PostgresStore implements LiveStore {
       await pool.query(
         readFileSync(
           new URL("../schema/002-live-runtime.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      await pool.query(
+        readFileSync(
+          new URL("../schema/005-history-and-daily.sql", import.meta.url),
           "utf8",
         ),
       );
@@ -736,6 +752,7 @@ export class PostgresStore implements LiveStore {
   async validatePreparedRead(
     auth: AuthCommand,
     prepared: PreparedTelegramRead,
+    policy?: LivePolicy,
   ): Promise<Reply> {
     this.authorize(auth);
     return this.run(async (s) =>
@@ -747,8 +764,245 @@ export class PostgresStore implements LiveStore {
         await s.commitments(auth.owner_id),
         await s.sourceStatus(auth.owner_id),
         s.clock(),
+        policy,
       ),
     );
+  }
+  async historyResourceUsage(
+    owner: string,
+  ): Promise<{ db_bytes: number; index_bytes: number }> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      const row = (
+        await s.q<{ db_bytes: string; index_bytes: string }>(
+          "SELECT pg_database_size(current_database())::text db_bytes,coalesce((SELECT sum(pg_total_relation_size(c.oid)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'live_semantic_%' AND c.relkind='r'),0)::text index_bytes",
+        )
+      )[0]!;
+      return {
+        db_bytes: Number(row.db_bytes),
+        index_bytes: Number(row.index_bytes),
+      };
+    });
+  }
+  async historyBackfills(owner: string): Promise<HistoryCheckpoint[]> {
+    this.owner(owner);
+    return this.run(async (s) =>
+      (
+        await s.q<{ data: HistoryCheckpoint }>(
+          "SELECT data FROM live_history_backfills WHERE owner_id=$1 ORDER BY source,account_id",
+          [owner],
+        )
+      ).map((r) => r.data),
+    );
+  }
+  async beginHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    watermark: string,
+  ): Promise<HistoryCheckpoint> {
+    this.owner(owner);
+    const initial = initialHistoryCheckpoint(
+      owner,
+      source,
+      account,
+      watermark,
+      this.clock(),
+    );
+    return this.run(async (s) => {
+      const state = await s.state(owner, source, account);
+      if (state.mode !== "live" || state.status === "revoked")
+        throw new Error("unregistered history source account");
+      await s.q(
+        "INSERT INTO live_history_backfills VALUES($1,$2,$3,1,$4) ON CONFLICT DO NOTHING",
+        [owner, source, account, JSON.stringify(initial)],
+      );
+      return (await s.historyBackfills(owner)).find(
+        (r) => r.source === source && r.account_id === account,
+      )!;
+    });
+  }
+  async commitHistoryBackfill(
+    batch: HistoryPageCommit,
+  ): Promise<NormalizedRecord[]> {
+    this.owner(batch.owner_id);
+    return this.run(async (s) => {
+      const current = (await s.historyBackfills(batch.owner_id)).find(
+        (r) => r.source === batch.source && r.account_id === batch.account_id,
+      );
+      if (!current) throw new Error("history checkpoint missing");
+      const state = await s.state(
+        batch.owner_id,
+        batch.source,
+        batch.account_id,
+      );
+      if (state.mode !== "live" || state.status === "revoked")
+        throw new Error("history source revoked");
+      const next = advanceHistoryCheckpoint(current, batch, this.clock());
+      if (!next) return [];
+      await s.seed(batch.contacts ?? [], batch.identities ?? [], []);
+      const records: NormalizedRecord[] = [];
+      for (const raw of batch.records) {
+        const record = await s.write(raw);
+        records.push(record);
+        await s.q(
+          "INSERT INTO live_history_seen VALUES($1,$2,$3,1,$4) ON CONFLICT DO NOTHING",
+          [
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            record.source_record_id,
+          ],
+        );
+      }
+      for (const id of batch.removed_record_ids ?? []) {
+        await s.remove(batch.owner_id, batch.source, batch.account_id, id);
+        await s.q(
+          "DELETE FROM live_history_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1 AND record_id=$4",
+          [batch.owner_id, batch.source, batch.account_id, id],
+        );
+      }
+      const coverage = (
+        await s.q<{
+          n: string;
+          oldest_at: string | null;
+          newest_at: string | null;
+        }>(
+          "SELECT count(*)::text n,min(r.occurred_at::timestamptz)::text oldest_at,max(r.occurred_at::timestamptz)::text newest_at FROM live_history_seen h JOIN live_records r ON r.owner_id=h.owner_id AND r.source=h.source AND r.account_id=h.account_id AND r.source_record_id=h.record_id WHERE h.owner_id=$1 AND h.source=$2 AND h.account_id=$3 AND h.version=1",
+          [batch.owner_id, batch.source, batch.account_id],
+        )
+      )[0]!;
+      next.record_count = Number(coverage.n);
+      next.oldest_at =
+        coverage.oldest_at === null
+          ? null
+          : new Date(coverage.oldest_at).toISOString();
+      next.newest_at =
+        coverage.newest_at === null
+          ? null
+          : new Date(coverage.newest_at).toISOString();
+      await s.q(
+        "UPDATE live_history_backfills SET data=$4 WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1",
+        [batch.owner_id, batch.source, batch.account_id, JSON.stringify(next)],
+      );
+      return records;
+    });
+  }
+  async pauseHistoryBackfill(
+    owner: string,
+    source: Source,
+    account: string,
+    error: string,
+    retryAfter: string | null = null,
+  ): Promise<HistoryCheckpoint> {
+    this.owner(owner);
+    if (
+      !/^[a-z0-9_:-]{1,120}$/.test(error) ||
+      (retryAfter !== null && !exactTimestamp(retryAfter))
+    )
+      throw new Error("invalid history pause");
+    return this.run(async (s) => {
+      const current = (await s.historyBackfills(owner)).find(
+        (r) => r.source === source && r.account_id === account,
+      );
+      if (!current || current.status === "complete")
+        throw new Error("history checkpoint unavailable");
+      const row: HistoryCheckpoint = {
+        ...current,
+        status: "paused",
+        retry_after_until: retryAfter,
+        last_error: error,
+        updated_at: s.clock().toISOString(),
+      };
+      await s.q(
+        "UPDATE live_history_backfills SET data=$4 WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1",
+        [owner, source, account, JSON.stringify(row)],
+      );
+      return row;
+    });
+  }
+  async dailyBriefingGet(
+    owner: string,
+    day: string,
+  ): Promise<DailyBriefingRow | null> {
+    this.owner(owner);
+    return this.run(
+      async (s) =>
+        (
+          await s.q<{ data: DailyBriefingRow }>(
+            "SELECT data FROM live_daily_briefings WHERE owner_id=$1 AND paris_date=$2",
+            [owner, day],
+          )
+        )[0]?.data ?? null,
+    );
+  }
+  async dailyBriefingLatest(
+    owner: string,
+    sentOnly = false,
+  ): Promise<DailyBriefingRow | null> {
+    this.owner(owner);
+    return this.run(
+      async (s) =>
+        (
+          await s.q<{ data: DailyBriefingRow }>(
+            "SELECT data FROM live_daily_briefings WHERE owner_id=$1" +
+              (sentOnly ? " AND state='sent'" : "") +
+              " ORDER BY paris_date DESC LIMIT 1",
+            [owner],
+          )
+        )[0]?.data ?? null,
+    );
+  }
+  async dailyBriefingInsert(row: DailyBriefingRow): Promise<boolean> {
+    this.owner(row.owner_id);
+    validateDailyBriefingRow(row);
+    if (
+      row.revision !== 0 ||
+      row.attempts > (row.state === "pending" ? 1 : 0) ||
+      !["pending", "missed"].includes(row.state)
+    )
+      throw new Error("invalid initial daily state");
+    return this.run(
+      async (s) =>
+        (
+          await s.q(
+            "INSERT INTO live_daily_briefings VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING owner_id",
+            [
+              row.owner_id,
+              row.paris_date,
+              row.revision,
+              row.state,
+              JSON.stringify(row),
+            ],
+          )
+        ).length === 1,
+    );
+  }
+  async dailyBriefingReplace(
+    expected: number,
+    row: DailyBriefingRow,
+  ): Promise<boolean> {
+    this.owner(row.owner_id);
+    return this.run(async (s) => {
+      const current = await s.dailyBriefingGet(row.owner_id, row.paris_date);
+      if (!current || current.revision !== expected) return false;
+      validateDailyBriefingTransition(current, expected, row);
+      return (
+        (
+          await s.q(
+            "UPDATE live_daily_briefings SET revision=$3,state=$4,data=$5 WHERE owner_id=$1 AND paris_date=$2 AND revision=$6 RETURNING owner_id",
+            [
+              row.owner_id,
+              row.paris_date,
+              row.revision,
+              row.state,
+              JSON.stringify(row),
+              expected,
+            ],
+          )
+        ).length === 1
+      );
+    });
   }
   async privateContacts(
     owner: string,
@@ -813,12 +1067,13 @@ export class PostgresStore implements LiveStore {
           "::jsonb) m WHERE m->>'source'=r.source AND m->>'account_id'=r.account_id AND (m->>'contact_id'=r.contact_id OR m->>'contact_id'=ANY(r.contact_ids)))";
       where +=
         " AND EXISTS(SELECT 1 FROM live_accounts a WHERE a.owner_id=r.owner_id AND a.source=r.source AND a.account_id=r.account_id AND a.state->>'status'<>'revoked')";
+      const calendarStart = value(query.calendar_start ?? query.now);
       const now = value(query.now),
         end = value(query.calendar_end),
         start = value(query.message_start);
       where +=
         " AND ((r.source='calendar' AND coalesce(r.end_at,r.occurred_at)>" +
-        now +
+        calendarStart +
         " AND r.occurred_at<" +
         end +
         ") OR (r.source<>'calendar' AND r.occurred_at>=" +
@@ -1145,6 +1400,7 @@ export class PostgresStore implements LiveStore {
     update: number,
     prepared: PreparedTelegramRead,
     signal?: AbortSignal,
+    policy?: LivePolicy,
   ): Promise<{ accepted: boolean; reply?: Reply }> {
     signal?.throwIfAborted();
     this.authorize(auth);
@@ -1168,6 +1424,7 @@ export class PostgresStore implements LiveStore {
         await s.commitments(auth.owner_id),
         await s.sourceStatus(auth.owner_id),
         s.clock(),
+        policy,
       );
       signal?.throwIfAborted();
       await s.q(
