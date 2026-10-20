@@ -380,6 +380,83 @@ describe("mounted private session withdrawal", () => {
   });
 });
 
+describe("historical content review coverage", () => {
+  it("refreshes only saved progress without retrying or replacing a held draft", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture();
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    browser.elements.get("timeline")!.textContent = "Held work stays here";
+    browser.elements.get("refresh-progress")!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      browser.fetch.mock.calls.filter(
+        ([path]) => path === "/private/api/progress",
+      ),
+    ).toHaveLength(2);
+    expect(
+      browser.fetch.mock.calls.some(
+        ([path]) => path === "/private/api/history-retry",
+      ),
+    ).toBe(false);
+    expect(browser.elements.get("timeline")!.textContent).toBe(
+      "Held work stays here",
+    );
+  });
+
+  it("keeps unavailable content explicit after pagination finishes and shows bounded source references", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture({
+      history: [
+        {
+          source: "gmail",
+          account_id: "owner@example.invalid",
+          status: "complete",
+          page_count: 3,
+          record_count: 18,
+          quarantined_count: 2,
+          watermark: "2026-10-20T10:00:00Z",
+          cursor: null,
+          review: {
+            total: 2,
+            reason_counts: [{ reason: "body_size_limit", count: 2 }],
+            items: [
+              {
+                source_record_id: "opaque-message",
+                reason: "body_size_limit",
+                original_reference:
+                  "tend-source:gmail/owner%40example.invalid/opaque-message",
+                original_url:
+                  "https://mail.google.com/mail/u/?authuser=owner%40example.invalid#all/opaque-message",
+              },
+            ],
+          },
+        },
+      ],
+    });
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const texts = (value: BrowserElement): string =>
+      [value.textContent ?? "", ...value.children.map(texts)].join(" ");
+    const text = texts(browser.elements.get("history-progress")!);
+    expect(text).toContain("18 readable records");
+    expect(text).toContain("2 unavailable records");
+    expect(text).toContain(
+      "pagination finished; content coverage remains partial",
+    );
+    expect(text).toContain("body size limit: 2");
+    expect(text).toContain("opaque-message");
+    expect(text).toContain(
+      "tend-source:gmail/owner%40example.invalid/opaque-message",
+    );
+    expect(
+      browser.fetch.mock.calls.filter(
+        ([path]) => path === "/private/api/history-retry",
+      ),
+    ).toHaveLength(0);
+  });
+});
+
 describe("manual history review retry control", () => {
   const held = {
     source: "gmail",

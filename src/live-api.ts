@@ -227,7 +227,79 @@ export function createLiveServer(options: LiveServerOptions): Server {
     clock,
     ready,
     resolveGroup,
-    historyStatus: async () => store.historyBackfills(owner),
+    historyStatus: async () => {
+      const states = await store.sourceStatus(owner);
+      return Promise.all(
+        (await store.historyBackfills(owner))
+          .filter((checkpoint) =>
+            checkpoint.source === "gmail"
+              ? checkpoint.account_id === policy.account_email
+              : checkpoint.source === "calendar"
+                ? policy.calendar_ids.includes(checkpoint.account_id)
+                : policy.social?.accounts.some(
+                    (account) =>
+                      account.owner_verified &&
+                      account.source === checkpoint.source &&
+                      account.account_id === checkpoint.account_id,
+                  ),
+          )
+          .map(async (checkpoint) => {
+            const state = states.find(
+              (entry) =>
+                entry.source === checkpoint.source &&
+                entry.account_id === checkpoint.account_id,
+            );
+            if (!state || state.mode !== "live" || state.status === "revoked")
+              return {
+                ...checkpoint,
+                status: "paused",
+                last_error:
+                  state?.status === "revoked"
+                    ? "source_revoked"
+                    : "source_unavailable",
+                review: null,
+              };
+            const review = await Promise.resolve()
+              .then(() =>
+                store.historyQuarantines(
+                  owner,
+                  checkpoint.source,
+                  checkpoint.account_id,
+                  25,
+                ),
+              )
+              .catch(() => null);
+            if (!review)
+              return {
+                ...checkpoint,
+                status: "paused",
+                last_error: "review_metadata_unavailable",
+                review: null,
+              };
+            return {
+              ...checkpoint,
+              review: {
+                ...review,
+                items: review.items.map((item) => ({
+                  ...item,
+                  ...(item.original_reference !==
+                  `tend-source:${checkpoint.source}/${encodeURIComponent(checkpoint.account_id)}/${encodeURIComponent(item.source_record_id)}`
+                    ? {}
+                    : checkpoint.source === "gmail"
+                      ? {
+                          original_url: `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(checkpoint.account_id)}#all/${encodeURIComponent(item.source_record_id)}`,
+                        }
+                      : checkpoint.source === "calendar"
+                        ? {
+                            original_url: `https://calendar.google.com/calendar/u/0/r?authuser=${encodeURIComponent(policy.account_email)}&cid=${encodeURIComponent(checkpoint.account_id)}&eid=${encodeURIComponent(Buffer.from(`${item.source_record_id} ${checkpoint.account_id}`).toString("base64url"))}`,
+                          }
+                        : {}),
+                })),
+              },
+            };
+          }),
+      );
+    },
     ...(dailyAPI ? { dailyStatus: () => dailyAPI.status() } : {}),
     ...(options.normalModel ? { normalModel: options.normalModel } : {}),
     ...(options.privateSemanticSearch

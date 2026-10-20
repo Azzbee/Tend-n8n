@@ -1073,13 +1073,78 @@ export function mountPrivateWorkspace(): void {
         );
       for (const item of result.history.filter(plain)) {
         const row = node("div");
+        const review = plain(item.review) ? item.review : null;
+        const unavailable =
+          typeof review?.total === "number"
+            ? review.total
+            : typeof item.quarantined_count === "number"
+              ? item.quarantined_count
+              : 0;
         row.append(
           node(
             "p",
-            `${sourceName(String(item.source))} · ${String(item.account_id)}: ${String(item.status)} · ${String(item.page_count)} pages · ${String(item.record_count)} records${item.oldest_at ? ` · oldest ${parisTime(String(item.oldest_at))}` : ""}${item.newest_at ? ` · newest ${parisTime(String(item.newest_at))}` : ""} · frozen at ${parisTime(String(item.watermark))} · ${item.cursor ? "more pages remain" : item.status === "complete" ? "pagination finished" : "not yet complete"}${item.last_error ? ` · paused: ${String(item.last_error)}` : ""}`,
+            `${sourceName(String(item.source))} · ${String(item.account_id)}: ${String(item.status)} · ${String(item.page_count)} pages · ${String(item.record_count)} readable records · ${unavailable} unavailable records${item.oldest_at ? ` · oldest ${parisTime(String(item.oldest_at))}` : ""}${item.newest_at ? ` · newest ${parisTime(String(item.newest_at))}` : ""} · frozen at ${parisTime(String(item.watermark))} · ${item.cursor ? "more pages remain" : item.status === "complete" ? (unavailable > 0 ? "pagination finished; content coverage remains partial" : "pagination finished") : "not yet complete"}${item.last_error ? ` · paused: ${String(item.last_error)}` : ""}`,
             "small",
           ),
         );
+        if (unavailable > 0 && review) {
+          const details = node("details");
+          details.append(node("summary", "Unavailable source records"));
+          details.append(
+            node(
+              "p",
+              "These records stay out of AI outputs until their original content can be read safely.",
+              "small",
+            ),
+          );
+          if (Array.isArray(review.reason_counts))
+            for (const reason of review.reason_counts
+              .filter(plain)
+              .slice(0, 50))
+              details.append(
+                node(
+                  "p",
+                  `${String(reason.reason).replaceAll("_", " ")}: ${String(reason.count)}`,
+                  "small",
+                ),
+              );
+          if (review.reason_counts_truncated === true)
+            details.append(
+              node(
+                "p",
+                "More review reasons exist beyond this bounded summary.",
+                "small",
+              ),
+            );
+          const items = Array.isArray(review.items)
+            ? review.items.filter(plain).slice(0, 25)
+            : [];
+          for (const entry of items) {
+            const record = node("div");
+            record.append(
+              node(
+                "p",
+                `${String(entry.source_record_id)} · ${String(entry.reason).replaceAll("_", " ")}`,
+                "small",
+              ),
+            );
+            if (typeof entry.original_reference === "string")
+              record.append(
+                node("span", entry.original_reference, "record-reference"),
+              );
+            if (typeof entry.original_url === "string")
+              record.append(reference(entry.original_url));
+            details.append(record);
+          }
+          details.append(
+            node(
+              "p",
+              `Showing ${items.length} of ${unavailable} unavailable records.`,
+              "small",
+            ),
+          );
+          row.append(details);
+        }
         if (
           item.status === "paused" &&
           item.last_error === "history_page_requires_review" &&
@@ -1129,6 +1194,9 @@ export function mountPrivateWorkspace(): void {
         );
     }
   }
+  get<HTMLButtonElement>("refresh-progress").addEventListener("click", () => {
+    if (session) void loadProgress();
+  });
   void api<PrivateSessionResponse>("session")
     .then((value) => {
       session = value;
