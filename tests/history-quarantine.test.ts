@@ -202,6 +202,7 @@ describe.each(["sqlite", "postgres"] as const)(
       "overlap",
       "invalid_record",
       "synthetic_id",
+      "plain_placeholder",
       "duplicate_id",
       "foreign_batch_account",
     ])("rolls back the complete page for %s", async (problem) => {
@@ -220,6 +221,8 @@ describe.each(["sqlite", "postgres"] as const)(
         if (problem === "invalid_record") page.records[0]!.actor_identity = "";
         if (problem === "synthetic_id")
           page.quarantines = [f.quarantine("invalid-record:0")];
+        if (problem === "plain_placeholder")
+          page.quarantines = [f.quarantine("invalid-record")];
         if (problem === "duplicate_id") page.quarantines!.push(f.quarantine());
         if (problem === "foreign_batch_account")
           page.account_id = "other@example.invalid";

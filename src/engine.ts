@@ -809,7 +809,7 @@ export function advanceHistoryCheckpoint(
       !q.source_record_id.trim() ||
       q.source_record_id.length > 8192 ||
       Array.from(q.source_record_id).some((char) => char.charCodeAt(0) < 32) ||
-      q.source_record_id.startsWith("invalid-record:") ||
+      q.source_record_id.startsWith("invalid-record") ||
       typeof q.reason !== "string" ||
       !/^[a-z][a-z0-9_]{0,119}$/.test(q.reason) ||
       q.original_reference !==
