@@ -12,7 +12,11 @@ import {
   exampleLivePolicy,
   type LivePolicy,
 } from "./live-policy.ts";
-import type { HistoryCheckpoint, HistoryPageCommit } from "./live-store.ts";
+import type {
+  HistoryCheckpoint,
+  HistoryPageCommit,
+  HistoryQuarantineReport,
+} from "./live-store.ts";
 import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { chmodSync } from "node:fs";
 import { validateLiveAI, liveAIRecordFingerprint } from "./live-ai.ts";
@@ -736,6 +740,7 @@ export function initialHistoryCheckpoint(
     cursor: null,
     page_count: 0,
     record_count: 0,
+    quarantined_count: 0,
     oldest_at: null,
     newest_at: null,
     status: "pending",
@@ -764,6 +769,9 @@ export function advanceHistoryCheckpoint(
     batch.account_id !== current.account_id ||
     !Array.isArray(batch.records) ||
     batch.records.length > 1000 ||
+    (batch.quarantines !== undefined &&
+      (!Array.isArray(batch.quarantines) ||
+        batch.quarantines.length + batch.records.length > 1000)) ||
     typeof batch.complete !== "boolean" ||
     ![batch.expected_cursor, batch.cursor].every(
       (c) =>
@@ -784,9 +792,43 @@ export function advanceHistoryCheckpoint(
     (batch.removed_record_ids?.length ?? 0) > 1000
   )
     throw new Error("invalid bounded history page");
+  const quarantineIds = new Set<string>();
+  for (const q of batch.quarantines ?? []) {
+    if (
+      !isRecord(q) ||
+      Object.keys(q).some(
+        (key) =>
+          ![
+            "source_record_id",
+            "reason",
+            "original_reference",
+            "observed_at",
+          ].includes(key),
+      ) ||
+      typeof q.source_record_id !== "string" ||
+      !q.source_record_id.trim() ||
+      q.source_record_id.length > 8192 ||
+      Array.from(q.source_record_id).some((char) => char.charCodeAt(0) < 32) ||
+      q.source_record_id.startsWith("invalid-record:") ||
+      typeof q.reason !== "string" ||
+      !/^[a-z][a-z0-9_]{0,119}$/.test(q.reason) ||
+      q.original_reference !==
+        `tend-source:${current.source}/${encodeURIComponent(current.account_id)}/${encodeURIComponent(q.source_record_id)}` ||
+      !exactTimestamp(q.observed_at) ||
+      Date.parse(q.observed_at) < Date.parse(current.watermark) ||
+      Date.parse(q.observed_at) > now.getTime() ||
+      quarantineIds.has(q.source_record_id) ||
+      batch.records.some(
+        (record) => record.source_record_id === q.source_record_id,
+      )
+    )
+      throw new Error("invalid scoped history quarantine");
+    quarantineIds.add(q.source_record_id);
+  }
   const withdrawalOnly =
     !advance &&
     batch.records.length === 0 &&
+    (batch.quarantines?.length ?? 0) === 0 &&
     (batch.contacts?.length ?? 0) === 0 &&
     (batch.identities?.length ?? 0) === 0 &&
     (batch.removed_record_ids?.length ?? 0) > 0 &&
@@ -960,6 +1002,15 @@ export class TendStore {
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),mode TEXT NOT NULL,principal_id TEXT NOT NULL)",
     );
+    if (
+      !this.db
+        .prepare("PRAGMA table_info(live_quarantines)")
+        .all()
+        .some((column) => column.name === "original_reference")
+    )
+      this.db.exec(
+        "ALTER TABLE live_quarantines ADD COLUMN original_reference TEXT",
+      );
     const binding = this.db
       .prepare("SELECT mode,principal_id FROM store_metadata WHERE singleton=1")
       .get();
@@ -1256,7 +1307,7 @@ export class TendStore {
       for (const q of batch.quarantines ?? [])
         this.db
           .prepare(
-            "INSERT INTO live_quarantines VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at",
+            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at",
           )
           .run(
             batch.owner_id,
@@ -1734,10 +1785,65 @@ export class TendStore {
     if (this.mode !== "live") throw new Error("live mode required");
     return this.db
       .prepare(
-        "SELECT data FROM live_history_backfills WHERE owner_id=? ORDER BY source,account_id",
+        "SELECT b.data,(SELECT count(*) FROM live_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count FROM live_history_backfills b WHERE owner_id=? ORDER BY source,account_id",
       )
       .all(owner)
-      .map((r) => JSON.parse(String(r.data)) as HistoryCheckpoint);
+      .map((r) => ({
+        ...(JSON.parse(String(r.data)) as HistoryCheckpoint),
+        quarantined_count: Number(r.quarantined_count),
+      }));
+  }
+  historyQuarantines(
+    owner: string,
+    source: Source,
+    account: string,
+    limit = 25,
+  ): HistoryQuarantineReport {
+    this.assertOwner(owner);
+    const state = this.sourceStatus(owner).find(
+      (s) => s.source === source && s.account_id === account,
+    );
+    if (
+      this.mode !== "live" ||
+      !state ||
+      state.mode !== "live" ||
+      state.status === "revoked" ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    )
+      throw new Error("invalid history quarantine scope or limit");
+    const total = Number(
+      this.db
+        .prepare(
+          "SELECT count(*) n FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=?",
+        )
+        .get(owner, source, account)?.n ?? 0,
+    );
+    const reasons = this.db
+      .prepare(
+        "SELECT reason,count(*) n FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? GROUP BY reason ORDER BY count(*) DESC,reason LIMIT 51",
+      )
+      .all(owner, source, account);
+    return {
+      total,
+      reason_counts: reasons
+        .slice(0, 50)
+        .map((r) => ({ reason: String(r.reason), count: Number(r.n) })),
+      reason_counts_truncated: reasons.length > 50,
+      items: this.db
+        .prepare(
+          "SELECT record_id,reason,observed_at,original_reference FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? ORDER BY observed_at DESC,record_id LIMIT ?",
+        )
+        .all(owner, source, account, limit)
+        .map((r) => ({
+          source_record_id: String(r.record_id),
+          reason: String(r.reason),
+          observed_at: String(r.observed_at),
+          original_reference:
+            r.original_reference === null ? null : String(r.original_reference),
+        })),
+    };
   }
   claimHistoryPoll(
     owner: string,
@@ -1827,9 +1933,84 @@ export class TendStore {
         return [];
       }
       this.seed(batch.contacts ?? [], batch.identities ?? [], []);
-      const records = batch.records.map((record) =>
-        this.writeRecord(record, true),
-      );
+      const records: NormalizedRecord[] = [];
+      for (const raw of batch.records) {
+        const quarantined = this.db
+          .prepare(
+            "SELECT observed_at FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=?",
+          )
+          .get(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            raw.source_record_id,
+          );
+        if (
+          quarantined &&
+          Date.parse(String(quarantined.observed_at)) >
+            Date.parse(raw.observed_at)
+        )
+          continue;
+        const record = this.writeRecord(raw, true);
+        records.push(record);
+        this.db
+          .prepare(
+            "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND observed_at<=?",
+          )
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            raw.source_record_id,
+            raw.observed_at,
+          );
+      }
+      for (const q of batch.quarantines ?? []) {
+        const prior = this.db
+          .prepare(
+            "SELECT json_extract(data,'$.observed_at') observed_at FROM interactions WHERE owner_id=? AND source=? AND account_id=? AND source_record_id=?",
+          )
+          .get(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+          );
+        if (
+          prior &&
+          Date.parse(String(prior.observed_at)) > Date.parse(q.observed_at)
+        )
+          continue;
+        this.removeLiveRecord(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          q.source_record_id,
+        );
+        this.db
+          .prepare(
+            "DELETE FROM live_history_seen WHERE owner_id=? AND source=? AND account_id=? AND version=1 AND record_id=?",
+          )
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+          );
+        this.db
+          .prepare(
+            "INSERT INTO live_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=excluded.reason,observed_at=excluded.observed_at,original_reference=excluded.original_reference WHERE excluded.observed_at>=live_quarantines.observed_at",
+          )
+          .run(
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+            q.reason,
+            q.observed_at,
+            q.original_reference,
+          );
+      }
       for (const record of records)
         this.db
           .prepare("INSERT OR IGNORE INTO live_history_seen VALUES(?,?,?,?,?)")
@@ -1858,6 +2039,18 @@ export class TendStore {
           batch.account_id,
           id,
         );
+        if (!batch.quarantines?.some((q) => q.source_record_id === id))
+          this.db
+            .prepare(
+              "DELETE FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=? AND record_id=? AND observed_at<=?",
+            )
+            .run(
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              id,
+              batch.withdrawals_observed_at ?? current.watermark,
+            );
         this.db
           .prepare(
             "DELETE FROM live_history_seen WHERE owner_id=? AND source=? AND account_id=? AND version=1 AND record_id=?",
@@ -1869,6 +2062,13 @@ export class TendStore {
           "SELECT count(*) n,strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(json_extract(i.data,'$.occurred_at')))) oldest_at,strftime('%Y-%m-%dT%H:%M:%fZ',max(julianday(json_extract(i.data,'$.occurred_at')))) newest_at FROM live_history_seen h JOIN interactions i ON i.owner_id=h.owner_id AND i.source=h.source AND i.account_id=h.account_id AND i.source_record_id=h.record_id WHERE h.owner_id=? AND h.source=? AND h.account_id=? AND h.version=1",
         )
         .get(batch.owner_id, batch.source, batch.account_id)!;
+      next.quarantined_count = Number(
+        this.db
+          .prepare(
+            "SELECT count(*) n FROM live_quarantines WHERE owner_id=? AND source=? AND account_id=?",
+          )
+          .get(batch.owner_id, batch.source, batch.account_id)?.n ?? 0,
+      );
       next.record_count = Number(coverage.n);
       next.oldest_at =
         coverage.oldest_at === null ? null : String(coverage.oldest_at);

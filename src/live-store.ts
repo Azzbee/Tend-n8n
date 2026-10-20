@@ -1,6 +1,20 @@
 import type { TendStore, StoreOptions } from "./engine.ts";
 import type { Source, Contact, Identity } from "./engine.ts";
 import type { LiveRecord } from "./google-records.ts";
+export interface HistoryQuarantine {
+  source_record_id: string;
+  reason: string;
+  original_reference: string;
+  observed_at: string;
+}
+export interface HistoryQuarantineReport {
+  total: number;
+  reason_counts: { reason: string; count: number }[];
+  reason_counts_truncated: boolean;
+  items: (Omit<HistoryQuarantine, "original_reference"> & {
+    original_reference: string | null;
+  })[];
+}
 export interface HistoryCheckpoint {
   owner_id: string;
   source: Source;
@@ -10,6 +24,7 @@ export interface HistoryCheckpoint {
   cursor: string | null;
   page_count: number;
   record_count: number;
+  quarantined_count?: number;
   oldest_at: string | null;
   newest_at: string | null;
   status: "pending" | "running" | "paused" | "complete";
@@ -33,6 +48,7 @@ export interface HistoryPageCommit {
   operation_hash: string;
   complete: boolean;
   records: LiveRecord[];
+  quarantines?: HistoryQuarantine[];
   removed_record_ids?: string[];
   contacts?: Contact[];
   identities?: Identity[];
@@ -55,6 +71,7 @@ export type LiveStoreMethod =
   | "privateHistory"
   | "beginHistoryBackfill"
   | "historyBackfills"
+  | "historyQuarantines"
   | "claimHistoryPoll"
   | "historyResourceUsage"
   | "commitHistoryBackfill"

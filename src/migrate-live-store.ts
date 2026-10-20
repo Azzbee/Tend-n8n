@@ -76,6 +76,8 @@ function converted(table: Table, row: Row): Row {
       all_day: r.all_day ?? null,
     };
   }
+  if (table === "live_quarantines")
+    return { ...row, original_reference: row.original_reference ?? null };
   if (table === "commitments")
     return { ...(JSON.parse(String(row.data)) as Commitment) };
   if (table === "live_telegram_updates")
@@ -124,6 +126,15 @@ export async function migrateLiveStore(
     await client.query(
       readFileSync(
         new URL("../schema/002-live-runtime.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    await client.query(
+      readFileSync(
+        new URL(
+          "../schema/006-history-quarantine-reference.sql",
+          import.meta.url,
+        ),
         "utf8",
       ),
     );

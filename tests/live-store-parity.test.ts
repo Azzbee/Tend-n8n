@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { TendStore, type SourceState, type LiveBatch } from "../src/engine.ts";
 import type { LiveRecord } from "../src/google-records.ts";
@@ -1240,6 +1241,13 @@ describe("canonical PostgreSQL live parity", () => {
       ...i,
       owner_id: migrationPrincipal.owner_id,
     }));
+    page.quarantines = [
+      {
+        source_record_id: "legacy-unavailable",
+        reason: "provider_text_unavailable",
+        observed_at: clock().toISOString(),
+      },
+    ];
     old.commitLiveBatch(page);
     old.markExtractionAttempt(
       migrationPrincipal.owner_id,
@@ -1264,6 +1272,14 @@ describe("canonical PostgreSQL live parity", () => {
         99,
       );
     old.close();
+    const legacyDb = new DatabaseSync(path);
+    try {
+      legacyDb.exec(
+        "ALTER TABLE live_quarantines DROP COLUMN original_reference",
+      );
+    } finally {
+      legacyDb.close();
+    }
     try {
       const proof = await migrateLiveStore(
         path,
@@ -1272,6 +1288,7 @@ describe("canonical PostgreSQL live parity", () => {
       );
       expect(proof.verified).toBe(true);
       expect(proof.counts.interactions).toBe(1);
+      expect(proof.counts.live_quarantines).toBe(1);
       expect(proof.hashes.interactions).toMatch(/^[a-f0-9]{64}$/);
       const migrated = await PostgresStore.open({
         connectionString: runtime.connectionString,
@@ -1295,6 +1312,21 @@ describe("canonical PostgreSQL live parity", () => {
         expect(await migrated.extractionAttempted(expectedRecords[0]!)).toBe(
           true,
         );
+        expect(
+          await migrated.historyQuarantines(
+            migrationPrincipal.owner_id,
+            "gmail",
+            st.account_id,
+          ),
+        ).toMatchObject({
+          total: 1,
+          items: [
+            {
+              source_record_id: "legacy-unavailable",
+              original_reference: null,
+            },
+          ],
+        });
       } finally {
         await migrated.close();
       }

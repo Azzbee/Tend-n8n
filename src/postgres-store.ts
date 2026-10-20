@@ -42,7 +42,11 @@ import {
   exampleLivePolicy,
   type LivePolicy,
 } from "./live-policy.ts";
-import type { HistoryCheckpoint, HistoryPageCommit } from "./live-store.ts";
+import type {
+  HistoryCheckpoint,
+  HistoryPageCommit,
+  HistoryQuarantineReport,
+} from "./live-store.ts";
 import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { eligiblePromiseSpans } from "./authored-promises.ts";
 import type { LiveStore, Principal } from "./live-store.ts";
@@ -127,6 +131,15 @@ export class PostgresStore implements LiveStore {
       await pool.query(
         readFileSync(
           new URL("../schema/005-history-and-daily.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      await pool.query(
+        readFileSync(
+          new URL(
+            "../schema/006-history-quarantine-reference.sql",
+            import.meta.url,
+          ),
           "utf8",
         ),
       );
@@ -508,7 +521,7 @@ export class PostgresStore implements LiveStore {
       }
       for (const q of batch.quarantines ?? [])
         await s.q(
-          "INSERT INTO live_review_quarantines VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at",
+          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at",
           [
             batch.owner_id,
             batch.source,
@@ -804,12 +817,71 @@ export class PostgresStore implements LiveStore {
     this.owner(owner);
     return this.run(async (s) =>
       (
-        await s.q<{ data: HistoryCheckpoint }>(
-          "SELECT data FROM live_history_backfills WHERE owner_id=$1 ORDER BY source,account_id",
+        await s.q<{ data: HistoryCheckpoint; quarantined_count: string }>(
+          "SELECT b.data,(SELECT count(*)::text FROM live_review_quarantines q WHERE q.owner_id=b.owner_id AND q.source=b.source AND q.account_id=b.account_id) quarantined_count FROM live_history_backfills b WHERE owner_id=$1 ORDER BY source,account_id",
           [owner],
         )
-      ).map((r) => r.data),
+      ).map((r) => ({
+        ...r.data,
+        quarantined_count: Number(r.quarantined_count),
+      })),
     );
+  }
+  async historyQuarantines(
+    owner: string,
+    source: Source,
+    account: string,
+    limit = 25,
+  ): Promise<HistoryQuarantineReport> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      const state = (await s.sourceStatus(owner)).find(
+        (row) => row.source === source && row.account_id === account,
+      );
+      if (
+        !state ||
+        state.mode !== "live" ||
+        state.status === "revoked" ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 100
+      )
+        throw new Error("invalid history quarantine scope or limit");
+      const total = Number(
+        (
+          await s.q<{ n: string }>(
+            "SELECT count(*)::text n FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3",
+            [owner, source, account],
+          )
+        )[0]?.n ?? 0,
+      );
+      const reasons = await s.q<{ reason: string; n: string }>(
+        "SELECT reason,count(*)::text n FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 GROUP BY reason ORDER BY count(*) DESC,reason LIMIT 51",
+        [owner, source, account],
+      );
+      const rows = await s.q<{
+        record_id: string;
+        reason: string;
+        observed_at: string;
+        original_reference: string | null;
+      }>(
+        "SELECT record_id,reason,observed_at,original_reference FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 ORDER BY observed_at DESC,record_id LIMIT $4",
+        [owner, source, account, limit],
+      );
+      return {
+        total,
+        reason_counts: reasons
+          .slice(0, 50)
+          .map((r) => ({ reason: r.reason, count: Number(r.n) })),
+        reason_counts_truncated: reasons.length > 50,
+        items: rows.map((r) => ({
+          source_record_id: r.record_id,
+          reason: r.reason,
+          observed_at: r.observed_at,
+          original_reference: r.original_reference,
+        })),
+      };
+    });
   }
   async claimHistoryPoll(
     owner: string,
@@ -891,7 +963,33 @@ export class PostgresStore implements LiveStore {
       await s.seed(batch.contacts ?? [], batch.identities ?? [], []);
       const records: NormalizedRecord[] = [];
       for (const raw of batch.records) {
+        const quarantined = (
+          await s.q<{ observed_at: string }>(
+            "SELECT observed_at FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              raw.source_record_id,
+            ],
+          )
+        )[0];
+        if (
+          quarantined &&
+          Date.parse(quarantined.observed_at) > Date.parse(raw.observed_at)
+        )
+          continue;
         const record = await s.write(raw, true);
+        await s.q(
+          "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at<=$5",
+          [
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            raw.source_record_id,
+            raw.observed_at,
+          ],
+        );
         records.push(record);
         await s.q(
           "INSERT INTO live_history_seen VALUES($1,$2,$3,1,$4) ON CONFLICT DO NOTHING",
@@ -900,6 +998,43 @@ export class PostgresStore implements LiveStore {
             batch.source,
             batch.account_id,
             record.source_record_id,
+          ],
+        );
+      }
+      for (const q of batch.quarantines ?? []) {
+        const prior = (
+          await s.q<{ observed_at: string }>(
+            "SELECT observed_at FROM live_records WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND source_record_id=$4",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              q.source_record_id,
+            ],
+          )
+        )[0];
+        if (prior && Date.parse(prior.observed_at) > Date.parse(q.observed_at))
+          continue;
+        await s.remove(
+          batch.owner_id,
+          batch.source,
+          batch.account_id,
+          q.source_record_id,
+        );
+        await s.q(
+          "DELETE FROM live_history_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1 AND record_id=$4",
+          [batch.owner_id, batch.source, batch.account_id, q.source_record_id],
+        );
+        await s.q(
+          "INSERT INTO live_review_quarantines(owner_id,source,account_id,record_id,reason,observed_at,original_reference) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,source,account_id,record_id) DO UPDATE SET reason=EXCLUDED.reason,observed_at=EXCLUDED.observed_at,original_reference=EXCLUDED.original_reference WHERE EXCLUDED.observed_at>=live_review_quarantines.observed_at",
+          [
+            batch.owner_id,
+            batch.source,
+            batch.account_id,
+            q.source_record_id,
+            q.reason,
+            q.observed_at,
+            q.original_reference,
           ],
         );
       }
@@ -917,6 +1052,17 @@ export class PostgresStore implements LiveStore {
         )
           continue;
         await s.remove(batch.owner_id, batch.source, batch.account_id, id);
+        if (!batch.quarantines?.some((q) => q.source_record_id === id))
+          await s.q(
+            "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND record_id=$4 AND observed_at<=$5",
+            [
+              batch.owner_id,
+              batch.source,
+              batch.account_id,
+              id,
+              batch.withdrawals_observed_at ?? current.watermark,
+            ],
+          );
         await s.q(
           "DELETE FROM live_history_seen WHERE owner_id=$1 AND source=$2 AND account_id=$3 AND version=1 AND record_id=$4",
           [batch.owner_id, batch.source, batch.account_id, id],
@@ -932,6 +1078,14 @@ export class PostgresStore implements LiveStore {
           [batch.owner_id, batch.source, batch.account_id],
         )
       )[0]!;
+      next.quarantined_count = Number(
+        (
+          await s.q<{ n: string }>(
+            "SELECT count(*)::text n FROM live_review_quarantines WHERE owner_id=$1 AND source=$2 AND account_id=$3",
+            [batch.owner_id, batch.source, batch.account_id],
+          )
+        )[0]?.n ?? 0,
+      );
       next.record_count = Number(coverage.n);
       next.oldest_at =
         coverage.oldest_at === null
