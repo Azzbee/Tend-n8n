@@ -103,7 +103,11 @@ export function createPrivateServices(options: {
           .length === 1,
       expiresAt: (record, now) =>
         new Date(
-          allAvailableHistory(policy)
+          (
+            record.source === "gmail" || record.source === "calendar"
+              ? allAvailableHistory(policy)
+              : Boolean(policy.social && allAvailableHistory(policy.social))
+          )
             ? now.getTime() + 30 * 86400000
             : record.source === "calendar"
               ? (record.end_at ?? record.occurred_at)

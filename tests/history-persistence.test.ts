@@ -596,6 +596,29 @@ describe("separate history and daily ledgers", () => {
     );
     it(
       kind +
+        " expires legacy social evidence independently of all-history mail",
+      async () => {
+        await store().expireLiveEvidence(
+          principal.owner_id,
+          "0001-01-01T00:00:00.000Z",
+          "0001-01-01T00:00:00.000Z",
+          "2026-10-27T10:00:00.000Z",
+          "2026-09-20T10:00:00.000Z",
+        );
+        expect(
+          (await store().interactions(principal.owner_id)).filter(
+            (r) => r.source === "whatsapp_personal",
+          ),
+        ).toHaveLength(0);
+        expect(
+          (await store().interactions(principal.owner_id)).filter(
+            (r) => r.source === "calendar",
+          ),
+        ).toHaveLength(1);
+      },
+    );
+    it(
+      kind +
         " backs the real daily service with one durable claim and late acknowledgement",
       async () => {
         const service = new DailyBriefingService({

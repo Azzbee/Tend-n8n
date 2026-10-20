@@ -712,6 +712,7 @@ export class PostgresStore implements LiveStore {
     messageStart: string,
     calendarStart: string,
     calendarEnd: string,
+    socialStart: string = messageStart,
   ): Promise<void> {
     this.owner(owner);
     return this.run(async (s) => {
@@ -720,14 +721,14 @@ export class PostgresStore implements LiveStore {
         account_id: string;
         source_record_id: string;
       }>(
-        "SELECT source,account_id,source_record_id FROM live_records WHERE owner_id=$1 AND ((source<>'calendar' AND occurred_at::timestamptz<$2::timestamptz) OR (source='calendar' AND (coalesce(end_at,occurred_at)::timestamptz<=$3::timestamptz OR occurred_at::timestamptz>=$4::timestamptz)))",
-        [owner, messageStart, calendarStart, calendarEnd],
+        "SELECT source,account_id,source_record_id FROM live_records WHERE owner_id=$1 AND ((source<>'calendar' AND occurred_at::timestamptz<CASE WHEN source='gmail' THEN $2::timestamptz ELSE $5::timestamptz END) OR (source='calendar' AND (coalesce(end_at,occurred_at)::timestamptz<=$3::timestamptz OR occurred_at::timestamptz>=$4::timestamptz)))",
+        [owner, messageStart, calendarStart, calendarEnd, socialStart],
       );
       for (const r of expired)
         await s.remove(owner, r.source, r.account_id, r.source_record_id);
       await s.q(
-        "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND observed_at<$2",
-        [owner, messageStart],
+        "DELETE FROM live_review_quarantines WHERE owner_id=$1 AND observed_at<CASE WHEN source='gmail' THEN $2 ELSE $3 END",
+        [owner, messageStart, socialStart],
       );
       await s.prune(owner);
     });

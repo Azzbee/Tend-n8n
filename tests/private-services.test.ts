@@ -1,10 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createPrivateServices,
   resolvePrivateSearchSelection,
   guardSemanticRecords,
 } from "../src/private-services.ts";
-import { exampleLivePolicy } from "../src/live-policy.ts";
+import { exampleLivePolicy, type LivePolicy } from "../src/live-policy.ts";
 import { fixtureContacts } from "../src/fixtures.ts";
+
+import type {
+  SemanticScope,
+  SemanticServiceOptions,
+} from "../src/semantic-search.ts";
+import type { NormalizedRecord } from "../src/engine.ts";
+const captured = vi.hoisted(() => ({ scope: null as SemanticScope | null }));
+vi.mock("../src/semantic-search.ts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/semantic-search.ts")>();
+  return {
+    ...actual,
+    SemanticSearchService: class {
+      constructor(options: SemanticServiceOptions) {
+        captured.scope = options.scope;
+      }
+    },
+  };
+});
 
 describe("private semantic integration boundary", () => {
   it("rejects arbitrary selectors rather than broadening a search", async () => {
@@ -71,4 +91,83 @@ describe("private semantic integration boundary", () => {
       ),
     ).rejects.toThrow();
   });
+});
+
+describe("per-source semantic retention", () => {
+  it.each([
+    [true, false],
+    [false, true],
+    [false, false],
+    [true, true],
+  ])(
+    "keeps mail history %s independent of social history %s",
+    async (mail, social) => {
+      const policy: LivePolicy = {
+        ...exampleLivePolicy,
+        ...(mail
+          ? { history: { version: 1 as const, mode: "all_available" as const } }
+          : {}),
+        social: {
+          window_days: 30,
+          ...(social
+            ? {
+                history: {
+                  version: 1 as const,
+                  mode: "all_available" as const,
+                },
+              }
+            : {}),
+          accounts: [
+            {
+              source: "whatsapp_personal",
+              provider: "unipile",
+              account_id: "personal-account",
+              owner_identity: "123",
+              owner_verified: true,
+              api_base_url: "https://api1.unipile.com",
+            },
+          ],
+        },
+      };
+      const services = createPrivateServices({
+        policy,
+        store: {} as never,
+        postgres: {},
+      });
+      try {
+        const now = new Date("2026-10-20T10:00:00.000Z");
+        const raw = { occurred_at: "2024-01-01T10:00:00.000Z" };
+        const scope = captured.scope!;
+        expect(
+          scope
+            .expiresAt({ ...raw, source: "gmail" } as NormalizedRecord, now)
+            .toISOString(),
+        ).toBe(mail ? "2026-11-19T10:00:00.000Z" : "2024-01-31T10:00:00.000Z");
+        expect(
+          scope
+            .expiresAt(
+              { ...raw, source: "whatsapp_personal" } as NormalizedRecord,
+              now,
+            )
+            .toISOString(),
+        ).toBe(
+          social ? "2026-11-19T10:00:00.000Z" : "2024-01-31T10:00:00.000Z",
+        );
+        expect(
+          scope
+            .expiresAt(
+              {
+                ...raw,
+                source: "calendar",
+                end_at: "2024-01-01T11:00:00.000Z",
+              } as NormalizedRecord,
+              now,
+            )
+            .toISOString(),
+        ).toBe(mail ? "2026-11-19T10:00:00.000Z" : "2024-01-01T11:00:00.000Z");
+      } finally {
+        await services.close();
+      }
+    },
+  );
 });

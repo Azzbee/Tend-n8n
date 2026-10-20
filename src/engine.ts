@@ -1555,6 +1555,7 @@ export class TendStore {
     gmailStart: string,
     calendarStart: string,
     calendarEnd: string,
+    socialStart: string = gmailStart,
   ): void {
     this.assertOwner(owner);
     if (this.mode !== "live") throw new Error("live mode required");
@@ -1571,7 +1572,10 @@ export class TendStore {
       for (const record of records)
         if (
           (record.source !== "calendar" &&
-            Date.parse(record.occurred_at) < Date.parse(gmailStart)) ||
+            Date.parse(record.occurred_at) <
+              Date.parse(
+                record.source === "gmail" ? gmailStart : socialStart,
+              )) ||
           (record.source === "calendar" &&
             (Date.parse(record.end_at ?? record.occurred_at) <=
               Date.parse(calendarStart) ||
@@ -1585,9 +1589,9 @@ export class TendStore {
           );
       this.db
         .prepare(
-          "DELETE FROM live_quarantines WHERE owner_id=? AND observed_at<?",
+          "DELETE FROM live_quarantines WHERE owner_id=? AND observed_at<CASE WHEN source='gmail' THEN ? ELSE ? END",
         )
-        .run(owner, gmailStart);
+        .run(owner, gmailStart, socialStart);
       this.pruneLiveContacts(owner);
       this.db.exec("COMMIT");
     } catch (error) {
