@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-20T15:08:06.449Z",
+  "checked_at": "2026-10-20T16:26:54.987Z",
   "workflow_sha256": {
     "01-gmail.json": "f887681666a11f5ca9ce541ea28da0bb465506e8d38bc35056ded87635072cc3",
     "02-calendar.json": "58f08edae3a7303520828f810787b35e5e608dbb2d707485e11ca241ba3aa2da",
@@ -23,7 +23,7 @@
     "20-daily-owner-briefing.json": "6599182c0eb5a0b5d5e4a990146f5c6590c9740e43fb642a6aed7d9ab98c0f7a"
   },
   "source_sha256": {
-    "engine.ts": "328f9fd3e62464c211315f28d43b80fa5ed6b8d6597715d6b15c2ed0bbf6021e",
+    "engine.ts": "1f9df159ddf61c791d48ead3dc778130f06a0a709da09a422b7070b9d27b7d8a",
     "server.ts": "20a86273e39c9027f2090119b1f355095edcf734cd2f89641ae19dad4286e82c",
     "build-workflows.ts": "0b98daf8d8243f9ae5b93cfa004abcc4112c64251ac58cdbbdceba6fde8fce56",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
