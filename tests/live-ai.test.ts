@@ -1955,3 +1955,337 @@ describe("temporal adjectives and day-part claims use cited Paris time", () => {
     ).toBeNull();
   });
 });
+
+describe("relative-time families fail closed outside supported cited intervals", () => {
+  const now = new Date("2026-10-20T16:00:00Z");
+  function check(stamp: string, phrase: string, at = now) {
+    const source = record({ occurred_at: stamp });
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: at.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Write a short follow-up",
+        policy: exampleLivePolicy,
+      },
+    });
+    return validateLiveAI(
+      prepared,
+      generated(
+        `Thanks for your message ${phrase}. Could you share an update?`,
+      ),
+      [source],
+      undefined,
+      at,
+    );
+  }
+  it.each([
+    "last weekend",
+    "over the weekend",
+    "le week-end dernier",
+    "this afternoon",
+    "this evening",
+    "cet après-midi",
+    "ce soir",
+    "just now",
+    "à l'instant",
+    "next spring",
+    "this season",
+    "la saison passée",
+    "in an hour",
+    "dans deux heures",
+    "previous afternoon",
+    "this winter",
+    "le printemps prochain",
+    "la semaine précédente",
+    "il y a trente jours",
+    "an hour ago",
+  ])("rejects stale or unsupported family %s", (phrase) => {
+    expect(check("2026-09-23T10:00:00Z", phrase).draft).toBeNull();
+  });
+  it.each([
+    ["2026-10-18T10:00:00Z", "last weekend", true],
+    ["2026-10-18T10:00:00Z", "over the weekend", true],
+    ["2026-10-18T10:00:00Z", "le week-end dernier", true],
+    ["2026-10-20T12:00:00Z", "this afternoon", true],
+    ["2026-10-20T12:00:00Z", "cet après-midi", true],
+    ["2026-10-20T07:00:00Z", "this afternoon", false],
+    ["2026-10-20T16:00:00Z", "this evening", true],
+    ["2026-10-20T16:00:00Z", "ce soir", true],
+    ["2026-10-20T12:00:00Z", "ce soir", false],
+    ["2026-10-20T15:55:00Z", "just now", true],
+    ["2026-10-20T15:55:00Z", "à l'instant", true],
+    ["2026-10-20T15:00:00Z", "just now", false],
+  ] as const)("supports %s described as %s", (stamp, phrase, accepted) => {
+    expect(check(stamp, phrase).status).toBe(
+      accepted ? "validated" : "fallback",
+    );
+  });
+  it("does not validate unsupported seasonal or future wording with a fresh citation", () => {
+    expect(check("2026-10-20T15:55:00Z", "next spring").draft).toBeNull();
+    expect(check("2026-10-20T15:55:00Z", "ce printemps").draft).toBeNull();
+  });
+});
+
+it.each([
+  "in three hours",
+  "dans trois heures",
+  "in several days",
+  "in a couple of days",
+  "past three days",
+  "past several days",
+  "within twenty-seven hours",
+  "d’ici quelques petites heures",
+  "the past four whole days",
+])(
+  "rejects a residual temporal family with intervening words: %s",
+  (phrase) => {
+    const source = record({ occurred_at: "2026-09-23T10:00:00Z" }),
+      now = new Date("2026-10-20T16:00:00Z");
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: now.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Write a short follow-up",
+        policy: exampleLivePolicy,
+      },
+    });
+    expect(
+      validateLiveAI(
+        prepared,
+        generated(`Hi Mira, could you share an update ${phrase}?`),
+        [source],
+        undefined,
+        now,
+      ).draft,
+    ).toBeNull();
+  },
+);
+it.each([
+  "Hi Mira, could you share the next steps?",
+  "Hi Mira, how are things going in the project?",
+])("preserves an ordinary follow-up without temporal units: %s", (text) => {
+  const source = record(),
+    prepared = draftPrepare([source]);
+  expect(
+    validateLiveAI(prepared, generated(text), [source], undefined, draftNow)
+      .draft?.text,
+  ).toBe(text);
+});
+
+it.each([
+  "the other night",
+  "l’autre nuit",
+  "that night",
+  "a wonderfully distant afternoon",
+])(
+  "declines an unrecognized day-part reference conservatively: %s",
+  (phrase) => {
+    const source = record({ occurred_at: "2026-09-23T10:00:00Z" }),
+      now = new Date("2026-10-20T16:00:00Z");
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: now.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Write a short follow-up",
+        policy: exampleLivePolicy,
+      },
+    });
+    expect(
+      validateLiveAI(
+        prepared,
+        generated(
+          `Thanks for your message ${phrase}. Could you share an update?`,
+        ),
+        [source],
+        undefined,
+        now,
+      ).draft,
+    ).toBeNull();
+  },
+);
+it("keeps a timeless personalised follow-up and a supported current day-part", () => {
+  const source = record({ occurred_at: "2026-10-19T08:00:00Z" }),
+    prepared = draftPrepare([source]);
+  expect(
+    validateLiveAI(
+      prepared,
+      generated("Hi Mira, could you share an update on the prototype? Thanks!"),
+      [source],
+      undefined,
+      draftNow,
+    ).draft,
+  ).not.toBeNull();
+  expect(
+    validateLiveAI(
+      prepared,
+      generated(
+        "Thanks for your message this morning. Could you share an update?",
+      ),
+      [source],
+      undefined,
+      draftNow,
+    ).draft,
+  ).not.toBeNull();
+});
+
+it.each([
+  "Le projet a été utile. Pourrais-tu partager une mise à jour ?",
+  "Could you share an update on how the pieces fall into place?",
+])("keeps a non-temporal homonym in generated prose: %s", (text) => {
+  const source = record(),
+    prepared = draftPrepare([source]);
+  expect(
+    validateLiveAI(prepared, generated(text), [source], undefined, draftNow)
+      .draft?.text,
+  ).toBe(text);
+});
+it.each(["cet été", "this fall", "dans un an"])(
+  "still declines a qualified ambiguous temporal unit: %s",
+  (phrase) => {
+    const source = record(),
+      prepared = draftPrepare([source]);
+    expect(
+      validateLiveAI(
+        prepared,
+        generated(`Could you share an update ${phrase}?`),
+        [source],
+        undefined,
+        draftNow,
+      ).draft,
+    ).toBeNull();
+  },
+);
+it("does not interpret a verified source URL day/time path as temporal prose", () => {
+  const text = "The document is at https://example.invalid/day/time",
+    source = record({ body_text: text, authored_text: text });
+  const prepared = draftPrepare([source]),
+    output = {
+      items: [{ evidence_id: "E1", quote: text }],
+      draft: {
+        text: "Could you share an update on https://example.invalid/day/time?",
+      },
+    };
+  expect(
+    validateLiveAI(prepared, output, [source], undefined, draftNow).draft?.text,
+  ).toBe(output.draft.text);
+});
+
+it.each([
+  "votre message cette soirée",
+  "votre message cette journée",
+  "your message this midnight",
+  "your message at midnight",
+  "votre message cette matinée",
+  "your message at midday",
+  "your message at dawn",
+  "your message at dusk",
+  "your message at sunrise",
+  "your message at sunset",
+  "votre message à minuit",
+])("declines an old source described by a day-part noun: %s", (claim) => {
+  const source = record({ occurred_at: "2026-09-23T10:00:00Z" }),
+    now = new Date("2026-10-20T16:00:00Z");
+  const prepared = prepareLiveAI({
+    owner_id: "fictional-owner",
+    contact_id: "F17",
+    purpose: "draft",
+    records: [source],
+    draft_context: {
+      now: now.toISOString(),
+      contact_name: "Mira",
+      owner_request: "Write a short follow-up",
+      policy: exampleLivePolicy,
+    },
+  });
+  expect(
+    validateLiveAI(
+      prepared,
+      generated(`Thanks for ${claim}. Could you share an update?`),
+      [source],
+      undefined,
+      now,
+    ).draft,
+  ).toBeNull();
+});
+it("retains the supported current French matinée phrase", () => {
+  const source = record({ occurred_at: "2026-10-19T08:00:00Z" }),
+    prepared = draftPrepare([source]);
+  expect(
+    validateLiveAI(
+      prepared,
+      generated(
+        "Merci pour votre message cette matinée. Pourriez-vous partager une mise à jour ?",
+      ),
+      [source],
+      undefined,
+      draftNow,
+    ).draft,
+  ).not.toBeNull();
+});
+
+it.each([
+  "en été",
+  "pendant été",
+  "durant été",
+  "pour été",
+  "dans 1 an",
+  "dans 2 an",
+  "by fall",
+  "until fall",
+  "since fall",
+  "before fall",
+  "after fall",
+])(
+  "declines an ambiguous unit used in an explicit temporal context: %s",
+  (phrase) => {
+    const source = record({ occurred_at: "2026-09-23T10:00:00Z" }),
+      now = new Date("2026-10-20T16:00:00Z");
+    const prepared = prepareLiveAI({
+      owner_id: "fictional-owner",
+      contact_id: "F17",
+      purpose: "draft",
+      records: [source],
+      draft_context: {
+        now: now.toISOString(),
+        contact_name: "Mira",
+        owner_request: "Write a short follow-up",
+        policy: exampleLivePolicy,
+      },
+    });
+    expect(
+      validateLiveAI(
+        prepared,
+        generated(
+          `Merci pour votre message ${phrase}. Could you share an update?`,
+        ),
+        [source],
+        undefined,
+        now,
+      ).draft,
+    ).toBeNull();
+  },
+);
+it.each([
+  "Le projet a été utile. Pourrais-tu partager une mise à jour ?",
+  "Could you share an update?",
+  "Could you share an update on how the pieces fall into place?",
+])("preserves a non-temporal homonym after contextual guards: %s", (text) => {
+  const source = record(),
+    prepared = draftPrepare([source]);
+  expect(
+    validateLiveAI(prepared, generated(text), [source], undefined, draftNow)
+      .draft?.text,
+  ).toBe(text);
+});

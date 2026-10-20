@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-20T12:29:52.348Z",
+  "checked_at": "2026-10-20T12:57:33.303Z",
   "pass": true,
   "scope": "Fictional source data only; isolated native n8n container and in-memory private API. Actual local Ollama execution, no real-data claim.",
   "runtime": {
@@ -9,7 +9,7 @@
   },
   "purpose": "briefing",
   "workflow_sha256": "950b8674bbfc5b9a3be05f4caeee1e56e49d68c35f2fa18410ba93dfef8aa831",
-  "live_ai_source_sha256": "6dabcb5d56444caca39b7e16db66d0e0827682339f0dcf81021d64e93fdc0ad4",
+  "live_ai_source_sha256": "d915e2c41c1b4370b933d6d7bdadda733c927b2ec04ff8a91791ab26440e674c",
   "model_node_executed": true,
   "result_status": "validated",
   "exact_current_citation_count": 1,
