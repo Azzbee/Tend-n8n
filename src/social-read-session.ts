@@ -528,12 +528,53 @@ export class SocialReadSessions {
             ...normalized.invalidated_record_ids,
           ]),
         ];
+        try {
+          await this.checkHistoryResources(account.source, account.account_id);
+        } catch (error) {
+          if (removed.length) {
+            const paused = (
+              await this.store.historyBackfills(this.principal)
+            ).find(
+              (checkpoint) =>
+                checkpoint.source === account.source &&
+                checkpoint.account_id === account.account_id,
+            );
+            if (
+              !paused ||
+              paused.status !== "paused" ||
+              paused.last_error === null
+            )
+              throw error;
+            try {
+              await this.store.commitHistoryBackfill({
+                owner_id: this.principal,
+                source: account.source,
+                account_id: account.account_id,
+                version: 1,
+                watermark: pending.plan.coverage_end,
+                expected_cursor: pending.plan.expected_cursor,
+                cursor: pending.plan.expected_cursor,
+                advance: false,
+                operation_hash: normalized.page_hash,
+                complete: false,
+                records: [],
+                removed_record_ids: removed,
+                withdrawals_observed_at: now.toISOString(),
+              });
+            } finally {
+              await this.store.pauseHistoryBackfill(
+                this.principal,
+                account.source,
+                account.account_id,
+                paused.last_error,
+                paused.retry_after_until,
+              );
+            }
+          }
+          throw error;
+        }
         if (normalized.batch.evidence_incomplete) {
           if (removed.length) {
-            await this.checkHistoryResources(
-              account.source,
-              account.account_id,
-            );
             await this.store.commitHistoryBackfill({
               owner_id: this.principal,
               source: account.source,
@@ -576,7 +617,6 @@ export class SocialReadSessions {
             ...record.participant_identities,
           ]),
         );
-        await this.checkHistoryResources(account.source, account.account_id);
         const accepted = await this.store.commitHistoryBackfill({
           owner_id: this.principal,
           source: account.source,

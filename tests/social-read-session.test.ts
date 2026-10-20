@@ -271,10 +271,13 @@ describe.each(["sqlite", "postgres"] as const)(
         retry_after_until: "2026-10-14T12:02:00.000Z",
       });
     });
-    async function retainedHistoryEvidence() {
+    async function retainedHistoryEvidence(
+      resourceGate: () => Promise<string | null> = async () => null,
+      incrementalSeed = false,
+    ) {
       sessions = new SocialReadSessions({
         policy: { ...policy, history: { version: 1, mode: "all_available" } },
-        historyResourceGate: async () => null,
+        historyResourceGate: resourceGate,
         store,
         principal_id: owner,
         clock: () => now,
@@ -298,7 +301,7 @@ describe.each(["sqlite", "postgres"] as const)(
           ...personal,
           phase: "snapshot",
           proof_id,
-          lane: "history",
+          ...(incrementalSeed ? {} : { lane: "history" }),
         }),
       );
       expect(
@@ -467,6 +470,67 @@ describe.each(["sqlite", "postgres"] as const)(
         last_error: "history_page_requires_review",
       });
     });
+    it.each([false, true])(
+      "withdraws only confirmed invalid IDs when the result resource gate fails (quarantine %s)",
+      async (quarantined) => {
+        let checks = 0;
+        const { proof_id, raw, prepared, auth } = await retainedHistoryEvidence(
+          async () => (++checks === 1 ? null : "disk_floor"),
+          true,
+        );
+        const before = await store.sourceStatus(owner);
+        const planned = request(
+          await sessions.plan({
+            ...personal,
+            phase: "snapshot",
+            proof_id,
+            lane: "history",
+          }),
+        );
+        expect((await store.historyBackfills(owner))[0]).toMatchObject({
+          cursor: null,
+          page_count: 0,
+        });
+        expect(
+          await sessions.result({
+            request_id: planned.request_id,
+            status: 200,
+            body: {
+              object: "MessageList",
+              cursor: "not-advanced",
+              items: [
+                { ...raw, deleted: true },
+                {
+                  ...raw,
+                  id: "other-valid",
+                  text: "Must not ingest under resource floor",
+                },
+                ...(quarantined ? [{ ...raw, id: "unknown", text: null }] : []),
+              ],
+            },
+          }),
+        ).toMatchObject({ kind: "blocked", reason: "disk_floor" });
+        expect(await store.interactions(owner)).toHaveLength(0);
+        expect(await store.validatePreparedRead(auth, prepared)).not.toEqual(
+          prepared.reply,
+        );
+        expect((await store.historyBackfills(owner))[0]).toMatchObject({
+          cursor: null,
+          page_count: 0,
+          status: "paused",
+          last_error: "disk_floor",
+        });
+        expect(await store.sourceStatus(owner)).toEqual(before);
+        expect(
+          await sessions.plan({
+            ...personal,
+            phase: "snapshot",
+            proof_id,
+            lane: "history",
+          }),
+        ).toMatchObject({ available: false, reason: "disk_floor" });
+      },
+    );
     it("requires a history resource measurement and rechecks it before committing a page", async () => {
       const approved = {
         ...policy,
