@@ -46,9 +46,10 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships twenty inactive exports without private account credentials or external recipients", () => {
+  it("ships twenty-one inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(20);
+    expect(files).toHaveLength(21);
+    expect(files).toContain("21-error-handler.json");
     expect(files).toContain("20-daily-owner-briefing.json");
     for (const f of files) {
       const raw = readFileSync(`workflows/${f}`, "utf8");
@@ -61,6 +62,62 @@ describe("import and node boundaries", () => {
       if (/^0[1-9]-/.test(f))
         expect(raw).not.toMatch(/n8n-nodes-base\.(gmail|telegram|whatsApp)/);
     }
+  });
+  it("fictional workflows 01-09 point at the redacting error workflow", () => {
+    for (const f of readdirSync("workflows").filter((f) =>
+      /^0[1-9]-/.test(f),
+    )) {
+      const w = JSON.parse(readFileSync(`workflows/${f}`, "utf8")) as {
+        settings: { errorWorkflow?: string };
+      };
+      expect(w.settings.errorWorkflow).toBe("TendReview21");
+    }
+    const handler = JSON.parse(
+      readFileSync("workflows/21-error-handler.json", "utf8"),
+    ) as { id: string; active: boolean; nodes: Node[] };
+    expect(handler.id).toBe("TendReview21");
+    expect(handler.active).toBe(false);
+    expect(handler.nodes[0]?.type).toBe("n8n-nodes-base.errorTrigger");
+    for (const f of readdirSync("workflows").filter((f) =>
+      /^(1[0-9]|20)-/.test(f),
+    ))
+      expect(readFileSync(`workflows/${f}`, "utf8")).not.toContain(
+        "errorWorkflow",
+      );
+  });
+  it("error workflow keeps only names and a short message, never item data", () => {
+    const n = load("21-error-handler.json").nodes.find(
+      (n) => n.name === "Redact failure to names only",
+    )!;
+    const out = vm.runInNewContext(
+      `(function(){${String(n.parameters.jsCode)}})()`,
+      {
+        $input: {
+          first: () => ({
+            json: {
+              workflow: { name: "Tend 07: Extract Commitments" },
+              execution: {
+                id: 4242,
+                lastNodeExecuted: "Validate quoted model result",
+                error: { message: "bad\n  quote " + "x".repeat(500) },
+                data: { secret: "PRIVATE BODY TEXT" },
+              },
+            },
+          }),
+        },
+      },
+    ) as { json: Record<string, string> }[];
+    const j = out[0]!.json;
+    expect(Object.keys(j).sort()).toEqual([
+      "execution_id",
+      "message",
+      "node",
+      "workflow",
+    ]);
+    expect(j.message!.length).toBeLessThanOrEqual(200);
+    expect(j.message!.startsWith("bad quote")).toBe(true);
+    expect(JSON.stringify(j)).not.toContain("PRIVATE BODY TEXT");
+    expect(j.execution_id).toBe("4242");
   });
   it("adapters embed a callable unpublished subworkflow", () => {
     for (const f of readdirSync("workflows").filter((f) =>

@@ -54,6 +54,7 @@ type Workflow = {
     timezone: "Europe/Paris";
     saveManualExecutions?: boolean;
     executionTimeout?: number;
+    errorWorkflow?: string;
   };
   tags: never[];
   pinData: Record<string, unknown>;
@@ -1605,7 +1606,35 @@ return [{json:{...x,rows,omitted_row_count:omitted,unknown_field_count:count(pre
   workflows.push(w);
 }
 
+// Error workflow for the fictional lane only. It receives n8n's Error Trigger
+// payload, keeps just the names and a short message (never item data) and
+// records them on the local fixture API. Private live workflows keep their
+// no-save policy and do not use an error workflow.
+const errorHandler = workflow(
+  "TendReview21",
+  "Tend 21: Error handler (fictional lane)",
+  [
+    node("Error Trigger", "errorTrigger", {}, 0, 0, 1),
+    code(
+      "Redact failure to names only",
+      "const e=$input.first().json;const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const ex=e.execution||{};const node=ex.lastNodeExecuted||(ex.error&&ex.error.node&&ex.error.node.name)||'unknown node';const raw=ex.error&&typeof ex.error.message==='string'?ex.error.message:'no message';return [{json:{workflow:wf.slice(0,120),node:String(node).slice(0,120),message:raw.replace(/\\s+/g,' ').slice(0,200),execution_id:String(ex.id??'').slice(0,40)}}];",
+      260,
+    ),
+    http(
+      "Record failure on fixture API",
+      "/api/failure-log",
+      520,
+      "={{ JSON.stringify($json) }}",
+    ),
+  ],
+);
+errorHandler.nodes[0]!.notes =
+  "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow name, failing node and a 200-character message.";
+for (const w of workflows)
+  if (/^TendReview0[1-9]$/.test(w.id))
+    w.settings.errorWorkflow = "TendReview21";
 await mkdir("workflows", { recursive: true });
+await writeJson("workflows/21-error-handler.json", errorHandler);
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
     `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly", "business-whatsapp-readonly"][i]}.json`,
@@ -1634,5 +1663,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length + 1} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 2} inactive workflow exports and fictional fixture data.`,
 );
