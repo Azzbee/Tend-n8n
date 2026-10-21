@@ -28,6 +28,12 @@ function startFixtureServer(): void {
   const retryAttempts = new Map<string, number>();
   const maxBody = 100000;
   const mockTelegramReplies: { chat_id: string; text: string }[] = [];
+  const failureLog: {
+    workflow: string;
+    node: string;
+    message: string;
+    execution_id: string;
+  }[] = [];
   let mockWebhookUrl = "";
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -95,6 +101,7 @@ function startFixtureServer(): void {
           interactions: store.interactions("demo-owner"),
           commitments: store.commitments("demo-owner"),
           mock_telegram_replies: mockTelegramReplies,
+          failure_log: failureLog,
           telegram_delivery: store.telegramDeliveryCounts(),
         });
         return;
@@ -234,6 +241,19 @@ function startFixtureServer(): void {
             text: input.text,
           },
         });
+        return;
+      }
+      if (url.pathname === "/api/failure-log") {
+        const text = (v: unknown, max: number): string =>
+          typeof v === "string" ? v.slice(0, max) : "";
+        failureLog.push({
+          workflow: text(input.workflow, 120),
+          node: text(input.node, 120),
+          message: text(input.message, 200),
+          execution_id: text(input.execution_id, 40),
+        });
+        if (failureLog.length > 50) failureLog.shift();
+        respond(200, { fictional: true, recorded: failureLog.length });
         return;
       }
       if (url.pathname === "/api/ingest") {

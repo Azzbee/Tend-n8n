@@ -1,0 +1,73 @@
+{
+  "id": "TendReview21",
+  "name": "Tend 21: Error handler (fictional lane)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {},
+      "notes": "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow name, failing node and a 200-character message."
+    },
+    {
+      "id": "redact-failure-to-names-only",
+      "name": "Redact failure to names only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0],
+      "parameters": {
+        "jsCode": "const e=$input.first().json;const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const ex=e.execution||{};const node=ex.lastNodeExecuted||(ex.error&&ex.error.node&&ex.error.node.name)||'unknown node';const raw=ex.error&&typeof ex.error.message==='string'?ex.error.message:'no message';return [{json:{workflow:wf.slice(0,120),node:String(node).slice(0,120),message:raw.replace(/\\s+/g,' ').slice(0,200),execution_id:String(ex.id??'').slice(0,40)}}];"
+      }
+    },
+    {
+      "id": "record-failure-on-fixture-api",
+      "name": "Record failure on fixture API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/failure-log",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 10000 }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [{ "node": "Redact failure to names only", "type": "main", "index": 0 }]
+      ]
+    },
+    "Redact failure to names only": {
+      "main": [
+        [
+          {
+            "node": "Record failure on fixture API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "Europe/Paris"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000021",
+  "meta": { "templateCredsSetupCompleted": false }
+}
