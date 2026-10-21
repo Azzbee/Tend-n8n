@@ -57,7 +57,8 @@
     "executionOrder": "v1",
     "saveDataSuccessExecution": "all",
     "saveDataErrorExecution": "all",
-    "timezone": "Europe/Paris"
+    "timezone": "Europe/Paris",
+    "errorWorkflow": "TendReview21"
   },
   "tags": [],
   "pinData": {},
