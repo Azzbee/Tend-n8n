@@ -117,3 +117,9 @@ Same method: read-only, headings, counts, fixed labels and workflow statuses onl
 | errorWorkflow=22 on 14, 15, 20, 25, 26 and pollers; 26 credential scope | not verifiable here: the live n8n REST API returns 401 to this browser and I will not sign in                                                                                                   | reported by tend-deploy, not verified                |
 | Desk                                                                    | 0/0/0 promises, Not promises 31,898, Held back 96, 5 sources · 32,795 records, "1 failure logged"                                                                                               | green (render)                                       |
 | Fictional re-check at c0d5ea0                                           | 1,126 tests (48 files, no database) pass; fixture + harness up; 5 Telegram commands accepted; Chrome: confirm, approve with "Approval ends" and "Sending is switched off", How it runs 26 tiles | green                                                |
+
+## Final live check (22 Oct, 13:16, read-only, locked after)
+
+- Outreach queue: "No drafts waiting.", 0 status cards, 0 approve buttons. L-6 cleared live (the 585 pending items no longer appear).
+- How it runs: 11 passed 13:15, 12 13:15, 15 13:15, 17 13:15 (L-2 fixed), 18 13:12, 19 13:15, 20 13:10 (manual run; schedule proof tomorrow 09:00), 22 13:11. 25 and 26 "No runs recorded" (25 unpublished at 13:04, 26 unpublished pending Gmail consent). 14 still "Tue 20 Oct 17:00": live /outreach pending Adam's phone.
+- Failure log: one entry, workflow 15, node "Validate exact authored quote", execution 281768, message withheld. 15's next run passed (13:15). L-7 (low, tend-lead): an intermittent validation failure in 15, logged as an unlisted error rather than a named guard message; check after 14:05.
