@@ -377,6 +377,32 @@ describe("drafts never send without an exact approval", () => {
       ).accepted,
     ).toBe(true);
   });
+  it("rejects a model draft that copies a style example or the purpose text", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const items = byReason(book, load());
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "I will review your demo soon.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model repeated the prompt" });
+    expect(
+      book.modelDraft(
+        items.overdue_owed_to_you!.id,
+        "Mira, the contact promised you this and it is now overdue. Ask kindly for an update.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model repeated the prompt" });
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "Hi Mira, thanks for the note about the checklist. I will take a look.",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
   it("tells the model who wrote each cited message and what the draft is for", () => {
     const { book, load } = world();
     const created = book.plan(load()).created;

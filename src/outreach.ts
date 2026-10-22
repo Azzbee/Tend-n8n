@@ -286,7 +286,7 @@ export function planOutreach(
 // Local-model request: evidence and style samples travel as JSON data, the
 // system prompt says they are never instructions, and the output schema is a
 // single text field so the model cannot add recipients or actions.
-const purposes: Record<OutreachReason, string> = {
+export const purposes: Record<OutreachReason, string> = {
   overdue_owed_to_you:
     "The contact promised you this and it is now overdue. Ask kindly for an update.",
   you_owe_soon:
@@ -385,13 +385,10 @@ const words = (text: string): string =>
     .trim();
 // A small local model often echoes the cited message back; that is not a
 // message from the owner, so the template is kept instead.
-export function repeatsEvidence(
-  text: string,
-  evidence: OutreachEvidence[],
-): boolean {
+export function repeatsAny(text: string, sources: string[]): boolean {
   const draft = words(text);
-  return evidence.some((e) => {
-    const cited = words(e.text);
+  return sources.some((source) => {
+    const cited = words(source);
     return (
       cited.includes(draft) ||
       (cited.length >= 20 && draft.replace(cited, "").trim().length < 25)
