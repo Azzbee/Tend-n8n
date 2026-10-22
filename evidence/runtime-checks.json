@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-22T09:15:43.471Z",
+  "checked_at": "2026-10-22T09:25:17.619Z",
   "workflow_sha256": {
     "01-gmail.json": "d73b089dc73c842be2e0c2e35c68eef27f00347dc30a46e669d005b21ac9cfb5",
     "02-calendar.json": "a19473151eb14ff76deaaeb3a18f24c28dc4bfa9f5f56c51a53f1b22d624f1ba",
@@ -10,30 +10,30 @@
     "07-extract-commitments.json": "80b1cba2ce3272eddaf42b76880fdffe6d36f913ce49b73817f56c9b463afebd",
     "08-assistant.json": "ec82ea0b074ab3f9163de1c6f8adf82e87cd15ce7f5245817f2dcd896bebda60",
     "09-retry-fixture.json": "262079c0c27dcf687d7824e49e26c08713a9a33d6af0e79b41865834264a8da5",
-    "10-telegram-private.json": "94ab90aa1e2976e76f83c9fa29fec52608346d07b462702ef5a67527f23773bf",
+    "10-telegram-private.json": "137537591ba7401ec6b0e0a1aeb47aa8c3e7b5afb0ec537e6e120674e1dfdac7",
     "11-google-gmail-readonly.json": "e872734fb6316c8998c7ec7b36aa334e5a3c78168141547cc2d7ee40169e611a",
     "12-google-calendar-readonly.json": "b6495c46955e9ef81d68dcef8a7f2f27f3ba4b76674bd1fc252d12a3a73e980e",
     "13-google-normalize-store.json": "0bb6db0a1df753bad22d848b7501e9bf852a0b12a27d518492fbcc666dac3e7b",
-    "14-google-telegram-private.json": "f7cfb39834ff78f61a0d85c71a719a0efae570f553a3ee8d869faa0f2ce2bc89",
+    "14-google-telegram-private.json": "9955e46e5b511df46eedc0512f48071b799ee887bafb6c0909cbdca94ba5089d",
     "15-google-extract-commitments.json": "b431edcd2dfb59571dd3a870a9e4f410a37788f44d121c534a658d2a855b9585",
     "16-live-ai-review.json": "99f298958b570bf65b657714589d88797beb16bf4a1001ceb24b87885e6e3c33",
     "17-personal-whatsapp-readonly.json": "998a8ed481996f5a064d7c3cc025ed5400babedc15c12e08ec5f99dd771b5cda",
     "18-linkedin-portability-readonly.json": "188fceec82f285af0e81f0e065759209e6626cfd71a3c97673256280516980d7",
     "19-business-whatsapp-readonly.json": "b3ab04a03cb32c657b56f0571d7c8041426b02ea9f80d94cc92f61aa7e6e4067",
     "20-daily-owner-briefing.json": "e2121b582e036ba312571e802774cdac279bc54fa4c1c3288533af3831b6a21c",
-    "21-error-handler.json": "efa0bba430eed566d89dba3ed19f7988ef1b051553a1eb44072939fd945edbda",
+    "21-error-handler.json": "bf4b0d7bc2e9086dc2b0a6e960b934a68fa47f8de95b608ce3c0e778b11bf06d",
     "22-private-error-handler.json": "9eaa13abb24680c2a1eaafc83b83186c512833b67a12ac1ac7d66f1e309d4ed6",
     "23-outreach-planner.json": "bfc6fcab73d7ca97d98a1b936c9ac53488344736cbe63504f9471e5ef138d3c0",
     "24-outreach-gmail-drafts.json": "afa95276768b85535e6732ed4d78db34647c4e1a84762f8fe0935ff1ef3494f2",
     "25-private-outreach-planner.json": "7af76827d323f8184063207925888c6b28cf0e49ae6943609b6245ca8b26905b",
-    "26-private-outreach-gmail-drafts.json": "33588cfc0e97cdd1bfd309bcc0b277e91120db11737c6dfaddf8806c48fd7abd"
+    "26-private-outreach-gmail-drafts.json": "4a47bf2041706f143f447fa76aeb352b1c95ea516ab4644a7d9c618e2045bc0d"
   },
   "source_sha256": {
     "engine.ts": "372377d9605cb314f6be4a55f8cc5abc518e440fa14836910f56298976edce85",
     "server.ts": "45252ed12cf89c5c08ea75db83507744f4ed1440bbe7a348a01edc38d9b087d1",
-    "build-workflows.ts": "870914939ff274d1427882ebd9dca615ed32ffe11fe2f92eeebf8dc37b82d103",
+    "build-workflows.ts": "d6b57867aece44fec26abf412931b659284868b7a09b63384657588fa085bdd0",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "df7218ccdaec41bcda88cd8a7c08b34a950c55d7666bd63dbf425376eba9c5a3"
+    "integration.ts": "ab22791ed717993e236b5a7bca79942dadd692c79f10671169d940024817922c"
   },
   "runtime": {
     "node": "v22.17.0",
@@ -129,6 +129,11 @@
         "interactions": 7,
         "commitments": 2
       }
+    },
+    {
+      "name": "Published error workflow 21",
+      "pass": true,
+      "detail": "A fictional production failure posted only workflow, node and execution ID; its message text (fictional name, F17) was withheld"
     },
     {
       "name": "Native Telegram trigger and owner replies (local mock)",
