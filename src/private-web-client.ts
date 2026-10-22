@@ -262,9 +262,12 @@ export function mountPrivateWorkspace(): void {
     notify: status,
     openContact: (contactId, name) => void openContact(contactId, name),
   });
+  let currentView = "";
   function showView(): void {
     if (!session) return;
     const view = viewFromHash(window.location.hash);
+    if (currentView && view !== currentView) status(null);
+    currentView = view;
     for (const name of deskViews) visible(`${name}-view`, name === view);
     for (const link of document.querySelectorAll<HTMLAnchorElement>(
       ".views-nav a",
@@ -326,6 +329,7 @@ export function mountPrivateWorkspace(): void {
     workspace.hidden = true;
     locked.hidden = false;
     window.removeEventListener("hashchange", showView);
+    currentView = "";
     desk.clear();
     for (const name of deskViews) visible(`${name}-view`, false);
     visible("lock", false);

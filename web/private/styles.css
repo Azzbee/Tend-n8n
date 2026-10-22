@@ -945,6 +945,13 @@ a.link {
 .quiet-box p {
   margin: 0;
 }
+#desk-not,
+#desk-held,
+#desk-outreach {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 .record-line {
   display: flex;
   flex-direction: column;

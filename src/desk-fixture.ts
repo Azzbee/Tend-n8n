@@ -101,6 +101,7 @@ export const deskFixtureRecords: LiveRecord[] = [
 ];
 export function createDeskFixtureStore(
   clock: () => Date = deskFixtureClock,
+  meetingAt?: Date,
 ): TendStore {
   const store = new TendStore(":memory:", {
     mode: "live",
@@ -140,7 +141,18 @@ export function createDeskFixtureStore(
       cursor: null,
     })),
   );
-  for (const raw of deskFixtureRecords) {
+  // The local demo moves the meeting ahead of the real clock so Before you meet stays populated.
+  const meeting = (raw: LiveRecord): LiveRecord =>
+    meetingAt && raw.source === "calendar"
+      ? {
+          ...raw,
+          occurred_at: meetingAt.toISOString().replace(".000Z", "Z"),
+          end_at: new Date(meetingAt.getTime() + 3600_000)
+            .toISOString()
+            .replace(".000Z", "Z"),
+        }
+      : raw;
+  for (const raw of deskFixtureRecords.map(meeting)) {
     const stored = store.ingest(raw);
     if (!raw.body_text.startsWith("I will")) continue;
     store.markExtractionAttempt(owner, stored.record_key, stored.content_hash);

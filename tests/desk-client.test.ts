@@ -150,6 +150,10 @@ describe("desk presentation helpers", () => {
     );
     expect(dueLabel("2026-10-16")).toBe("Due Fri 16 Oct");
     expect(dueLabel(null)).toBe("No due date");
+    expect(dueLabel("2026-10-15", "2026-10-22")).toBe(
+      "Overdue · Due Thu 15 Oct",
+    );
+    expect(dueLabel("2026-10-30", "2026-10-22")).toBe("Due Fri 30 Oct");
   });
 });
 

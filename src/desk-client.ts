@@ -53,8 +53,14 @@ export function parisMoment(value: string): string {
         minute: "2-digit",
       }).format(date);
 }
-export function dueLabel(day: string | null): string {
+export function parisToday(now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Paris" }).format(
+    now,
+  );
+}
+export function dueLabel(day: string | null, today?: string): string {
   if (!day) return "No due date";
+  if (today && day < today) return "Overdue · " + dueLabel(day);
   const date = new Date(day + "T12:00:00Z");
   return Number.isNaN(date.getTime())
     ? day
@@ -90,8 +96,12 @@ const outreachStatusLabels: Record<OutreachItem["status"], string> = {
   pending: "Waiting for your yes",
   approved: "Approved",
   skipped: "Skipped",
-  gmail_draft_created: "Gmail draft created. Open Gmail and send it yourself.",
-  expired: "Expired. Tend will propose a fresh draft if it is still needed.",
+  gmail_draft_created: "Gmail draft created",
+  expired: "Expired",
+};
+const outreachStatusDetail: Partial<Record<OutreachItem["status"], string>> = {
+  gmail_draft_created: "Open Gmail and press Send yourself.",
+  expired: "Tend proposes a fresh draft if it is still needed.",
 };
 const safeLink = (value: string | null | undefined): string | null => {
   if (!value) return null;
@@ -218,7 +228,11 @@ export function mountDesk(ctx: DeskContext): DeskController {
           : (statusLabels[item.status] ?? item.status),
         pending ? "kicker waiting" : "badge",
       ),
-      el("span", dueLabel(item.due_date ?? item.suggested_due), "due"),
+      el(
+        "span",
+        dueLabel(item.due_date ?? item.suggested_due, parisToday()),
+        "due",
+      ),
     );
     node.append(
       top,
@@ -415,7 +429,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       open.append(
         el(
           "li",
-          `${item.direction === "owed_by_me" ? "You" : item.contact_name}: ${item.action}, ${dueLabel(item.due_date ?? item.suggested_due).toLowerCase()}${item.status === "pending" ? " (waiting for your yes)" : ""}`,
+          `${item.direction === "owed_by_me" ? "You" : item.contact_name}: ${item.action}, ${dueLabel(item.due_date ?? item.suggested_due, parisToday()).replace(/\b(Due|Overdue)\b/g, (w) => w.toLowerCase())}${item.status === "pending" ? " (waiting for your yes)" : ""}`,
         ),
       );
     const prepare = button(`Prepare for ${meeting.contact_name}`, "dark", () =>
@@ -498,13 +512,13 @@ export function mountDesk(ctx: DeskContext): DeskController {
               "meta",
             ),
           );
-        node.append(
-          el(
-            "p",
-            `Approval window ends ${parisMoment(item.expires_at)}`,
-            "meta",
-          ),
-        );
+        const detail =
+          item.status === "pending"
+            ? `Approval window ends ${parisMoment(item.expires_at)}`
+            : item.status === "approved" && item.channel !== "email"
+              ? "Copy the text and send it yourself."
+              : outreachStatusDetail[item.status];
+        if (detail) node.append(el("p", detail, "meta"));
         const row = el("div", undefined, "actions");
         if (outreachActionable(item, now)) {
           row.append(
