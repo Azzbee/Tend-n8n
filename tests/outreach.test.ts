@@ -521,6 +521,14 @@ describe("drafts never send without an exact approval", () => {
       ).accepted,
     ).toBe(true);
   });
+  it("keeps every template free of promises the owner did not make", () => {
+    const { book, load } = world();
+    for (const item of book.plan(load()).created)
+      if (!/\[[^\]]*\]/.test(item.draft_text))
+        expect(item.draft_text.replace(/"[^"]*"/g, "")).not.toMatch(
+          /\b(will|shall)\b|'ll\b/i,
+        );
+  });
   it("tells the model who wrote each cited message and what the draft is for", () => {
     const { book, load } = world();
     const created = book.plan(load()).created;

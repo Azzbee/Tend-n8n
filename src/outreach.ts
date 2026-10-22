@@ -159,7 +159,7 @@ export function fallbackDraft(
     return `${hi} a quick update on "${quote}" [Add your actual progress before approving]`;
   if (reason === "after_meeting")
     return `${hi} thanks for the time at "${quote}". Is there anything you need from me as a next step?`;
-  return `${hi} thanks for your message, I have seen it and will reply properly.`;
+  return `${hi} thanks for your message, I have seen it.`;
 }
 export function planOutreach(
   snapshot: OutreachSnapshot,
