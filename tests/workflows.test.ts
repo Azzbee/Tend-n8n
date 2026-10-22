@@ -128,7 +128,11 @@ describe("import and node boundaries", () => {
               execution: {
                 id: 4242,
                 lastNodeExecuted: "Validate quoted model result",
-                error: { message: "bad\n  quote " + "x".repeat(500) },
+                error: {
+                  message:
+                    "Fictional failure for mira@example.invalid see https://leak.example/item?id=g1 BODY:I will send the demo " +
+                    "x".repeat(300),
+                },
                 data: { secret: "PRIVATE BODY TEXT" },
               },
             },
@@ -143,9 +147,9 @@ describe("import and node boundaries", () => {
       "node",
       "workflow",
     ]);
-    expect(j.message!.length).toBeLessThanOrEqual(200);
-    expect(j.message!.startsWith("bad quote")).toBe(true);
-    expect(JSON.stringify(j)).not.toContain("PRIVATE BODY TEXT");
+    expect(j.message).toBe("unlisted error (text withheld)");
+    for (const leak of ["PRIVATE BODY TEXT", "mira@", "leak.example", "BODY:"])
+      expect(JSON.stringify(j)).not.toContain(leak);
     expect(j.execution_id).toBe("4242");
   });
   it("adapters embed a callable unpublished subworkflow", () => {

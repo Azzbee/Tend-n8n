@@ -10,7 +10,7 @@
       "typeVersion": 1,
       "position": [0, 0],
       "parameters": {},
-      "notes": "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow name, failing node and a 200-character message."
+      "notes": "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow and node names, the execution ID and a literal guard message or HTTP status; other error text is withheld."
     },
     {
       "id": "redact-failure-to-names-only",
@@ -19,7 +19,7 @@
       "typeVersion": 2,
       "position": [260, 0],
       "parameters": {
-        "jsCode": "const e=$input.first().json;const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const ex=e.execution||{};const node=ex.lastNodeExecuted||(ex.error&&ex.error.node&&ex.error.node.name)||'unknown node';const raw=ex.error&&typeof ex.error.message==='string'?ex.error.message:'no message';return [{json:{workflow:wf.slice(0,120),node:String(node).slice(0,120),message:raw.replace(/\\s+/g,' ').slice(0,200),execution_id:String(ex.id??'').slice(0,40)}}];"
+        "jsCode": "const allowed=new Set([\"fabricated date\",\"fabricated quote/action\",\"fictional fixture envelope required\",\"fictional owner/source required\",\"invalid model fields\",\"three-attempt recovery failed\",\"unauthorized before retrieval\",\"unsupported command\"]);const e=$input.first().json;const ex=e.execution||{};const er=ex.error||{};const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const node=ex.lastNodeExecuted||(er.node&&er.node.name)||'unknown node';const raw=typeof er.message==='string'?er.message:'';const http=/^[1-5]\\d\\d$/.test(String(er.httpCode??''))?String(er.httpCode):(raw.match(/status code ([1-5]\\d\\d)\\b/)||[])[1];const message=allowed.has(raw)?raw:http?'HTTP '+http:\"unlisted error (text withheld)\";return [{json:{workflow:String(wf).slice(0,120),node:String(node).slice(0,120),message,execution_id:String(ex.id??'').slice(0,40)}}];"
       }
     },
     {
@@ -48,7 +48,7 @@
       "typeVersion": 1,
       "position": [0, -340],
       "parameters": {
-        "content": "## TendReview21\n**Purpose:** Error workflow for fictional workflows 01-09.\n\n**Inputs:** n8n Error Trigger (production runs only; publish 21 after import).\n\n**Outputs:** POST /api/failure-log on the fixture API.\n\n**Privacy:** Keeps only workflow name, failing node, a 200-character message and execution ID. No item data.",
+        "content": "## TendReview21\n**Purpose:** Error workflow for fictional workflows 01-09.\n\n**Inputs:** n8n Error Trigger (production runs only; publish 21 after import).\n\n**Outputs:** POST /api/failure-log on the fixture API.\n\n**Privacy:** Keeps workflow and node names, the execution ID, and a literal guard message or HTTP status; any other error text is withheld. No item data.",
         "width": 520,
         "height": 300,
         "color": 7

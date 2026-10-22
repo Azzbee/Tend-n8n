@@ -1626,7 +1626,13 @@ const errorHandler = workflow(
     node("Error Trigger", "errorTrigger", {}, 0, 0, 1),
     code(
       "Redact failure to names only",
-      "const e=$input.first().json;const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const ex=e.execution||{};const node=ex.lastNodeExecuted||(ex.error&&ex.error.node&&ex.error.node.name)||'unknown node';const raw=ex.error&&typeof ex.error.message==='string'?ex.error.message:'no message';return [{json:{workflow:wf.slice(0,120),node:String(node).slice(0,120),message:raw.replace(/\\s+/g,' ').slice(0,200),execution_id:String(ex.id??'').slice(0,40)}}];",
+      redactorCode(
+        guardMessages(
+          workflows
+            .filter((w) => /^TendReview0[1-9]$/.test(w.id))
+            .flatMap((w) => workflowCodeSources(w)),
+        ),
+      ),
       260,
     ),
     http(
@@ -1638,7 +1644,7 @@ const errorHandler = workflow(
   ],
 );
 errorHandler.nodes[0]!.notes =
-  "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow name, failing node and a 200-character message.";
+  "Set as the Error workflow of fictional workflows 01-09. Publish this workflow after import: n8n only runs published error workflows, and only for production runs. Stores only workflow and node names, the execution ID and a literal guard message or HTTP status; other error text is withheld.";
 for (const w of workflows)
   if (/^TendReview0[1-9]$/.test(w.id))
     w.settings.errorWorkflow = "TendReview21";
@@ -1811,7 +1817,7 @@ const canvasNotes: Record<
       "n8n Error Trigger (production runs only; publish 21 after import).",
     outputs: "POST /api/failure-log on the fixture API.",
     privacy:
-      "Keeps only workflow name, failing node, a 200-character message and execution ID. No item data.",
+      "Keeps workflow and node names, the execution ID, and a literal guard message or HTTP status; any other error text is withheld. No item data.",
   },
 };
 function withCanvasNote<
