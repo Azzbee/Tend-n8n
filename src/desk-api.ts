@@ -3,6 +3,7 @@ import type { LiveStore } from "./live-store.ts";
 import {
   buildDeskRuns,
   buildDeskSnapshot,
+  outreachSending,
   parseOutreachList,
   type DeskFailure,
   type DeskOutreachBackend,
@@ -114,9 +115,14 @@ export async function handleDeskRoute(input: {
   if (method === "GET" && path === "/private/api/outreach") {
     if (!options.outreach)
       throw new DeskRequestError(404, "Outreach is not enabled");
+    const listed = await options.outreach.list();
+    const sending = outreachSending(listed);
     return {
       status: 200,
-      body: { items: parseOutreachList(await options.outreach.list()) },
+      body: {
+        items: parseOutreachList(listed),
+        ...(sending === null ? {} : { sending_enabled: sending }),
+      },
     };
   }
   if (method !== "POST" || !data)

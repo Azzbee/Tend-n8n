@@ -110,7 +110,7 @@ export interface OutreachItem {
 }
 // Implemented by the outreach service (improve/outreach) and injected by live-api.ts.
 export interface DeskOutreachBackend {
-  list(): Promise<{ items: OutreachItem[] }>;
+  list(): Promise<{ items: OutreachItem[]; sending_enabled?: boolean }>;
   approve(id: string): Promise<unknown>;
   edit(id: string, text: string): Promise<unknown>;
   skip(id: string): Promise<unknown>;
@@ -447,6 +447,12 @@ export function parseOutreachList(value: unknown): OutreachItem[] {
     });
   }
   return items;
+}
+// true or false when the outreach service reports its kill switch; null when it does not say.
+export function outreachSending(value: unknown): boolean | null {
+  return plain(value) && typeof value.sending_enabled === "boolean"
+    ? value.sending_enabled
+    : null;
 }
 export const outreachReasonLabels: Record<OutreachItem["reason"], string> = {
   overdue_owed_to_you: "Nudge: something owed to you is overdue",
