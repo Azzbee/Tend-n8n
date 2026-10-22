@@ -109,6 +109,16 @@ export function replyPresentation(reply: Reply): {
     evidence,
   };
 }
+export function preparedHeading(
+  kind: "briefing" | "draft",
+  content: { draft: string | null; evidence: Evidence[] },
+): string {
+  if (content.draft) return "HELD DRAFT · REVIEW BEFORE USE";
+  if (kind === "briefing") return "CONTACT BRIEFING";
+  return content.evidence.length
+    ? "NO DRAFT WRITTEN · SOURCE EXCERPTS ONLY"
+    : "NO DRAFT WRITTEN";
+}
 export function historyQuery(
   selector: string,
   filters: HistoryFilters,
@@ -290,6 +300,7 @@ export function mountPrivateWorkspace(): void {
   let contacts: Contact[] = [];
   let records: NormalizedRecord[] = [];
   let view: PrivateViewResponse | null = null;
+  let viewKind: "briefing" | "draft" = "briefing";
   let viewExpiry: ReturnType<typeof setTimeout> | undefined;
   let revision = 0;
   let contactsRevision = 0;
@@ -841,10 +852,7 @@ export function mountPrivateWorkspace(): void {
     get<HTMLButtonElement>("copy-draft").disabled = false;
     const content = replyPresentation(value.reply);
     preparedNode.hidden = false;
-    setText(
-      "prepared-label",
-      content.draft ? "HELD DRAFT · REVIEW BEFORE USE" : "CONTACT BRIEFING",
-    );
+    setText("prepared-label", preparedHeading(viewKind, content));
     setText(
       "prepared-status",
       `Freshness checked ${parisTime(value.checked_at)}`,
@@ -891,6 +899,7 @@ export function mountPrivateWorkspace(): void {
       if (current !== revision || selected?.contact_id !== selector || !session)
         return;
       status(null);
+      viewKind = kind;
       renderView(value);
     } catch (error) {
       report(error);
@@ -1083,6 +1092,10 @@ export function mountPrivateWorkspace(): void {
         "progress",
       );
       if (!session) return;
+      setText(
+        "progress-checked",
+        `Saved progress checked ${parisTime(new Date().toISOString())}.`,
+      );
       const plain = (v: unknown): v is Record<string, unknown> =>
         typeof v === "object" && v !== null && !Array.isArray(v);
       const daily = result.daily;
