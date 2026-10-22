@@ -23,7 +23,6 @@ export const telegramLiveGuardCode = telegramGuardCode
     "status|today|prep|draft|confirm|done|cancel",
     "status|today|contacts|prep|draft|confirm|done|cancel",
   )
-  .replace("|outreach|approve|edit|skip", "")
   .replace("demo-owner", "CONFIGURE_LIVE_PRINCIPAL_ID")
   .replace("demo-user", "live-owner")
   .replace("demo-private", "live-private")
@@ -98,7 +97,6 @@ export function configuredLiveGuard(
     .replaceAll("CONFIGURE_LIVE_CHANNEL_ID", channelId);
 }
 export const telegramLiveReplyCode = telegramReplyCode
-  .replace(", /outreach, /approve ID CODE, /edit ID text, /skip ID.", ".")
   .replace("['Course demo • fictional data']", "['Tend • private assistant']")
   .replace(
     "Commands: /status, /today, /prep F17,",

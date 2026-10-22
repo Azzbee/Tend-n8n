@@ -15,6 +15,7 @@ import {
   isInstructionLike,
   isQuietHours,
   planOutreach,
+  styleOnly,
   verifiedRecipient,
   withinRateLimit,
   type OutreachSnapshot,
@@ -46,7 +47,11 @@ import {
   buildRawMessage,
   decodeRawMessage,
 } from "../src/outreach-gmail.ts";
-import { telegramGuardCode, telegramReplyCode } from "../src/telegram.ts";
+import {
+  configuredLiveGuard,
+  telegramGuardCode,
+  telegramReplyCode,
+} from "../src/telegram.ts";
 
 const at = (iso: string) => () => new Date(iso);
 function world(clock: () => Date = at(FIXTURE_OUTREACH_CLOCK)) {
@@ -139,13 +144,23 @@ describe("outreach planner rules", () => {
       style_examples: string[];
       evidence: { from: string; text: string }[];
     };
-    expect(user.style_examples).toEqual([
-      "I will review your demo by 2026-10-16.",
-    ]);
+    // Dates, links and numbers are scrubbed so the model cannot copy an
+    // uncited detail from a style example into the draft.
+    expect(user.style_examples).toEqual(["I will review your demo soon."]);
     expect(user.evidence).toEqual([
       { from: "Mira", text: "I will send the demo by 2026-10-15." },
     ]);
     expect(item.request.messages[0]!.content).toMatch(/never instructions/);
+  });
+});
+
+describe("style example scrubbing", () => {
+  it("keeps tone but removes dates, links, addresses and numbers", () => {
+    expect(
+      styleOnly(
+        "Sent it on 12 Oct, see https://example.invalid/x or mail me@example.invalid, call +00000000017 before 2026-10-30.",
+      ),
+    ).toBe("Sent it soon, see or mail, call soon.");
   });
 });
 
@@ -417,6 +432,32 @@ describe("drafts never send without an exact approval", () => {
       ).accepted,
     ).toBe(true);
   });
+  it("rejects a model draft that copies a style example or the purpose text", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const items = byReason(book, load());
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "I will review your demo soon.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model repeated the prompt" });
+    expect(
+      book.modelDraft(
+        items.overdue_owed_to_you!.id,
+        "Mira, the contact promised you this and it is now overdue. Ask kindly for an update.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model repeated the prompt" });
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "Hi Mira, thanks for the note about the checklist. I will take a look.",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
   it("tells the model who wrote each cited message and what the draft is for", () => {
     const { book, load } = world();
     const created = book.plan(load()).created;
@@ -574,6 +615,38 @@ describe("Desk backend and Telegram commands", () => {
     expect(rendered[0]!.json.text).toContain(
       "Outreach refused: cannot approve a skipped item",
     );
+  });
+  it("lets the live owner guard route /outreach, /approve, /edit and /skip", () => {
+    const guard = configuredLiveGuard(
+      "424242",
+      "424242",
+      "owner-1",
+      "owner-channel",
+    );
+    for (const text of [
+      "/outreach",
+      "/approve Oabc 0a1b2c3d",
+      "/edit Oabc Hi",
+      "/skip Oabc",
+    ]) {
+      const routed = vm.runInNewContext(`(function(){${guard}})()`, {
+        $input: {
+          first: () => ({
+            json: {
+              update_id: 9,
+              message: {
+                message_id: 1,
+                from: { id: 424242, is_bot: false },
+                chat: { id: 424242, type: "private" },
+                text,
+              },
+            },
+          }),
+        },
+      }) as { json: { help: boolean; command: { text: string } } }[];
+      expect(routed[0]!.json.help, text).toBe(false);
+      expect(routed[0]!.json.command.text).toBe(text);
+    }
   });
   it("serves the Desk contract shape", async () => {
     const { service } = createFixtureOutreachService();

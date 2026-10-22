@@ -11,6 +11,7 @@ import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { exampleLivePolicy } from "../src/live-policy.ts";
 import { migrateLiveStore } from "../src/migrate-live-store.ts";
 import { postgresTestRuntime } from "./postgres-test-runtime.ts";
+import { createPrivateOutreach } from "../src/outreach-service.ts";
 import { normalizeUnipileMessage } from "../src/messaging-records.ts";
 const principal = {
     owner_id: "parity-owner",
@@ -160,6 +161,35 @@ describe("canonical PostgreSQL live parity", () => {
     expect(await pg.sourceStatus(principal.owner_id)).toEqual(
       sqlite.sourceStatus(principal.owner_id),
     );
+  });
+  it("routes the private bot's outreach commands through the outreach book", async () => {
+    const bot = await PostgresStore.open({
+      connectionString: runtime.connectionString,
+      principal,
+      clock,
+    });
+    try {
+      createPrivateOutreach(bot, principal.owner_id, {
+        TEND_OUTREACH_DB: ":memory:",
+        OUTREACH_ENABLED: "false",
+      });
+      const say = async (text: string, update: number) =>
+        (
+          await bot.telegramCommand(
+            { ...principal, chat_type: "private", text },
+            "outreach-channel",
+            update,
+          )
+        ).reply as Record<string, unknown>;
+      expect(Array.isArray((await say("/outreach", 1)).outreach)).toBe(true);
+      expect(await say("/approve Onot-an-id 00000000", 2)).toMatchObject({
+        outbound_sent: false,
+        outreach_error: "unknown outreach item",
+      });
+      expect((await say("/status", 3)).counts).toBeDefined();
+    } finally {
+      await bot.close();
+    }
   });
   it("serializes concurrent duplicate commands across independent connections", async () => {
     const second = await PostgresStore.open({

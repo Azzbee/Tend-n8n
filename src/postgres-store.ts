@@ -97,11 +97,21 @@ const obligationColumns = [
   "due_date",
   "evidence_valid",
 ] as const;
+export type CommandExtension = (
+  auth: AuthCommand,
+  scoped: PostgresStore,
+) => Promise<Reply | null>;
 export class PostgresStore implements LiveStore {
   private readonly pool: Pool;
   private readonly principal: Principal;
   private readonly clock: () => Date;
   private readonly client: PoolClient | null;
+  // Optional handler for commands owned elsewhere (outreach). It receives the
+  // transaction-scoped store so its reads stay inside the same transaction.
+  private extension: CommandExtension | null = null;
+  setCommandExtension(extension: CommandExtension): void {
+    this.extension = extension;
+  }
   private constructor(
     pool: Pool,
     principal: Principal,
@@ -197,7 +207,10 @@ export class PostgresStore implements LiveStore {
         [this.principal.owner_id],
       );
       const result = await operation(
-        new PostgresStore(this.pool, this.principal, this.clock, client),
+        Object.assign(
+          new PostgresStore(this.pool, this.principal, this.clock, client),
+          { extension: this.extension },
+        ),
       );
       await client.query("COMMIT");
       return result;
@@ -1863,6 +1876,8 @@ export class PostgresStore implements LiveStore {
   async command(auth: AuthCommand): Promise<Reply> {
     this.authorize(auth);
     return this.run(async (s) => {
+      const extended = await s.extension?.(auth, s);
+      if (extended) return extended;
       const tokens = auth.text.trim().split(/\s+/),
         [cmd, id, date, ...extra] = tokens,
         owner = auth.owner_id,

@@ -566,6 +566,16 @@ export function mountDesk(ctx: DeskContext): DeskController {
                 ? emailApproval(sending).detail
                 : outreachStatusDetail[item.status];
         if (detail) node.append(el("p", detail, "meta"));
+        if (item.status === "approved")
+          node.append(
+            el(
+              "p",
+              Date.parse(item.expires_at) > now.getTime()
+                ? `Approval ends ${parisMoment(item.expires_at)}`
+                : "Approval window has ended",
+              "meta",
+            ),
+          );
         const row = el("div", undefined, "actions");
         if (outreachActionable(item, now)) {
           row.append(
