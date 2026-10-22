@@ -290,7 +290,7 @@ function gmailDrafts(id: string, name: string, lane: Lane): OutreachWorkflow {
       retryOnFail: false,
       notes:
         lane === "private"
-          ? "Creates a draft in the owner's Gmail; the owner presses Send. Needs a Gmail credential with the gmail.compose scope only, re-consented by the owner. Never change this URL to a send endpoint."
+          ? 'Creates a draft in the owner\'s Gmail; the owner presses Send. Bind a Gmail OAuth2 credential with "Define custom scopes" on and Enabled Scopes set to exactly https://www.googleapis.com/auth/gmail.compose; the default scopes include full mailbox access. Never change this URL to a send endpoint.'
           : "Mock Gmail on the fixture API: accepts drafts.create for example.invalid recipients only.",
       notesInFlow: true,
       ...(lane === "private" ? { credentials: gmailComposeCredential } : {}),
