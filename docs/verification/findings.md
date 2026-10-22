@@ -58,7 +58,7 @@ Expected (brief section 5): each workflow with its last-run status.
 Actual: every one of the 21 rows reads "No run data on this device". `createLiveServer` (`src/live-api.ts:238`) passes `failureLog` but no `workflowRuns` to `createPrivateWebHandler`, so the hook tend-desk documented is never wired. The fictional dev server shows statuses only because it fakes them.
 Evidence: `screens/1440-how-it-runs.jpg`.
 
-Decision (tend-lead, 11:40): deliberate deferral. The private API has no read path to n8n's database, so "No run data on this device" is the honest state rather than invented statuses. Brief section 5's "last-run status" stays unmet until such a read path exists; owner tend-lead.
+Decision (tend-lead, about 11:12): deliberate deferral. The private API has no read path to n8n's database, so "No run data on this device" is the honest state rather than invented statuses. Brief section 5's "last-run status" stays unmet until such a read path exists; owner tend-lead.
 
 ## F5: How it runs omits 22-26; private failure log labelled as 21 (low, tend-desk)
 
@@ -74,13 +74,13 @@ Evidence: `screens/1440-outreach-approved-banner.jpg`.
 
 `src/integration.ts` imports 26 workflows and publishes 21 but never executes 23 or 24, never forces a failure into 21 and never checks the redacted log. Brief section 7 lists all three as required integration steps. I ran them by hand (O1, O4, E1 in the feature map); E1 is how F3 was found.
 
-Update 11:40: `src/integration.ts` now executes 23 and 24 and forces a failure into 21 (lines ~888-1020). My re-run was stopped at tend-lead's request (Docker load before the 13:00 demo); this closes from tend-lead's own recorded integration evidence, or my re-run after 14:00.
+Update 11:13: `src/integration.ts` now executes 23 and 24 and forces a failure into 21 (lines ~888-1020). My re-run was stopped at tend-lead's request (Docker load before the 13:00 demo); this closes from tend-lead's own recorded integration evidence, or my re-run after 14:00.
 
 ## F8: private Telegram bot cannot route outreach commands (medium, tend-lead)
 
 From `docs/plans/outreach-status.md` "Pending 1", confirmed in code: `PostgresStore.command` has no `commandExtension`, so on the private lane /outreach /approve /edit /skip never reach the outreach book. Brief section 6 requires approval from Telegram as well as the Desk. Fictional lane works (O5).
 
-Update 12:00: fixed on improve/lead 14b46f8, checked in a clean detached checkout (`.scratch/verification/lead-checkout`): `createPrivateOutreach` registers a transaction-scoped `setCommandExtension` on `PostgresStore`; the live guard is derived from the fictional one, which forwards outreach|approve|edit|skip; 53 Docker-free outreach and Telegram tests pass. Not yet run by the verifier: `tests/live-store-parity.test.ts` "routes the private bot's outreach commands..." (Docker PostgreSQL, held at tend-lead's request until after the demo). The deployed bot changes only when workflow 14 is redeployed after 14:00 (tend-lead).
+Update 11:17: fixed on improve/lead 14b46f8, checked in a clean detached checkout (`.scratch/verification/lead-checkout`): `createPrivateOutreach` registers a transaction-scoped `setCommandExtension` on `PostgresStore`; the live guard is derived from the fictional one, which forwards outreach|approve|edit|skip; 53 Docker-free outreach and Telegram tests pass. Not yet run by the verifier: `tests/live-store-parity.test.ts` "routes the private bot's outreach commands..." (Docker PostgreSQL, held at tend-lead's request until after the demo). The deployed bot changes only when workflow 14 is redeployed after 14:00 (tend-lead).
 
 ## F9: Outreach queue squeezed into the right column at 1440 px (low, tend-desk)
 
@@ -96,9 +96,9 @@ Steps: three live planner runs with real qwen3:0.6b (workflow 23 on fixture 1885
 Actual: 12 of 12 model drafts after the F1 fix were rejected (in the first run, before the fix, 2 echoes were accepted, see F1): one echo, eleven `uncited detail: 2026-10-16`. That date is in the only style example, the owner's sent message g2 ("I will review your demo by 2026-10-16."), and the model copies it into drafts whose evidence does not contain it. The fallback is safe (templates kept), but the "draft in my style" path never produces a draft the owner sees. Possible directions: strip dates, numbers and links from style examples before prompting, or pass only style examples without such details.
 Evidence: `cmd/ledger-after-24.json`, `cmd/n8n-23-18861.log`, `cmd/outreach-demo-run.txt`.
 
-Re-check 11:55 on bf2e826 (two fresh demo servers, 18873 and 18875, real qwen3:0.6b): the uncited-date rejections are gone (style examples are scrubbed, dates become "soon"). 8 of 8 model drafts were still rejected: 6 "model repeated the prompt" (the model copied the scrubbed example or the purpose text, now caught by bf2e826), 2 "model repeated the cited message". Templates kept every time, nothing unsafe reached the owner, 156 outreach/Telegram/Desk tests pass. What remains is that qwen3:0.6b does not write an original message here; tend-outreach reports that to Adam as a model-size decision rather than loosening checks. `cmd/outreach-demo-f11.txt`.
+Re-check 11:14 on bf2e826 (two fresh demo servers, 18873 and 18875, real qwen3:0.6b): the uncited-date rejections are gone (style examples are scrubbed, dates become "soon"). 8 of 8 model drafts were still rejected: 6 "model repeated the prompt" (the model copied the scrubbed example or the purpose text, now caught by bf2e826), 2 "model repeated the cited message". Templates kept every time, nothing unsafe reached the owner, 156 outreach/Telegram/Desk tests pass. What remains is that qwen3:0.6b does not write an original message here; tend-outreach reports that to Adam as a model-size decision rather than loosening checks. `cmd/outreach-demo-f11.txt`.
 
-## Re-verification (22 Oct, about 11:10-11:20, merged improve/lead 03524f6)
+## Re-verification (22 Oct, about 11:00-11:08, merged improve/lead 03524f6)
 
 - F1: fresh fixture API on 18861, 01-05 and 07 re-run, `/confirm`, then 23 with real qwen3:0.6b. All four drafts are messages from Adam; the four model drafts were rejected (uncited date) and templates kept. The echo rule itself is covered by `tests/outreach.test.ts` ("model repeated the cited message"), not observed live in this run. Observed live by the verifier at 11:30 with `src/outreach-demo.ts` (d1faf1b, ports 18871/18872): `O0029debd0d: template kept (model repeated the cited message)`. `cmd/outreach-demo-run.txt`. `cmd/outreach-after-23-18861.json`.
 - F2: `/approve` on a skipped item → `outreach_error: "cannot approve a skipped item"`; `/edit` with a URL → the fixed uncited-detail sentence; workflow 10 renders `Outreach refused: <reason>`. `cmd/telegram-refusals-18861.txt`.
