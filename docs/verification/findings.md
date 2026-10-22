@@ -1,6 +1,15 @@
 # Verification findings (branch improve/verify)
 
-Summary: _written at the end of the run._
+## Summary (22 Oct 2026, 11:20 Paris, merged improve/lead 14b46f8 + improve/outreach bf2e826)
+
+39 feature-map rows: 32 green, 1 not applicable (T3: /setup is a web page, not a bot command), 6 green where it could run with the rest deferred to a named owner (E2, B1, O5, O8, H1, C2). Every row was run against fictional data on spare ports and an isolated n8n; nothing touched the live n8n, the private API on 18768 or a real account.
+
+- Green, seen working: adapters 01-09 in an isolated n8n (same image as live) and in `bun run integration` (18/18 at 10:40); Telegram commands on the fictional lane; private workspace unlock and lock (no private text left in the DOM, API 401); every Desk action (confirm, not a promise, mark done, outreach approve, edit, skip, withdraw, copy and deep link); the phone review at a real 390x844 viewport (headless Chromium) and the Desk at 1440 px in Chrome; contrast (0 elements below 4.5:1), visible focus, zero non-local requests; outreach planner 23 → Telegram /approve → workflow 24 → mock Gmail draft with ledger; rate limit and quiet hours; error handler 21 on a real production failure; a canvas note on all 26 exports.
+- Eleven findings. Fixed and re-verified: F1 (high: model drafts that were the contact's own quote), F2, F3, F5, F6, F9, F10. Mitigated: F11 (safe, but qwen3:0.6b never produces a usable draft; a model-size decision for Adam). Deferred by design: F4 (no last-run status; the private API cannot read n8n's database). Fix landed, closure pending tend-lead: F7 (integration now runs 23/24 and a forced failure; closes on tend-lead's integration result) and F8 (private bot outreach routing, 14b46f8; the Postgres parity test and the workflow 14 redeploy wait until after 14:00).
+- Deferred to tend-lead after 14:00 (demo guard): runtime of workflows 20, 22, 25 and 26; the n8n editor view of the new workflows (needs an owner login the verifier must not create); Google re-consent for real Gmail drafts is Adam's step.
+- Known limits of this verification: Chrome on this machine would not resize below 1440 px, so 390 px used a Playwright container; the extension's first navigation to a private page is treated as cross-site (403) and needed a same-origin reload; two previews on 127.0.0.1 share cookies, so parallel agents log each other out.
+
+Decisions for Adam: accept template-only outreach drafts or choose a larger local model (F11); accept "No run data on this device" on How it runs or fund a read path to n8n's executions (F4).
 
 Environment for every repro: fictional data only. Fixture API `TEND_DEMO_PORT=18851 TEND_DEMO_DB=.scratch/verification/demo.sqlite TEND_OUTREACH_DB=.scratch/verification/outreach.sqlite node --experimental-strip-types src/server.ts`; isolated n8n container `tend-verify-n8n` (same image digest as live, 127.0.0.1:18855) with workflows 01-09, 21, 23, 24 imported after `sed 's/:18767/:18851/g'`; private composition harness `.scratch/verification/private-harness.ts` (real `createLiveServer` + `createPrivateOutreach` over `createDeskFixtureStore`). Evidence paths are under `.scratch/verification/`.
 
