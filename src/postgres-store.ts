@@ -423,7 +423,7 @@ export class PostgresStore implements LiveStore {
   }
   private async invalidate(owner: string, key: string): Promise<void> {
     await this.q(
-      "UPDATE live_obligations SET status=CASE WHEN status IN ('confirmed','done','cancelled') THEN status ELSE 'invalidated' END,evidence_valid=false,quote='',action='',suggested_due=NULL,due_date=CASE WHEN status='confirmed' THEN due_date ELSE NULL END WHERE owner_id=$1 AND record_key=$2",
+      "UPDATE live_obligations SET status=CASE WHEN status IN ('confirmed','done','cancelled','dismissed') THEN status ELSE 'invalidated' END,evidence_valid=false,quote='',action='',suggested_due=NULL,due_date=CASE WHEN status='confirmed' THEN due_date ELSE NULL END WHERE owner_id=$1 AND record_key=$2",
       [owner, key],
     );
     await this.scrub(owner);
@@ -1870,7 +1870,7 @@ export class PostgresStore implements LiveStore {
       const expected =
         cmd === "/confirm"
           ? 3
-          : ["/draft", "/done", "/cancel"].includes(cmd ?? "")
+          : ["/draft", "/done", "/cancel", "/dismiss"].includes(cmd ?? "")
             ? 2
             : 1;
       if (
@@ -2017,6 +2017,13 @@ export class PostgresStore implements LiveStore {
         if (c.status !== "pending" || !c.evidence_valid)
           throw new Error("invalid transition");
         const next = { ...c, status: "confirmed", due_date: date };
+        await s.put(next);
+        return { outbound_sent: false, ...next };
+      }
+      if (cmd === "/dismiss") {
+        if (c.status === "dismissed") return { outbound_sent: false, ...c };
+        if (c.status !== "pending") throw new Error("invalid transition");
+        const next = { ...c, status: "dismissed" };
         await s.put(next);
         return { outbound_sent: false, ...next };
       }
