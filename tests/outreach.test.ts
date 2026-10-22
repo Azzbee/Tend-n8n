@@ -596,6 +596,18 @@ describe("drafts never send without an exact approval", () => {
       load(),
     );
     expect(good.accepted).toBe(true);
+    // n8n retries /draft: a repeat leaves the saved draft and does not throw.
+    expect(
+      book.modelDraft(
+        item.id,
+        "Hi Mira, how is the demo you planned for 2026-10-15 coming along?",
+        load(),
+      ),
+    ).toMatchObject({
+      accepted: false,
+      problem: "draft is no longer replaceable",
+      item: { draft_text: good.item.draft_text },
+    });
     book.edit(item.id, "Hi Mira, any news on the demo?", load());
     expect(book.modelDraft(item.id, "Hi Mira.", load()).accepted).toBe(false);
     expect(draftProblem("Hi Mira.", [])).toBeNull();

@@ -105,7 +105,10 @@
         }
       },
       "notes": "Bind the private Header Auth credential. No secret is included in this inactive export.",
-      "notesInFlow": true
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "id": "canvas-note",

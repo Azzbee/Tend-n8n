@@ -86,7 +86,10 @@
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
         "options": { "timeout": 10000 }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "id": "canvas-note",

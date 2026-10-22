@@ -63,7 +63,10 @@
         "body": "={{ JSON.stringify($json.request) }}",
         "options": { "timeout": 120000 }
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
     },
     {
       "id": "read-model-text",
@@ -89,7 +92,10 @@
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
         "options": { "timeout": 10000 }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "id": "owner-notice",

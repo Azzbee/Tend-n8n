@@ -192,6 +192,16 @@ const ownerNotice = `const n=$input.all().length;return [{json:{chat_id:'424242'
 const splitApproved = `const x=$input.first().json;if(!x||!Array.isArray(x.items))throw new Error('invalid approved list');return x.items.map(i=>({json:{id:i.id,approval_hash:i.approval_hash,message:{raw:i.message.raw}}}));`;
 const receipt = `const sent=$('One item per approved draft').all();return $input.all().map((it,i)=>{if(!it.json||typeof it.json.id!=='string')throw new Error('Gmail draft receipt missing');return {json:{id:sent[i].json.id,approval_hash:sent[i].json.approval_hash,draft_id:it.json.id}};});`;
 
+// Node retries only where a repeat cannot act twice: the model call is a
+// pure read, a second /draft returns "no longer replaceable", and a second
+// /gmail-draft is refused because the item already has its receipt. /plan
+// (heaviest read), /approved-email (hands items off) and drafts.create
+// (would make a second Gmail draft) stay single-try.
+const retrySafe = (n: OutreachNode, maxTries: number, waitMs: number): void => {
+  n.retryOnFail = true;
+  n.maxTries = maxTries;
+  n.waitBetweenTries = waitMs;
+};
 function planner(id: string, name: string, lane: Lane): OutreachWorkflow {
   const b = builder(id, name, lane);
   const starts = b.triggers(1, null);
@@ -231,6 +241,8 @@ function planner(id: string, name: string, lane: Lane): OutreachWorkflow {
     "/draft",
     "={{ JSON.stringify($json) }}",
   );
+  retrySafe(model, 2, 5000);
+  retrySafe(save, 3, 2000);
   b.chain(plan, split, model, read, save);
   if (lane === "fictional") {
     const notice = b.add("Owner notice", "code", { jsCode: ownerNotice }, 2);
@@ -303,6 +315,7 @@ function gmailDrafts(id: string, name: string, lane: Lane): OutreachWorkflow {
     "/gmail-draft",
     "={{ JSON.stringify($json) }}",
   );
+  retrySafe(record, 3, 2000);
   b.chain(list, split, create, read, record);
   return b.finish();
 }

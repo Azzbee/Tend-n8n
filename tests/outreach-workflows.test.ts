@@ -33,6 +33,25 @@ describe("outreach workflow exports", () => {
       expect(workflow.active).toBe(false);
     }
   });
+  it("retries only the model call, /draft and /gmail-draft, never /plan, /approved-email or drafts.create", () => {
+    const retried = (file: string) =>
+      find(file)
+        .nodes.filter((n) => n.retryOnFail)
+        .map((n) => [n.name, n.maxTries, n.waitBetweenTries]);
+    for (const file of [
+      "23-outreach-planner.json",
+      "25-private-outreach-planner.json",
+    ])
+      expect(retried(file)).toEqual([
+        ["Local AI draft (Ollama, cited evidence only)", 2, 5000],
+        ["Save draft if every detail is cited", 3, 2000],
+      ]);
+    for (const file of [
+      "24-outreach-gmail-drafts.json",
+      "26-private-outreach-gmail-drafts.json",
+    ])
+      expect(retried(file)).toEqual([["Record draft in send ledger", 3, 2000]]);
+  });
   it("keeps the private lane on the no-data policy with placeholder credentials", () => {
     for (const file of [
       "25-private-outreach-planner.json",

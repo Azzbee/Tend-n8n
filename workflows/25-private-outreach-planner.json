@@ -64,7 +64,10 @@
         "body": "={{ JSON.stringify($json.request) }}",
         "options": { "timeout": 120000 }
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
     },
     {
       "id": "read-model-text",
@@ -100,7 +103,10 @@
         }
       },
       "notes": "Bind the private Header Auth credential. No secret is included in this inactive export.",
-      "notesInFlow": true
+      "notesInFlow": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "id": "canvas-note",
