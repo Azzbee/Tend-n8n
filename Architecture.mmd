@@ -2,9 +2,17 @@
 %% Cut line: the dashed boundary between the fictional classroom lane (top, runs on demand,
 %% fixture API 18767, no accounts) and the private live lane (bottom, approved accounts,
 %% private API 18768, no execution data saved). Nothing crosses from private to classroom.
-flowchart LR
+%% Each message source has its own box: Gmail, Google Calendar, WhatsApp personal, WhatsApp Business, LinkedIn.
+flowchart TB
  subgraph Classroom[Classroom lane, fictional data, fixture API 18767]
-  F01[01-05 Fictional adapters, Manual trigger] -- fixture records --> F06[06 Normalize and store, sub-workflow]
+  subgraph CSRC[01 to 05 fictional source adapters, Manual trigger]
+   F01[01 Gmail]
+   F02[02 Google Calendar]
+   F03[03 WhatsApp personal]
+   F04[04 WhatsApp Business]
+   F05[05 LinkedIn]
+  end
+  CSRC -- fixture records --> F06[06 Normalize and store, sub-workflow]
   F06 -- validated record --> FDB[(Fixture SQLite)]
   FDB -- one fictional record --> F07[07 Extract commitments, LLM Chain + Ollama]
   F07 -- quoted candidate, pending --> FDB
@@ -13,7 +21,7 @@ flowchart LR
   F09[09 Retry fixture] -- synthetic 429 then 200 --> F09R[Recovery record]
   F23[23 Outreach planner] -- cited proposals --> FDB
   FDB -- approved email only --> F24[24 Mock Gmail drafts.create]
-  F01 -. failure: name, node, id .-> F21[21 Error handler]
+  CSRC -. failure: name, node, id .-> F21[21 Error handler]
   F21 -- redacted failure --> FDB
  end
 
@@ -21,16 +29,22 @@ flowchart LR
  Classroom -.-> CUT
 
  subgraph Private[Private lane, approved accounts, private API 18768, no execution data saved]
-  TG[14 Telegram trigger, owner only] -- owner command, /outreach /approve ID CODE --> API[Private API, owner and scope guards]
-  API -- formatted reply, no JSON --> TG
+  API[Private API, owner and scope guards]
   G11[11 Gmail read-only sync, Schedule] -- approved-window page --> G13[13 Normalize and store, sub-workflow]
   G12[12 Calendar read-only sync, Schedule] -- event page --> G13
   G13 -- normalized records --> API
-  W17[17-19 WhatsApp and LinkedIn pollers] -- bounded provider page --> API
+  subgraph PSRC[17 to 19 messaging readers, read-only, Manual trigger]
+   W17[17 WhatsApp personal, Unipile]
+   W19[19 WhatsApp Business, Unipile]
+   L18[18 LinkedIn messages]
+  end
+  PSRC -- one verified page per run, owner identity checked --> API
   API -- records, cursors, commitments --> PG[(PostgreSQL canonical store)]
   PG -- eligible authored spans only --> G15[15 Local AI extraction, LLM Chain + Ollama]
   G15 -- exact-quote candidate, pending --> API
   API -- cited evidence --> G16[16 Cited briefing or draft]
+  TG[14 Telegram trigger, owner only] -- owner command, /outreach /approve ID CODE --> API
+  API -- formatted reply, no JSON --> TG
   D20[20 Daily briefing, 09:00 Paris] -- one dated digest --> TG
   G25[25 Outreach planner, hourly] -- proposals with evidence --> API
   API -- exact approved draft --> G26[26 Gmail drafts.create, gmail.compose only]
