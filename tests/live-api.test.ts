@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { createLiveServer, rejectionReason } from "../src/live-api.ts";
+import {
+  createLiveServer,
+  incrementalPolicyOf,
+  rejectionReason,
+} from "../src/live-api.ts";
 import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { TendStore } from "../src/engine.ts";
 import type { LiveRecord } from "../src/google-records.ts";
-import { exampleLivePolicy } from "../src/live-policy.ts";
+import {
+  exampleLivePolicy,
+  gmailWindow,
+  type LivePolicy,
+} from "../src/live-policy.ts";
 import { request as httpRequest, type Server } from "node:http";
 const key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
 async function listen(server: Server): Promise<number> {
@@ -13,6 +21,37 @@ async function listen(server: Server): Promise<number> {
   return a.port;
 }
 describe("private live API", () => {
+  it("opens the recent Gmail lane when the policy also approves social history", () => {
+    const policy: LivePolicy = {
+      ...exampleLivePolicy,
+      history: { version: 1, mode: "all_available" },
+      social: {
+        window_days: 30,
+        history: { version: 1, mode: "all_available" },
+        accounts: [
+          {
+            source: "whatsapp_personal",
+            provider: "unipile",
+            account_id: "personal-account",
+            owner_identity: "123",
+            owner_verified: true,
+            api_base_url: "https://api1.unipile.com",
+          },
+        ],
+      },
+    };
+    const now = new Date("2026-10-22T10:45:00Z");
+    // Removing only history left social.history behind, which the policy rejects.
+    const naive = { ...policy };
+    delete naive.history;
+    expect(() => gmailWindow(naive, now)).toThrow(
+      "social history exceeds live policy scope",
+    );
+    const recent = incrementalPolicyOf(policy);
+    expect(gmailWindow(recent, now).start).toBe("2026-09-22T10:45:00.000Z");
+    expect(recent.social?.accounts).toEqual(policy.social!.accounts);
+    expect(policy.social!.history).toBeDefined();
+  });
   it("logs only the fixed guard text of a rejection, never data", () => {
     expect(rejectionReason(new Error("account mismatch"))).toBe(
       "account mismatch",

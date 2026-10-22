@@ -68,6 +68,18 @@ export interface LiveServerOptions {
     ) => Promise<{ status: number; body: unknown } | null>;
   };
 }
+// The recent (non-history) Gmail lane: without history scope, and without
+// social history either, which the policy only allows alongside history.
+export function incrementalPolicyOf(policy: LivePolicy): LivePolicy {
+  const recent: LivePolicy = { ...policy };
+  delete recent.history;
+  if (recent.social?.history) {
+    const social = { ...recent.social };
+    delete social.history;
+    recent.social = social;
+  }
+  return recent;
+}
 export function rejectionReason(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
   return /^[A-Za-z][A-Za-z _:,.()'/-]{0,119}$/.test(message)
@@ -163,8 +175,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
         ...(options.normalModel ? { normalModel: options.normalModel } : {}),
       })
     : null;
-  const incrementalPolicy = { ...policy };
-  delete incrementalPolicy.history;
+  const incrementalPolicy = incrementalPolicyOf(policy);
   const enforceRetention = async () => {
     const m = gmailWindow(policy, clock()),
       c = calendarHistoryWindow(policy, clock());
