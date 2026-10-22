@@ -4,19 +4,19 @@ Summary: _written at the end of the run._
 
 Environment for every repro: fictional data only. Fixture API `TEND_DEMO_PORT=18851 TEND_DEMO_DB=.scratch/verification/demo.sqlite TEND_OUTREACH_DB=.scratch/verification/outreach.sqlite node --experimental-strip-types src/server.ts`; isolated n8n container `tend-verify-n8n` (same image digest as live, 127.0.0.1:18855) with workflows 01-09, 21, 23, 24 imported after `sed 's/:18767/:18851/g'`; private composition harness `.scratch/verification/private-harness.ts` (real `createLiveServer` + `createPrivateOutreach` over `createDeskFixtureStore`). Evidence paths are under `.scratch/verification/`.
 
-| ID  | Severity | Owner                                       | Status                           | Title                                                                                 |
-| --- | -------- | ------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
-| F1  | high     | tend-outreach                               | fixed, re-verified               | Model draft that only repeats the contact's quote is accepted as the owner's message  |
-| F2  | low      | tend-outreach                               | fixed, re-verified               | Telegram refusals for /approve and /edit hide the rule reason                         |
-| F3  | medium   | tend-lead                                   | fixed, re-verified               | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped    |
-| F4  | medium   | tend-lead                                   | deferred (tend-lead, by design)  | How it runs shows no last-run status in the real private composition                  |
-| F5  | low      | tend-desk                                   | fixed, re-verified               | How it runs omits workflows 22-26; private failure log labelled as 21                 |
-| F6  | low      | tend-desk (needs a flag from tend-outreach) | fixed, re-verified               | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                            |
-| F7  | medium   | tend-lead                                   | fix landed; verify from lead run | `bun run integration` does not run 23/24 or force a failure into 21                   |
-| F8  | medium   | tend-lead                                   | open, fix in progress            | Private Telegram bot cannot route /outreach /approve /edit /skip                      |
-| F9  | low      | tend-desk                                   | fixed, re-verified               | 1440 px Desk: Outreach queue squeezed into the right column                           |
-| F10 | low      | tend-outreach                               | fixed, re-verified               | `style_basis` never reaches the owner                                                 |
-| F11 | low      | tend-outreach                               | open                             | Local-model drafts never survive validation, so "in my style" never reaches the owner |
+| ID  | Severity | Owner                                       | Status                                         | Title                                                                                 |
+| --- | -------- | ------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
+| F1  | high     | tend-outreach                               | fixed, re-verified                             | Model draft that only repeats the contact's quote is accepted as the owner's message  |
+| F2  | low      | tend-outreach                               | fixed, re-verified                             | Telegram refusals for /approve and /edit hide the rule reason                         |
+| F3  | medium   | tend-lead                                   | fixed, re-verified                             | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped    |
+| F4  | medium   | tend-lead                                   | deferred (tend-lead, by design)                | How it runs shows no last-run status in the real private composition                  |
+| F5  | low      | tend-desk                                   | fixed, re-verified                             | How it runs omits workflows 22-26; private failure log labelled as 21                 |
+| F6  | low      | tend-desk (needs a flag from tend-outreach) | fixed, re-verified                             | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                            |
+| F7  | medium   | tend-lead                                   | fix landed; verify from lead run               | `bun run integration` does not run 23/24 or force a failure into 21                   |
+| F8  | medium   | tend-lead                                   | open, fix in progress                          | Private Telegram bot cannot route /outreach /approve /edit /skip                      |
+| F9  | low      | tend-desk                                   | fixed, re-verified                             | 1440 px Desk: Outreach queue squeezed into the right column                           |
+| F10 | low      | tend-outreach                               | fixed, re-verified                             | `style_basis` never reaches the owner                                                 |
+| F11 | low      | tend-outreach                               | mitigated; model-size limit, decision for Adam | Local-model drafts never survive validation, so "in my style" never reaches the owner |
 
 ## F1: model draft that only repeats the contact's quote is accepted (high, tend-outreach)
 
@@ -93,6 +93,8 @@ Items returned by `/api/outreach`, `/private/api/outreach` and Telegram /outreac
 Steps: three live planner runs with real qwen3:0.6b (workflow 23 on fixture 18851 and 18861, `src/outreach-demo.ts plan` on 18871).
 Actual: 12 of 12 model drafts after the F1 fix were rejected (in the first run, before the fix, 2 echoes were accepted, see F1): one echo, eleven `uncited detail: 2026-10-16`. That date is in the only style example, the owner's sent message g2 ("I will review your demo by 2026-10-16."), and the model copies it into drafts whose evidence does not contain it. The fallback is safe (templates kept), but the "draft in my style" path never produces a draft the owner sees. Possible directions: strip dates, numbers and links from style examples before prompting, or pass only style examples without such details.
 Evidence: `cmd/ledger-after-24.json`, `cmd/n8n-23-18861.log`, `cmd/outreach-demo-run.txt`.
+
+Re-check 11:55 on bf2e826 (two fresh demo servers, 18873 and 18875, real qwen3:0.6b): the uncited-date rejections are gone (style examples are scrubbed, dates become "soon"). 8 of 8 model drafts were still rejected: 6 "model repeated the prompt" (the model copied the scrubbed example or the purpose text, now caught by bf2e826), 2 "model repeated the cited message". Templates kept every time, nothing unsafe reached the owner, 156 outreach/Telegram/Desk tests pass. What remains is that qwen3:0.6b does not write an original message here; tend-outreach reports that to Adam as a model-size decision rather than loosening checks. `cmd/outreach-demo-f11.txt`.
 
 ## Re-verification (22 Oct, about 11:10-11:20, merged improve/lead 03524f6)
 
