@@ -323,8 +323,8 @@ describe("mounted desk", () => {
     const runs = browser("#runs");
     mountPrivateWorkspace();
     await vi.advanceTimersByTimeAsync(0);
-    expect(runs.elements.get("runs-classroom")!.children).toHaveLength(10);
-    expect(runs.elements.get("runs-private")!.children).toHaveLength(11);
+    expect(runs.elements.get("runs-classroom")!.children).toHaveLength(12);
+    expect(runs.elements.get("runs-private")!.children).toHaveLength(14);
     expect(text(runs.elements.get("runs-failures")!)).toContain(
       "Prepare local AI request",
     );
