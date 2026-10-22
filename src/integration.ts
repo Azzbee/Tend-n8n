@@ -87,8 +87,21 @@ async function request(
     req.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
-function execution(wid: string): void {
-  const output = command(["exec", name, "n8n", "execute", "--id", wid], wid);
+// brokerPort: a CLI run beside the started webhook server needs its own
+// task-runner broker port, or n8n refuses to start the second process.
+function execution(wid: string, brokerPort?: number): void {
+  const output = command(
+    [
+      "exec",
+      ...(brokerPort ? ["-e", `N8N_RUNNERS_BROKER_PORT=${brokerPort}`] : []),
+      name,
+      "n8n",
+      "execute",
+      "--id",
+      wid,
+    ],
+    wid,
+  );
   const statuses = [...output.matchAll(/"status":\s*"([^"]+)"/g)];
   assert(
     statuses.at(-1)?.[1] === "success",
@@ -868,61 +881,6 @@ try {
         "replay duplicated records/candidates",
       );
       checks.push({ name: "Replay", pass: true, detail: fixtureReplay.counts });
-      // Outreach: plan with 23, approve one fictional email, draft it with 24.
-      for (const [id, action, due] of [
-        ["g1", "send the demo", "2026-10-15"],
-        ["g2", "review your demo", "2026-10-16"],
-      ] as const) {
-        const record = fixtureRecords.find((r) => r.source_record_id === id)!;
-        const added = await request("/api/candidates", {
-          record,
-          candidate: { quote: record.body_text, action, suggested_due: due },
-        });
-        const cid = (added.candidate as { commitment_id: string })
-          .commitment_id;
-        await request("/api/command", {
-          ...demoAuth,
-          text: `/confirm ${cid} ${due}`,
-        });
-      }
-      execution("TendReview23");
-      const queue = (await request("/api/outreach")).items as {
-        id: string;
-        channel: string;
-        status: string;
-        text_code: string;
-      }[];
-      const email = queue.find(
-        (i) => i.channel === "email" && i.status === "pending",
-      );
-      assert(email, "planner 23 proposed no pending fictional email");
-      const untouched = await request("/api/outreach/ledger");
-      assert(
-        Array.isArray(untouched.mock_gmail_drafts) &&
-          untouched.mock_gmail_drafts.length === 0,
-        "mock Gmail draft created before approval",
-      );
-      execution("TendReview24");
-      assert(
-        ((await request("/api/outreach/ledger")).mock_gmail_drafts as unknown[])
-          .length === 0,
-        "workflow 24 drafted an unapproved item",
-      );
-      await request("/api/outreach/approve", {
-        id: email.id,
-        text_code: email.text_code,
-      });
-      execution("TendReview24");
-      const ledger = await request("/api/outreach/ledger");
-      assert(
-        (ledger.mock_gmail_drafts as unknown[]).length === 1,
-        "approved fictional email did not reach mock Gmail drafts",
-      );
-      checks.push({
-        name: "Fictional outreach 23 and 24",
-        pass: true,
-        detail: `${queue.length} proposals; no draft before approval; one approved email reached mock Gmail drafts.create only`,
-      });
       // Exercise the actual native Telegram Trigger and Send node against a local
       // mock Bot API. This never connects to Telegram or a human recipient.
       const telegram = JSON.parse(
@@ -1076,7 +1034,8 @@ try {
       assert(port, "missing local n8n webhook port");
       const base = `http://127.0.0.1:${port}`;
       let webhookReady = false;
-      for (let i = 0; i < 60; i++) {
+      // Up to 60 s: n8n start is slower when other containers share the host.
+      for (let i = 0; i < 200; i++) {
         try {
           const r = await fetch(base + "/healthz");
           if (r.status === 200) {
@@ -1394,6 +1353,144 @@ try {
         pass: true,
         detail:
           "Pending until confirm; preview only; repeated done idempotent; group rejected; invalid record rejected; partial coverage explicit",
+      });
+      // Outreach (workflows 23-24) in the real isolated n8n: the planner
+      // drafts from confirmed fictional promises and meetings, the owner
+      // reviews through the native Telegram trigger, and only the approved
+      // email becomes a mock Gmail draft.
+      const repliesNow = async (): Promise<{ text: string }[]> => {
+        const state = await request("/api/status");
+        return Array.isArray(state.mock_telegram_replies)
+          ? (state.mock_telegram_replies as { text: string }[])
+          : [];
+      };
+      const owner = async (text: string): Promise<string> => {
+        const before = (await repliesNow()).length;
+        assert(
+          (
+            await sendUpdate({
+              ...fixtureUpdate,
+              update_id: ++fixtureUpdate.update_id,
+              message: { ...fixtureUpdate.message, text },
+            })
+          ).ok,
+          `native Telegram rejected ${text.split(" ")[0]}`,
+        );
+        for (let i = 0; i < 60; i++) {
+          const replies = await repliesNow();
+          if (replies.length > before) return replies.at(-1)!.text;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        throw new Error(`no Telegram reply to ${text.split(" ")[0]}`);
+      };
+      type Outreach = {
+        id: string;
+        reason: string;
+        channel: string;
+        status: string;
+        draft_text: string;
+        evidence: { reference: string }[];
+      };
+      const outreachItems = async (): Promise<Outreach[]> =>
+        (await request("/api/outreach")).items as Outreach[];
+      for (const c of (await request("/api/status")).commitments as {
+        commitment_id: string;
+        status: string;
+        suggested_due: string | null;
+      }[])
+        if (c.status === "pending")
+          await request("/api/command", {
+            ...demoAuth,
+            text: `/confirm ${c.commitment_id} ${c.suggested_due ?? "2026-10-16"}`,
+          });
+      execution("TendReview23", 5681);
+      const planned = await outreachItems();
+      assert(
+        planned.length >= 3 &&
+          planned.every(
+            (i) => i.status === "pending" && i.draft_text.trim().length > 0,
+          ),
+        "outreach planner did not leave pending drafts",
+      );
+      assert(
+        !JSON.stringify(planned).includes("g-injection") &&
+          !JSON.stringify(planned).includes("attacker@"),
+        "instruction-like fixture reached an outreach draft",
+      );
+      assert(
+        (await repliesNow()).at(-1)!.text.includes("outreach draft(s)"),
+        "planner did not notify the owner on mock Telegram",
+      );
+      const listing = await owner("/outreach");
+      assert(
+        planned.every((i) => listing.includes(i.id)),
+        "/outreach did not list every pending draft",
+      );
+      const email = planned.find(
+        (i) => i.channel === "email" && i.reason === "after_meeting",
+      );
+      assert(email, "no email follow-up to approve");
+      const edited =
+        "Hi Mira, thanks for the demo review. Is there anything you need from me next?";
+      const editReply = await owner(`/edit ${email.id} ${edited}`);
+      assert(
+        editReply.includes(`${email.id}: pending`),
+        "/edit did not keep the draft pending",
+      );
+      // /approve must quote the code of the text the owner was just shown.
+      const shownCode = /Code ([0-9a-f]{8})\./.exec(editReply)?.[1];
+      assert(shownCode, "/edit reply did not show the draft code");
+      assert(
+        (await request("/api/outreach/approved-email")).items instanceof
+          Array &&
+          ((await request("/api/outreach/approved-email")).items as unknown[])
+            .length === 0,
+        "unapproved draft reached the Gmail step",
+      );
+      assert(
+        (await owner(`/approve ${email.id} ${shownCode}`)).includes(
+          `${email.id}: approved`,
+        ),
+        "/approve did not approve the exact draft",
+      );
+      execution("TendReview24", 5681);
+      const ledger = await request("/api/outreach/ledger");
+      const drafts = ledger.mock_gmail_drafts as {
+        to: string;
+        body: string;
+      }[];
+      assert(
+        drafts.length === 1 &&
+          drafts[0]!.to === "mira@example.invalid" &&
+          drafts[0]!.body === edited,
+        "mock Gmail draft does not match the approved text",
+      );
+      assert(
+        (await outreachItems()).find((i) => i.id === email.id)?.status ===
+          "gmail_draft_created",
+        "send ledger did not record the Gmail draft",
+      );
+      const skipped = planned.find((i) => i.reason === "reply_waiting")!;
+      assert(
+        (await owner(`/skip ${skipped.id}`)).includes(`${skipped.id}: skipped`),
+        "/skip did not skip",
+      );
+      execution("TendReview23", 5681);
+      const after = await outreachItems();
+      assert(
+        after.length === planned.length &&
+          !after.some(
+            (i) =>
+              i.id !== skipped.id &&
+              i.reason === skipped.reason &&
+              i.evidence[0]?.reference === skipped.evidence[0]?.reference,
+          ),
+        "skipped item was proposed again inside three days",
+      );
+      checks.push({
+        name: "Outreach planner, Telegram approval and mock Gmail draft",
+        pass: true,
+        detail: `Workflow 23 planned ${planned.length} cited drafts and notified mock Telegram; /outreach, /edit, /approve and /skip ran through the native trigger; workflow 24 created exactly one mock Gmail draft with the approved text; a rerun proposed nothing new; the injection fixture was never drafted`,
       });
     }
     await googleIntegration();
