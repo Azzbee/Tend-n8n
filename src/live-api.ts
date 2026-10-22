@@ -15,7 +15,13 @@ import {
   validateLiveAI,
   type PreparedLiveAI,
 } from "./live-ai.ts";
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import { requestPath } from "./request-context.ts";
 import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
 import { InternalAuth } from "./internal-auth.ts";
 import {
@@ -59,6 +65,8 @@ export interface LiveServerOptions {
   // Receives why a private request was rejected: the path and the guard's own
   // message when it is plain fixed text, otherwise "unlisted".
   rejectionLog?: (entry: { at: string; path: string; reason: string }) => void;
+  // Requests slower than SLOW_REQUEST_MS: path and duration only.
+  slowLog?: (entry: { at: string; path: string; ms: number }) => void;
   outreach?: {
     service?: DeskOutreachBackend;
     route: (
@@ -88,6 +96,8 @@ export function rejectionReason(error: unknown): string {
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
+export const RETENTION_INTERVAL_MS = 60000;
+export const SLOW_REQUEST_MS = 1000;
 export function createLiveServer(options: LiveServerOptions): Server {
   const { policy, auth, store } = options,
     clock = options.clock ?? (() => new Date());
@@ -176,16 +186,35 @@ export function createLiveServer(options: LiveServerOptions): Server {
       })
     : null;
   const incrementalPolicy = incrementalPolicyOf(policy);
-  const enforceRetention = async () => {
+  // Retention used to run before every authenticated request: a scan of
+  // every record plus a contact prune, written under the owner lock, so the
+  // per-minute workflows queued behind each other's retention. It now runs at
+  // most once a minute, one run shared by concurrent requests; a record that
+  // crosses a window boundary is removed within that minute.
+  let retention: { at: number; run: Promise<void> } | null = null;
+  const enforceRetention = (): Promise<void> => {
+    const now = clock().getTime();
+    if (retention && now - retention.at < RETENTION_INTERVAL_MS)
+      return retention.run;
     const m = gmailWindow(policy, clock()),
       c = calendarHistoryWindow(policy, clock());
-    await store.expireLiveEvidence(
-      owner,
-      m.start,
-      c.start,
-      c.end,
-      messageHistoryStart(policy, "linkedin", clock()),
-    );
+    const run = Promise.resolve()
+      .then(() =>
+        store.expireLiveEvidence(
+          owner,
+          m.start,
+          c.start,
+          c.end,
+          messageHistoryStart(policy, "linkedin", clock()),
+        ),
+      )
+      .catch((error: unknown) => {
+        // A failed run is retried by the next request, not cached.
+        if (retention?.run === run) retention = null;
+        throw error;
+      });
+    retention = { at: now, run };
+    return run;
   };
   const command = (input: Record<string, unknown>): AuthCommand => {
     if (
@@ -347,7 +376,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
       ? { semanticSearch: options.privateSemanticSearch }
       : {}),
   });
-  return createServer(async (req, res) => {
+  const handle = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> => {
     const respond = (status: number, data: unknown) => {
       if (res.destroyed || res.writableEnded) return;
       res.writeHead(status, {
@@ -1329,5 +1361,20 @@ export function createLiveServer(options: LiveServerOptions): Server {
           "Private request rejected; inspect policy, account, cursor and input shape.",
       });
     }
+  };
+  return createServer((req, res) => {
+    const started = Date.now();
+    let path = "invalid";
+    try {
+      path = new URL(req.url ?? "/", "http://localhost").pathname;
+    } catch {
+      /* the handler rejects it; timing keeps a fixed label */
+    }
+    res.once("close", () => {
+      const ms = Date.now() - started;
+      if (ms >= SLOW_REQUEST_MS)
+        options.slowLog?.({ at: new Date().toISOString(), path, ms });
+    });
+    void requestPath.run(path, () => handle(req, res));
   });
 }

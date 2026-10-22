@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  RETENTION_INTERVAL_MS,
+  SLOW_REQUEST_MS,
   createLiveServer,
   incrementalPolicyOf,
   rejectionReason,
@@ -67,6 +69,80 @@ describe("private live API", () => {
     ])
       expect(rejectionReason(new Error(leak))).toBe("unlisted");
     expect(rejectionReason("not an error")).toBe("unlisted");
+  });
+  it("runs retention at most once a minute, shares one run and retries a failed one", async () => {
+    const policy = exampleLivePolicy;
+    let now = Date.parse("2026-10-22T08:00:00Z");
+    const clock = () => new Date(now);
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: policy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+      clock,
+    });
+    let runs = 0,
+      failNext = false;
+    const expire = store.expireLiveEvidence.bind(store);
+    store.expireLiveEvidence = (...args) => {
+      runs++;
+      if (failNext) {
+        failNext = false;
+        throw new Error("storage unavailable");
+      }
+      return expire(...args);
+    };
+    const slow: { path: string; ms: number }[] = [];
+    const server = createLiveServer({
+      policy,
+      store,
+      auth: new InternalAuth(undefined, verificationHash(key)),
+      clock,
+      slowLog: (e) => slow.push(e),
+      outreach: {
+        route: async (_method, path) => {
+          if (path !== "/api/live/outreach/plan") return null;
+          await new Promise((r) => setTimeout(r, SLOW_REQUEST_MS + 50));
+          return { status: 200, body: {} };
+        },
+      },
+    });
+    const port = await listen(server);
+    const get = () =>
+      fetch(`http://127.0.0.1:${port}/api/live/failure-log`, {
+        headers: { Authorization: "Bearer " + key },
+      });
+    try {
+      await Promise.all([get(), get(), get()]);
+      expect(runs).toBe(1);
+      now += RETENTION_INTERVAL_MS - 1;
+      await get();
+      expect(runs).toBe(1);
+      now += 1;
+      failNext = true;
+      expect((await get()).status).toBe(400);
+      expect(runs).toBe(2);
+      expect((await get()).status).toBe(200);
+      expect(runs).toBe(3);
+      expect(slow).toEqual([]);
+      await fetch(`http://127.0.0.1:${port}/api/live/outreach/plan`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + key,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(slow).toHaveLength(1);
+      expect(slow[0]!.path).toBe("/api/live/outreach/plan");
+      expect(slow[0]!.ms).toBeGreaterThanOrEqual(SLOW_REQUEST_MS);
+      expect(Object.keys(slow[0]!).sort()).toEqual(["at", "ms", "path"]);
+    } finally {
+      server.close();
+    }
   });
   it("records only redacted private failures behind owner authentication", async () => {
     const policy = exampleLivePolicy,

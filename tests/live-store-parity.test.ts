@@ -2,7 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { TendStore, type SourceState, type LiveBatch } from "../src/engine.ts";
 import type { LiveRecord } from "../src/google-records.ts";
-import { PostgresStore } from "../src/postgres-store.ts";
+import { PostgresStore, type LockTiming } from "../src/postgres-store.ts";
+import { requestPath } from "../src/request-context.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -429,6 +430,45 @@ describe("canonical PostgreSQL live parity", () => {
     });
     expect(after).toBe("0");
     expect(Date.now() - started).toBeLessThan(4000);
+  });
+  it("reports slow owner-lock calls with the API route, wait and hold only", async () => {
+    type Store = {
+      run<T>(op: (s: Store) => Promise<T>): Promise<T>;
+      q(sql: string): Promise<unknown[]>;
+    };
+    const seen: LockTiming[] = [];
+    pg.setLockTiming((t) => seen.push(t));
+    const store = pg as unknown as Store;
+    try {
+      await store.run((s) => s.q("SELECT 1"));
+      expect(seen).toEqual([]);
+      const holder = requestPath.run("/api/live/outreach/plan", () =>
+        store.run((s) => s.q("SELECT pg_sleep(0.7)")),
+      );
+      await new Promise((r) => setTimeout(r, 100));
+      await requestPath.run("/api/live/model-input", () =>
+        store.run((s) => s.q("SELECT 1")),
+      );
+      await holder;
+      const byPath = Object.fromEntries(seen.map((t) => [t.path, t]));
+      expect(byPath["/api/live/outreach/plan"]!.hold_ms).toBeGreaterThanOrEqual(
+        600,
+      );
+      // The second call waited for the first one's lock and held it briefly.
+      expect(byPath["/api/live/model-input"]!.wait_ms).toBeGreaterThanOrEqual(
+        400,
+      );
+      expect(byPath["/api/live/model-input"]!.hold_ms).toBeLessThan(400);
+      for (const t of seen)
+        expect(Object.keys(t).sort()).toEqual([
+          "at",
+          "hold_ms",
+          "path",
+          "wait_ms",
+        ]);
+    } finally {
+      pg.setLockTiming(() => {});
+    }
   });
   it("serializes concurrent duplicate commands across independent connections", async () => {
     const second = await PostgresStore.open({

@@ -1,3 +1,4 @@
+import { requestPath } from "./request-context.ts";
 import type {
   PrivateHistoryQuery,
   PrivateHistoryPage,
@@ -108,6 +109,13 @@ export type CommandExtension = (
   auth: AuthCommand,
   scoped: PostgresStore,
 ) => Promise<Reply | null>;
+export const SLOW_LOCK_MS = 500;
+export interface LockTiming {
+  at: string;
+  path: string;
+  wait_ms: number;
+  hold_ms: number;
+}
 export class PostgresStore implements LiveStore {
   private readonly pool: Pool;
   private readonly principal: Principal;
@@ -118,6 +126,12 @@ export class PostgresStore implements LiveStore {
   private extension: CommandExtension | null = null;
   setCommandExtension(extension: CommandExtension): void {
     this.extension = extension;
+  }
+  // Calls that waited for or held the owner lock for SLOW_LOCK_MS or more:
+  // route and milliseconds only.
+  private lockTiming: ((t: LockTiming) => void) | null = null;
+  setLockTiming(report: (t: LockTiming) => void): void {
+    this.lockTiming = report;
   }
   private constructor(
     pool: Pool,
@@ -206,13 +220,16 @@ export class PostgresStore implements LiveStore {
     operation: (store: PostgresStore) => Promise<T>,
   ): Promise<T> {
     if (this.client) return operation(this);
+    const queued = Date.now();
     const client = await this.pool.connect();
+    let locked = 0;
     try {
       await client.query("BEGIN");
       await client.query(
         "SELECT owner_id FROM live_runtime_principal WHERE owner_id=$1 FOR UPDATE",
         [this.principal.owner_id],
       );
+      locked = Date.now();
       const result = await operation(
         Object.assign(
           new PostgresStore(this.pool, this.principal, this.clock, client),
@@ -226,6 +243,16 @@ export class PostgresStore implements LiveStore {
       throw e;
     } finally {
       client.release();
+      const done = Date.now(),
+        wait_ms = (locked || done) - queued,
+        hold_ms = locked ? done - locked : 0;
+      if (wait_ms + hold_ms >= SLOW_LOCK_MS)
+        this.lockTiming?.({
+          at: new Date(done).toISOString(),
+          path: requestPath.getStore() ?? "background",
+          wait_ms,
+          hold_ms,
+        });
     }
   }
   async seed(
