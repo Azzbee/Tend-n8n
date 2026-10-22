@@ -88,3 +88,11 @@ Live issues for tend-lead / tend-deploy:
 - L-3: Daily briefing 20 has no run today: schedule is 09:00 Paris with catch-up every 5 minutes to 12:55, last run Wed 21 Oct 17:00. tend-deploy is updating 20; re-check after its report.
 - L-4: the only failure-log entry is n8n's Error Trigger sample payload ("Example Workflow" / "Node With Error"), so a manual test run of 22 wrote it into the live log the owner sees. Harmless, but it is not a real failure.
 - Pending tend-deploy report: 22, 25, 26 published (no runs yet), 14 redeployed (last run Tue 20 Oct), 15 and the pollers updated.
+
+Update 12:36 from tend-deploy's report (read-only re-check of 25 follows after its first hourly run):
+
+- L-4 explained: the "Example Workflow" entry is tend-deploy's manual test of 22 at 12:30:22 (Error Trigger → redactor → `/api/live/failure-log`). It proves 22's path end to end, with the text withheld; it is a test artifact, not a live failure.
+- 22 published (TendPrivate22). How it runs still shows "No runs recorded in n8n" for 22 because a manual test is not a production execution.
+- 25 published, hourly, error workflow 22, `OUTREACH_ENABLED=false` on the private API. Check its first run on How it runs after 13:00.
+- 26 imported and deliberately unpublished: no `gmail.compose` credential exists (Adam's Google re-consent). Pending Adam.
+- 14 and 20 NOT updated (tend-deploy blocked by its session permissions): the live bot still runs the old 14, so F8's fix is not live (`/outreach` on the live bot will not route yet), and L-3 (no briefing today) stays open. Owner tend-lead.
