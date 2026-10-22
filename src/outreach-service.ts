@@ -157,6 +157,7 @@ export function createPrivateOutreach(
   store: LiveStore,
   owner: string,
   env: Record<string, string | undefined> = process.env,
+  clock?: () => Date,
 ): {
   service: OutreachService;
   route: (method: string, path: string, input: unknown) => Promise<RouteResult>;
@@ -168,6 +169,7 @@ export function createPrivateOutreach(
     owner_id: owner,
     lane: "private",
     sendingEnabled: env.OUTREACH_ENABLED === "true",
+    ...(clock ? { clock } : {}),
   });
   const load = () => liveSnapshotOf(store, owner);
   // The private bot routes /outreach /approve /edit /skip through the book;
