@@ -132,6 +132,8 @@ export function linkThreads(input: {
   only?: readonly string[];
   /** At most this many loose commitments are tried per pass, so a backfill is spread over several passes. */
   limit?: number;
+  /** Every stored thread id, including one whose members are all gone, so a new pair never collides. */
+  threadIds?: readonly string[];
 }): ThreadRow[] {
   const at = (c: Commitment): number =>
     Date.parse(input.occurredAt.get(c.record_key) ?? "") || 0;
@@ -141,7 +143,10 @@ export function linkThreads(input: {
   const byId = new Map(input.commitments.map((c) => [c.commitment_id, c]));
   const threads = new Map<string, Commitment[]>();
   const placed = new Set<string>();
-  const inUse = new Set(input.rows.map((r) => r.thread_id));
+  const inUse = new Set([
+    ...input.rows.map((r) => r.thread_id),
+    ...(input.threadIds ?? []),
+  ]);
   for (const row of input.rows) {
     const c = byId.get(row.commitment_id);
     placed.add(row.commitment_id);

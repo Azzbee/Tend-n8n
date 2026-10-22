@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Commitment } from "../src/engine.ts";
 import type { VerifiedContactGroup } from "../src/live-policy.ts";
 import {
@@ -42,6 +42,7 @@ function link(
     cosine?: (a: string, b: string) => number | null;
     only?: string[];
     limit?: number;
+    threadIds?: string[];
   } = {},
 ): ThreadRow[] {
   return linkThreads({
@@ -57,6 +58,7 @@ function link(
     ...(extra.cosine ? { cosine: extra.cosine } : {}),
     ...(extra.only ? { only: extra.only } : {}),
     ...(extra.limit !== undefined ? { limit: extra.limit } : {}),
+    ...(extra.threadIds ? { threadIds: extra.threadIds } : {}),
     now,
   });
 }
@@ -282,6 +284,15 @@ describe("linking promise threads", () => {
       ["TA-2", "D"],
     ]);
   });
+  it("never picks a stored thread id even when its members are gone (review N2)", () => {
+    const rows = link(
+      [commitment("A"), commitment("B", { source: "linkedin" })],
+      {
+        threadIds: ["TA"],
+      },
+    );
+    expect(rows.map((r) => r.thread_id)).toEqual(["TA-2", "TA-2"]);
+  });
   it("stays valid while one source is valid and counts a closed thread member on its own", () => {
     const a = commitment("A", {
         evidence_valid: false,
@@ -478,6 +489,33 @@ describe("promise threads in the store", async () => {
     } finally {
       a.close();
       b.close();
+    }
+  });
+  it("keeps a new candidate when linking fails, and leaves the link to the backfill (review N1)", () => {
+    const s = store();
+    try {
+      vi.spyOn(s, "linkPromiseThreads").mockImplementation(() => {
+        throw new TypeError("link bug");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const c = add(
+        s,
+        sighting(
+          "m3",
+          "mira@example.invalid",
+          "F17",
+          "I will send the demo by 2026-10-15.",
+        ),
+      );
+      expect(
+        s.commitments(owner).some((x) => x.commitment_id === c.commitment_id),
+      ).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        "Promise thread link failed; the backfill retries it.",
+      );
+    } finally {
+      vi.restoreAllMocks();
+      s.close();
     }
   });
   it("keeps the same person's different ask separate", () => {
