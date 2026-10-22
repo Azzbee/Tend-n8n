@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // Private-lane failures keep only design-time text: workflow and node names,
 // a guard message that is a literal string in the workflow code, or an HTTP
@@ -30,7 +31,9 @@ export function workflowCodeSources(workflow: unknown): string[] {
   );
 }
 
-export function loadPrivateGuardMessages(dir = "workflows"): string[] {
+// Resolved from this file, not the cwd: a LaunchAgent may start the API elsewhere.
+const exportsDir = fileURLToPath(new URL("../workflows", import.meta.url));
+export function loadPrivateGuardMessages(dir = exportsDir): string[] {
   try {
     return guardMessages(
       readdirSync(dir)
