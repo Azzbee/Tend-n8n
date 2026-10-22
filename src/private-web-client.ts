@@ -255,6 +255,7 @@ export function mountPrivateWorkspace(): void {
   };
   let session: PrivateSessionResponse | null = null;
   const desk = mountDesk({
+    active: () => session !== null,
     csrf: () => session?.csrf ?? null,
     expired: () => {
       if (session) lock("Session expired · locked");

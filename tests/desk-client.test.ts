@@ -80,6 +80,7 @@ function snapshot(): DeskSnapshot {
 }
 function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
   const elements = new Map<string, FakeElement>();
+  let releaseConfirm: () => void = () => {};
   const element = (id: string): FakeElement => {
     let value = elements.get(id);
     if (!value) elements.set(id, (value = new FakeElement()));
@@ -122,7 +123,9 @@ function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
                 { status: 404 },
               );
       if (path === "/private/api/desk/confirm" && init?.method === "POST")
-        return Response.json({ commitment: {} });
+        return new Promise<Response>((resolve) => {
+          releaseConfirm = () => resolve(Response.json({ commitment: {} }));
+        });
       return Response.json({});
     },
   );
@@ -130,7 +133,7 @@ function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
   vi.stubGlobal("window", window);
   vi.stubGlobal("BroadcastChannel", undefined);
   vi.stubGlobal("fetch", fetch);
-  return { elements, fetch };
+  return { elements, fetch, release: () => releaseConfirm() };
 }
 afterEach(() => {
   vi.useRealTimers();
@@ -207,7 +210,7 @@ describe("mounted desk", () => {
   });
   it("confirms a pending promise with the shown date and the session CSRF header", async () => {
     vi.useFakeTimers();
-    const { elements, fetch } = browser("#desk");
+    const { elements, fetch, release: browserRelease } = browser("#desk");
     mountPrivateWorkspace();
     await vi.advanceTimersByTimeAsync(0);
     const confirm = all(
@@ -216,6 +219,8 @@ describe("mounted desk", () => {
     )[0]!;
     expect(confirm.disabled).toBe(false);
     confirm.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    browserRelease();
     await vi.advanceTimersByTimeAsync(0);
     const call = fetch.mock.calls.find(
       ([path]) => path === "/private/api/desk/confirm",
@@ -227,6 +232,55 @@ describe("mounted desk", () => {
       due_date: "2026-10-15",
     });
     expect(elements.get("notice")!.textContent).toContain("Nothing was sent");
+  });
+  it("never renders private text again when the workspace locks during an action", async () => {
+    vi.useFakeTimers();
+    const { elements, fetch, release } = browser("#desk");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    all(
+      elements.get("desk-yes")!,
+      (e) => e.textContent === "Confirm",
+    )[0]!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    elements.get("lock")!.dispatchEvent(new Event("click"));
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    for (const id of [
+      "desk-yes",
+      "desk-owe",
+      "desk-held",
+      "desk-meeting",
+      "desk-outreach",
+    ])
+      expect(text(elements.get(id)!).trim()).toBe("");
+    expect(elements.get("yes-title")!.textContent).toBe("WAITING FOR YOUR YES");
+    const after = fetch.mock.calls.map(([path]) => path);
+    expect(after.slice(after.indexOf("/private/api/logout"))).not.toContain(
+      "/private/api/desk",
+    );
+  });
+  it("asks for a second click before withdrawing an approved draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(deskFixtureClock());
+    const { elements, fetch } = browser("#desk", "approved");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const withdraw = all(
+      elements.get("desk-outreach")!,
+      (e) => e.textContent === "Withdraw approval",
+    )[0]!;
+    withdraw.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(withdraw.textContent).toBe("Confirm withdraw");
+    expect(
+      fetch.mock.calls.some(([p]) => p === "/private/api/outreach/skip"),
+    ).toBe(false);
+    withdraw.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      fetch.mock.calls.some(([p]) => p === "/private/api/outreach/skip"),
+    ).toBe(true);
   });
   it("shows the outreach queue with approve, edit and skip only for live pending drafts", async () => {
     vi.useFakeTimers();

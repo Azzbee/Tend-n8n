@@ -14,6 +14,7 @@ import {
 } from "./desk-model.ts";
 
 export interface DeskContext {
+  active: () => boolean;
   csrf: () => string | null;
   expired: () => void;
   notify: (message: string | null) => void;
@@ -163,6 +164,13 @@ export function mountDesk(ctx: DeskContext): DeskController {
   let current = "desk";
   let generation = 0;
   let busy = false;
+  // Loads are aborted when superseded, before an action and on lock, so at most one Desk request is open.
+  const loads = new Set<AbortController>();
+  const posts = new Set<AbortController>();
+  const abort = (set: Set<AbortController>): void => {
+    for (const controller of set) controller.abort();
+    set.clear();
+  };
 
   async function request(path: string, body?: unknown): Promise<unknown> {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -173,6 +181,8 @@ export function mountDesk(ctx: DeskContext): DeskController {
       headers["X-Tend-CSRF"] = csrf;
     }
     const controller = new AbortController();
+    const owner = body === undefined ? loads : posts;
+    owner.add(controller);
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
       const response = await fetch(`/private/api/${path}`, {
@@ -203,6 +213,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       return value;
     } finally {
       clearTimeout(timeout);
+      owner.delete(controller);
     }
   }
   const message = (error: unknown): string =>
@@ -386,7 +397,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
           ),
         );
     } else empty(not, "No recent messages without a promise.");
-    get("held-title").textContent = `HELD BACK · ${desk.held_back.length}`;
+    get("held-title").textContent = `HELD BACK · ${desk.held_back_total}`;
     const held = get("desk-held");
     if (desk.held_back.length)
       held.replaceChildren(
@@ -548,7 +559,10 @@ export function mountDesk(ctx: DeskContext): DeskController {
                 ),
             ),
           );
-        } else if (item.status === "approved") {
+        } else if (
+          item.status === "approved" &&
+          Date.parse(item.expires_at) > now.getTime()
+        ) {
           if (item.channel !== "email") {
             row.append(
               button("Copy text", "quiet", () => void copy(item.draft_text)),
@@ -565,16 +579,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
           // The outreach service accepts edit and skip on approved items, which withdraws the approval.
           row.append(
             button("Edit", "quiet", () => startEdit(item, row)),
-            button(
-              "Withdraw approval",
-              "quiet",
-              () =>
-                void act(
-                  "outreach/skip",
-                  { id: item.id },
-                  "Approval withdrawn. Nothing was sent. Tend will not propose this again for 3 days.",
-                ),
-            ),
+            withdrawButton(item),
           );
         }
         node.append(row);
@@ -589,6 +594,22 @@ export function mountDesk(ctx: DeskContext): DeskController {
         return node;
       }),
     );
+  }
+  function withdrawButton(item: OutreachItem): HTMLButtonElement {
+    let armed = false;
+    const node = button("Withdraw approval", "quiet", () => {
+      if (!armed) {
+        armed = true;
+        node.textContent = "Confirm withdraw";
+        return;
+      }
+      void act(
+        "outreach/skip",
+        { id: item.id },
+        "Approval withdrawn. Nothing was sent. Tend will not propose this again for 3 days.",
+      );
+    });
+    return node;
   }
   function startEdit(item: OutreachItem, row: HTMLElement): void {
     const id = `outreach-edit-${item.id}`;
@@ -688,14 +709,16 @@ export function mountDesk(ctx: DeskContext): DeskController {
         ),
       );
     const nav = el("div", undefined, "review-nav");
-    const prev = button("Previous", "quiet", () => {
-      reviewIndex--;
+    const step = (by: number, label: string): void => {
+      reviewIndex += by;
       renderReview();
-    });
-    const next = button("Next", "quiet", () => {
-      reviewIndex++;
-      renderReview();
-    });
+      const again = [...get("review-card").querySelectorAll("button")].find(
+        (b) => b.textContent === label && !b.disabled,
+      );
+      (again ?? get("review-title")).focus();
+    };
+    const prev = button("Previous", "quiet", () => step(-1, "Previous"));
+    const next = button("Next", "quiet", () => step(1, "Next"));
     prev.disabled = !position.prev;
     next.disabled = !position.next;
     nav.append(prev, next);
@@ -757,52 +780,79 @@ export function mountDesk(ctx: DeskContext): DeskController {
           }),
       );
   }
+  function heading(view: string): HTMLElement {
+    return get(
+      view === "runs"
+        ? "runs-title"
+        : view === "review"
+          ? "review-title"
+          : "desk-headline",
+    );
+  }
   async function act(
     path: string,
     body: Record<string, unknown>,
     done: string,
   ): Promise<void> {
-    if (busy) return;
+    if (busy || !ctx.active()) return;
     busy = true;
+    generation++;
+    abort(loads);
     for (const id of ["desk-view", "review-view"])
       for (const b of get(id).querySelectorAll("button")) b.disabled = true;
     try {
       await request(path, body);
-      ctx.notify(done);
+      if (ctx.active()) ctx.notify(done);
     } catch (error) {
-      ctx.notify(message(error));
+      if (ctx.active()) ctx.notify(message(error));
     } finally {
       busy = false;
-      await load(current);
     }
+    // A lock during the request must not pull private text back into the page.
+    if (!ctx.active()) return;
+    await load(current);
+    if (ctx.active()) heading(current).focus();
   }
   async function load(view: string): Promise<void> {
     const mine = ++generation;
+    abort(loads);
+    const stale = (): boolean => mine !== generation || !ctx.active();
+    if (stale()) return;
     try {
       if (view === "runs") {
         const runs = (await request("runs")) as DeskRuns;
-        if (mine === generation) renderRuns(runs);
+        if (!stale()) renderRuns(runs);
         return;
       }
       const desk = (await request("desk")) as DeskSnapshot;
-      if (mine !== generation) return;
+      if (stale()) return;
       snapshot = desk;
       if (view === "review") {
         renderReview();
         return;
       }
       renderDesk(desk);
+      let queue: typeof outreach;
       try {
-        outreach = parseOutreachList(await request("outreach"));
+        queue = parseOutreachList(await request("outreach"));
       } catch (error) {
-        outreach =
+        queue =
           (error as { status?: number }).status === 404
             ? "disabled"
             : "unavailable";
       }
-      if (mine === generation) renderOutreach();
+      if (stale()) return;
+      outreach = queue;
+      renderOutreach();
     } catch (error) {
-      if (mine === generation) ctx.notify(message(error));
+      if (stale()) return;
+      ctx.notify(message(error));
+      // Re-render the last good snapshot so buttons disabled by an action come back.
+      if (snapshot && view === "review") renderReview();
+      else if (snapshot && view === "desk") {
+        renderDesk(snapshot);
+        renderOutreach();
+      }
     }
   }
   return {
@@ -811,27 +861,34 @@ export function mountDesk(ctx: DeskContext): DeskController {
       current = view;
       if (view === "people") return;
       void load(view).then(() => {
-        if (!focusChange) return;
-        const heading = get(
-          view === "runs"
-            ? "runs-title"
-            : view === "review"
-              ? "review-title"
-              : "desk-headline",
-        );
-        heading.focus();
+        if (!focusChange || !ctx.active()) return;
+        heading(view).focus();
         if (window.location.hash === "#outreach")
           get("outreach").scrollIntoView();
       });
     },
     clear(): void {
       generation++;
+      abort(loads);
+      abort(posts);
+      busy = false;
+      current = "desk";
       snapshot = null;
       outreach = [];
       reviewIndex = 0;
       for (const id of containers) get(id).replaceChildren();
       get("desk-headline").textContent = "Your promises, quoted.";
       get("desk-date").textContent = "YOUR DESK";
+      for (const [id, text] of [
+        ["owe-title", "YOU OWE"],
+        ["owed-title", "OWED TO YOU"],
+        ["yes-title", "WAITING FOR YOUR YES"],
+        ["not-title", "NOT PROMISES"],
+        ["held-title", "HELD BACK"],
+        ["review-kicker", "WAITING FOR YOUR YES"],
+        ["review-title", "Is this a promise?"],
+      ] as const)
+        get(id).textContent = text;
     },
   };
 }

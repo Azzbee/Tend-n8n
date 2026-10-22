@@ -66,6 +66,7 @@ export interface DeskSnapshot {
   not_promises: DeskRecordLine[];
   not_promises_total: number;
   held_back: DeskRecordLine[];
+  held_back_total: number;
   next_meeting: DeskMeeting | null;
   coverage: { source: Source; count: number }[];
   pipeline: DeskStage[];
@@ -179,17 +180,23 @@ export function buildDeskSnapshot(input: {
     (a.due_date ?? a.suggested_due ?? "9999").localeCompare(
       b.due_date ?? b.suggested_due ?? "9999",
     ) || a.commitment_id.localeCompare(b.commitment_id);
-  const open = input.commitments.filter((c) => !closed.has(c.status));
+  const time = (value: string): number => Date.parse(value) || 0;
+  const recent = (a: NormalizedRecord, b: NormalizedRecord): number =>
+    time(b.occurred_at) - time(a.occurred_at) ||
+    a.record_key.localeCompare(b.record_key);
+  const messages = records.filter((r) => r.source !== "calendar").sort(recent);
+  const held = messages.filter((r) => instructionLike(r.body_text));
+  const heldKeys = new Set(held.map((r) => r.record_key));
+  // A candidate on instruction-like text is never shown as a promise, whatever the extractor did.
+  const open = input.commitments.filter(
+    (c) => !closed.has(c.status) && !heldKeys.has(c.record_key),
+  );
   const confirmed = open.filter((c) => c.status === "confirmed").map(item);
   const pending = open
     .filter((c) => c.status === "pending")
     .map(item)
     .sort(byDue);
   const linked = new Map(input.commitments.map((c) => [c.record_key, c]));
-  const recent = (a: NormalizedRecord, b: NormalizedRecord): number =>
-    b.occurred_at.localeCompare(a.occurred_at) ||
-    a.record_key.localeCompare(b.record_key);
-  const messages = records.filter((r) => r.source !== "calendar").sort(recent);
   const line = (r: NormalizedRecord, reason: string): DeskRecordLine => ({
     record_id: r.source_record_id,
     source: r.source,
@@ -199,8 +206,6 @@ export function buildDeskSnapshot(input: {
     text: clip(r.authored_text ?? r.body_text),
     reason,
   });
-  const held = messages.filter((r) => instructionLike(r.body_text));
-  const heldKeys = new Set(held.map((r) => r.record_key));
   const notPromises = messages.filter((r) => {
     const c = linked.get(r.record_key);
     return !heldKeys.has(r.record_key) && (!c || c.status === "dismissed");
@@ -213,8 +218,11 @@ export function buildDeskSnapshot(input: {
         : "No promise found";
   const nowIso = input.now.toISOString();
   const meeting = records
-    .filter((r) => r.source === "calendar" && r.occurred_at >= nowIso)
-    .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))[0];
+    .filter(
+      (r) =>
+        r.source === "calendar" && time(r.occurred_at) >= input.now.getTime(),
+    )
+    .sort((a, b) => time(a.occurred_at) - time(b.occurred_at))[0];
   const meetingContacts = meeting
     ? new Set([meeting.contact_id, ...(meeting.contact_ids ?? [])])
     : new Set<string>();
@@ -244,6 +252,7 @@ export function buildDeskSnapshot(input: {
     held_back: held
       .slice(0, LIST_LIMIT)
       .map((r) => line(r, "Instruction-like text, kept as data only")),
+    held_back_total: held.length,
     next_meeting: meeting
       ? {
           record_id: meeting.source_record_id,
@@ -336,7 +345,18 @@ export function buildDeskRuns(
   runs: DeskWorkflowRun[] | null,
   failures: DeskFailure[] | null,
 ): DeskRuns {
-  const reported = new Map((runs ?? []).map((r) => [r.id, r]));
+  const statuses = ["success", "error", "running", "unknown"];
+  const reported = new Map(
+    (runs ?? []).map((r) => [
+      r.id,
+      {
+        ...r,
+        last_status: statuses.includes(r.last_status)
+          ? r.last_status
+          : ("unknown" as const),
+      },
+    ]),
+  );
   const workflows: DeskWorkflowRun[] = catalog.map(([id, name, lane]) => ({
     id,
     name,
@@ -345,7 +365,17 @@ export function buildDeskRuns(
     last_run_at: reported.get(id)?.last_run_at ?? null,
   }));
   for (const run of reported.values())
-    if (!catalog.some(([id]) => id === run.id)) workflows.push(run);
+    if (!catalog.some(([id]) => id === run.id))
+      workflows.push({
+        id: String(run.id).slice(0, 8),
+        name: String(run.name).slice(0, 120),
+        lane: run.lane === "classroom" ? "classroom" : "private",
+        last_status: statuses.includes(run.last_status)
+          ? run.last_status
+          : "unknown",
+        last_run_at:
+          typeof run.last_run_at === "string" ? run.last_run_at : null,
+      });
   return {
     workflows,
     failures: (failures ?? []).slice(-50).map((f) => ({
