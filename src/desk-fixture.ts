@@ -17,6 +17,9 @@ const accounts: Record<Source, string> = {
   whatsapp_business: "fixture-whatsapp-business",
   linkedin: "fixture-linkedin",
 };
+// Same shape as live references; Live AI only cites https:// or tend-source: evidence.
+const reference = (source: Source, id: string): string =>
+  `tend-source:${source}/${encodeURIComponent(accounts[source])}/${id}`;
 function record(
   source: Source,
   id: string,
@@ -39,7 +42,7 @@ function record(
     occurred_at: at,
     observed_at: "2026-10-13T08:30:00Z",
     body_text: text,
-    evidence_reference: `fixture://${source}/${id}`,
+    evidence_reference: reference(source, id),
     ingestion_mode: "live",
     coverage_start: "2026-08-01T00:00:00Z",
     coverage_end: "2026-10-13T08:30:00Z",
@@ -212,7 +215,7 @@ export function deskFixtureOutreach(now: Date): OutreachItem[] {
           {
             source: "gmail",
             text: "I will send the demo by 2026-10-15.",
-            reference: "fixture://gmail/g1",
+            reference: reference("gmail", "g1"),
           },
         ],
         status: "pending",
@@ -231,7 +234,7 @@ export function deskFixtureOutreach(now: Date): OutreachItem[] {
           {
             source: "whatsapp_business",
             text: "The prototype checklist is available for review.",
-            reference: "fixture://whatsapp_business/wb1",
+            reference: reference("whatsapp_business", "wb1"),
           },
         ],
         status: "pending",

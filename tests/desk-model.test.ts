@@ -409,3 +409,27 @@ describe("one injection filter for the Desk and the planner", () => {
     ).toBe(true);
   });
 });
+
+describe("Desk fixture as People evidence", () => {
+  it("gives Mira Tan briefing and draft evidence in the live reference shape", async () => {
+    const { prepareLiveAI } = await import("../src/live-ai.ts");
+    const { exampleLivePolicy } = await import("../src/live-policy.ts");
+    const store = createDeskFixtureStore();
+    try {
+      const owner = exampleLivePolicy.principal_id;
+      for (const purpose of ["briefing", "draft"] as const) {
+        const prepared = prepareLiveAI({
+          owner_id: owner,
+          contact_id: "F17",
+          purpose,
+          records: store.interactions(owner),
+        });
+        expect(prepared.evidence.map((e) => e.evidence_reference)).toContain(
+          `tend-source:gmail/${encodeURIComponent(exampleLivePolicy.account_email)}/g1`,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  });
+});
