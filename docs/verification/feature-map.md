@@ -131,3 +131,10 @@ Same method: read-only, headings, counts, fixed labels and workflow statuses onl
 - Desk performance: authenticated `GET /private/api/desk` 8.9 s, `/outreach` 1.6 s, `/runs` 0.005 s (curl, bodies discarded). The Desk rendered partially (888 px) and a second load stalled the page past 45 s. **Open L-9** (tend-lead): Desk load time on live data.
 - Outreach queue: neither items nor "No drafts waiting." rendered within the wait (consistent with L-9).
 - Verifier slip: a curl session opened for the timing check could not be logged out (cookie file deleted before the logout call, and the first call used a wrong path); it expires at about 16:36 and holds one of the ten session slots until then. The Chrome session was locked.
+
+## Live check for 25's 17:00 run (22 Oct, 17:04, read-only, private API b2b71d3, locked after)
+
+- 11, 12, 15: last run passed 17:03. 22 passed 17:02. 20: 13:00.
+- **Failed at 17:00:** 17 WhatsApp personal, 19 WhatsApp business. 18 LinkedIn last run failed 16:00.
+- Failure log since 16:03 (text withheld): 19 business polling "Inspect approved source state" exec 285938; 15 "Read eligible authored span" execs 285942 and 285956 (just after 17:00) and 285474, 285493, 285704 (earlier); no entry for 17; no entry for 25 (tile "No runs recorded").
+- Reading: private-API steps failed exactly at 25's 17:00 run, which fits a timeout under 25's reads; the withheld text cannot confirm "aborted" or timeout. Reported to tend-lead and the operator at 17:04 (L-10).
