@@ -311,6 +311,32 @@ describe("drafts never send without an exact approval", () => {
     );
     expect(book.ledger().map((l) => l.action)).toContain("gmail_draft_created");
   });
+  it("hands an approved email to the Gmail step once, so a failed receipt never duplicates the draft", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    const first = book.approvedEmail(load()).items;
+    expect(first.map((i) => i.id)).toEqual([id]);
+    // The receipt step failed: the next scheduled run must not create it again.
+    expect(book.approvedEmail(load()).items).toEqual([]);
+    expect(book.ledger().map((l) => l.action)).toContain("handed_to_gmail");
+    // The late receipt for that hand-off is still accepted.
+    expect(
+      book.recordGmailDraft(id, first[0]!.approval_hash, "r-late", load())
+        .status,
+    ).toBe("gmail_draft_created");
+  });
+  it("hands an email again only after the owner approves it again", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    expect(book.approvedEmail(load()).items).toHaveLength(1);
+    book.edit(id, "Hi Mira, could you share an update? Thanks.", load());
+    book.approve(id, codeOf(book, id), load());
+    expect(book.approvedEmail(load()).items.map((i) => i.id)).toEqual([id]);
+  });
   it("keeps the send path shut when the kill switch is off", () => {
     const store = new TendStore(":memory:");
     store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
