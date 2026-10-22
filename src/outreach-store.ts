@@ -234,6 +234,22 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
           : null,
     };
   }
+  // Rows withdrawn by re-keying owner_id keep their primary key, so a new
+  // proposal can hash to an id already taken under another owner.
+  private freshId(itemKey: string, createdAt: string): string {
+    const taken = this.db.prepare("SELECT 1 FROM outreach_items WHERE id=?");
+    for (let n = 0; ; n++) {
+      const id =
+        "O" +
+        createHash("sha256")
+          .update(
+            `${this.options.owner_id}|${itemKey}|${createdAt}${n ? `|${n}` : ""}`,
+          )
+          .digest("hex")
+          .slice(0, 10);
+      if (!taken.get(id)) return id;
+    }
+  }
   plan(
     snapshot: OutreachSnapshot,
     model: string = FALLBACK_DRAFT_MODEL,
@@ -256,12 +272,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     const created = result.proposals.map((p: OutreachProposal) => {
       const created_at = now.toISOString();
       const item: StoredItem = {
-        id:
-          "O" +
-          createHash("sha256")
-            .update(`${this.options.owner_id}|${p.item_key}|${created_at}`)
-            .digest("hex")
-            .slice(0, 10),
+        id: this.freshId(p.item_key, created_at),
         owner_id: this.options.owner_id,
         item_key: p.item_key,
         contact_id: p.contact_id,

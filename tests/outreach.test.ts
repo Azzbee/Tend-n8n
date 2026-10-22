@@ -81,6 +81,32 @@ function world(clock: () => Date = at(FIXTURE_OUTREACH_CLOCK)) {
 const byReason = (book: OutreachBook, snapshot: OutreachSnapshot) =>
   Object.fromEntries(book.list(snapshot).items.map((i) => [i.reason, i]));
 
+describe("outreach planner ids", () => {
+  it("plans again after a withdrawal re-keyed earlier rows under another owner", () => {
+    const { book, load } = world();
+    const first = book.plan(load()).created;
+    expect(first.length).toBeGreaterThan(0);
+    const db = (book as unknown as { db: import("node:sqlite").DatabaseSync })
+      .db;
+    db.exec(
+      "UPDATE outreach_items SET owner_id='withdrawn-20261022:'||owner_id",
+    );
+    const again = book.plan(load()).created;
+    expect(again.map((i) => i.reason)).toEqual(first.map((i) => i.reason));
+    const old = new Set(first.map((i) => i.id));
+    expect(again.every((i) => !old.has(i.id))).toBe(true);
+    const owners = db
+      .prepare(
+        "SELECT owner_id, COUNT(*) AS n FROM outreach_items GROUP BY owner_id",
+      )
+      .all();
+    expect(owners).toEqual([
+      { owner_id: "demo-owner", n: first.length },
+      { owner_id: "withdrawn-20261022:demo-owner", n: first.length },
+    ]);
+  });
+});
+
 describe("outreach planner rules", () => {
   // Live history: many received emails, most from senders the owner never
   // wrote to, newsletters among them.
