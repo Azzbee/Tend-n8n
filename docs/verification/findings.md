@@ -4,18 +4,18 @@ Summary: _written at the end of the run._
 
 Environment for every repro: fictional data only. Fixture API `TEND_DEMO_PORT=18851 TEND_DEMO_DB=.scratch/verification/demo.sqlite TEND_OUTREACH_DB=.scratch/verification/outreach.sqlite node --experimental-strip-types src/server.ts`; isolated n8n container `tend-verify-n8n` (same image digest as live, 127.0.0.1:18855) with workflows 01-09, 21, 23, 24 imported after `sed 's/:18767/:18851/g'`; private composition harness `.scratch/verification/private-harness.ts` (real `createLiveServer` + `createPrivateOutreach` over `createDeskFixtureStore`). Evidence paths are under `.scratch/verification/`.
 
-| ID  | Severity | Owner                                       | Status | Title                                                                                |
-| --- | -------- | ------------------------------------------- | ------ | ------------------------------------------------------------------------------------ |
-| F1  | high     | tend-outreach                               | open   | Model draft that only repeats the contact's quote is accepted as the owner's message |
-| F2  | low      | tend-outreach                               | open   | Telegram refusals for /approve and /edit hide the rule reason                        |
-| F3  | medium   | tend-lead                                   | open   | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped   |
-| F4  | medium   | tend-lead                                   | open   | How it runs shows no last-run status in the real private composition                 |
-| F5  | low      | tend-desk                                   | open   | How it runs omits workflows 22-26; private failure log labelled as 21                |
-| F6  | low      | tend-desk (needs a flag from tend-outreach) | open   | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                           |
-| F7  | medium   | tend-lead                                   | open   | `bun run integration` does not run 23/24 or force a failure into 21                  |
-| F8  | medium   | tend-lead                                   | open   | Private Telegram bot cannot route /outreach /approve /edit /skip                     |
-| F9  | low      | tend-desk                                   | open   | 1440 px Desk: Outreach queue squeezed into the right column                          |
-| F10 | low      | tend-outreach                               | open   | `style_basis` never reaches the owner                                                |
+| ID  | Severity | Owner                                       | Status                     | Title                                                                                |
+| --- | -------- | ------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------ |
+| F1  | high     | tend-outreach                               | fixed, re-verified         | Model draft that only repeats the contact's quote is accepted as the owner's message |
+| F2  | low      | tend-outreach                               | fixed, re-verified         | Telegram refusals for /approve and /edit hide the rule reason                        |
+| F3  | medium   | tend-lead                                   | fixed, re-verified         | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped   |
+| F4  | medium   | tend-lead                                   | open                       | How it runs shows no last-run status in the real private composition                 |
+| F5  | low      | tend-desk                                   | fixed, re-verified         | How it runs omits workflows 22-26; private failure log labelled as 21                |
+| F6  | low      | tend-desk (needs a flag from tend-outreach) | fixed, re-verified         | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                           |
+| F7  | medium   | tend-lead                                   | fix landed, re-run pending | `bun run integration` does not run 23/24 or force a failure into 21                  |
+| F8  | medium   | tend-lead                                   | open                       | Private Telegram bot cannot route /outreach /approve /edit /skip                     |
+| F9  | low      | tend-desk                                   | fixed, re-verified         | 1440 px Desk: Outreach queue squeezed into the right column                          |
+| F10 | low      | tend-outreach                               | fixed, re-verified         | `style_basis` never reaches the owner                                                |
 
 ## F1: model draft that only repeats the contact's quote is accepted (high, tend-outreach)
 
@@ -82,6 +82,15 @@ At 1440 px the Outreach queue sits under "Before you meet" in a ~340 px column. 
 ## F10: `style_basis` never reaches the owner (low, tend-outreach)
 
 Items returned by `/api/outreach`, `/private/api/outreach` and Telegram /outreach have no `style_basis` field; it appears only in the ledger. The owner cannot tell whether a draft follows their style for that contact (brief section 6).
+
+## Re-verification (22 Oct, about 11:10-11:20, merged improve/lead 03524f6)
+
+- F1: fresh fixture API on 18861, 01-05 and 07 re-run, `/confirm`, then 23 with real qwen3:0.6b. All four drafts are messages from Adam; the four model drafts were rejected (uncited date) and templates kept. The echo rule itself is covered by `tests/outreach.test.ts` ("model repeated the cited message"), not observed live in this run. `cmd/outreach-after-23-18861.json`.
+- F2: `/approve` on a skipped item → `outreach_error: "cannot approve a skipped item"`; `/edit` with a URL → the fixed uncited-detail sentence; workflow 10 renders `Outreach refused: <reason>`. `cmd/telegram-refusals-18861.txt`.
+- F3: same forced failure against the new 21 → `"message": "unlisted error (text withheld)"`. `cmd/failure-log-recheck.txt`.
+- F5, F6, F9: Chrome at 1440 on harness 18859: 26 workflows listed, "what 21 and 22 kept", queue full width (1376 px), "Sending is switched off" on the queue, the notice and the approved card, plus Copy text. `screens/1440-recheck-*.jpg`.
+- F10: `style_basis: recipient_examples` on every item.
+- 119 outreach and Telegram tests pass.
 
 ## Not findings (checked and explained)
 
