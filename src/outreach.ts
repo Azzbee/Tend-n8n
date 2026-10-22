@@ -286,7 +286,14 @@ export const purposes: Record<OutreachReason, string> = {
   reply_waiting:
     "The contact wrote to you and is waiting for a reply. Acknowledge their message briefly.",
 };
-export function outreachDraftRequest(p: OutreachProposal): {
+// Larger default for drafts in the owner's style; the small model is the
+// fallback when the configured one is not installed.
+export const DEFAULT_DRAFT_MODEL = "qwen3:4b";
+export const FALLBACK_DRAFT_MODEL = "qwen3:0.6b";
+export function outreachDraftRequest(
+  p: OutreachProposal,
+  model: string = FALLBACK_DRAFT_MODEL,
+): {
   model: string;
   think: false;
   stream: false;
@@ -295,7 +302,7 @@ export function outreachDraftRequest(p: OutreachProposal): {
   messages: { role: "system" | "user"; content: string }[];
 } {
   return {
-    model: "qwen3:0.6b",
+    model,
     think: false,
     stream: false,
     format: {

@@ -219,7 +219,8 @@ function planner(id: string, name: string, lane: Lane): OutreachWorkflow {
       contentType: "raw",
       rawContentType: "application/json",
       body: "={{ JSON.stringify($json.request) }}",
-      options: { timeout: 60000 },
+      // qwen3:4b can need a cold load before its first reply.
+      options: { timeout: 120000 },
     },
     4.2,
     { onError: "continueRegularOutput" },

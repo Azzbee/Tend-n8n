@@ -9,6 +9,7 @@ import {
   draftProblem,
   evidenceHash,
   outreachDraftRequest,
+  FALLBACK_DRAFT_MODEL,
   planOutreach,
   purposes,
   repeatsAny,
@@ -220,7 +221,10 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
           : null,
     };
   }
-  plan(snapshot: OutreachSnapshot): {
+  plan(
+    snapshot: OutreachSnapshot,
+    model: string = FALLBACK_DRAFT_MODEL,
+  ): {
     fictional: boolean;
     quiet_hours: boolean;
     held_back: string[];
@@ -280,7 +284,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       return {
         ...this.view(item),
         style_basis: item.style_basis,
-        request: outreachDraftRequest(p),
+        request: outreachDraftRequest(p, model),
       };
     });
     return {
