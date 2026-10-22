@@ -308,3 +308,36 @@ Scope is tend-lead's own commits only. The merged branches are skipped, and prom
 - **F13 (b2b71d3) is stricter, not weaker.** The old test's quote-as-data assertion moved to a benign record, and the "untrusted data" framing is still asserted. The withheld case is pinned in `tests/live-ai.test.ts` and against the Desk fixture's `g-injection` in `tests/desk-model.test.ts`.
 - **`execution_url` (70d64bf).** The regex is anchored and allows no userinfo, query or fragment. JS `$` without the `m` flag does not match before a trailing newline. The Desk re-validates and opens the link with `rel=noreferrer`. The host is not pinned to the n8n origin (info only). The four-key shape is still accepted, and the five-key shape is checked.
 - **`freshId` (a21e50b)** is correct. **The motion toggle (c1b19bc)** has no risk found.
+
+## Re-review 9: promise-thread fixes, improve/desk-ui dd95479..fb89204 (22 Oct, 18:15 Paris)
+
+P1 to P6 are closed. I checked this on an export of fb89204, using unit tests only:
+
+- All three repros in `.scratch/review-repro/promise-threads.repro.ts` pass. The P3 repro now asserts that the second `plan()` creates nothing; before the fix it created one item.
+- `tsc --noEmit` is clean, apart from a cast in the scratch repro.
+- The full unit run gives 1395 passed and 16 skipped. Three files fail, all on PostgreSQL:
+  - `private-postgres` and `semantic-postgres` fail because the sandbox cannot start the database.
+  - `history-quarantine` failed under the full-suite load but passes alone (36 passed).
+- I did not run the Docker PostgreSQL files myself. tend-desk reports all 9 pass.
+
+How each finding was fixed:
+
+- **P1:** stopwords are filtered before and after stemming.
+- **P2:**
+  - `linkThreads` skips any thread ID still in use (`T<id>-2`, and so on).
+  - Member inserts are plain inserts, so a conflict now raises instead of being ignored.
+  - SQLite gained the thread_id CHECK.
+- **P3:** a member with a prior overdue or owe-soon item keeps the lead.
+- **P4:** only SQLSTATE 57014 is absorbed. A JS deadline covers the whole link and raises the same code, and any other error rolls back to the savepoint and rethrows.
+- **P5:** `/done` and `/cancel` skip pending members with invalid evidence.
+- **P6:** verified groups now live on each store. `addCandidate` carries them into its transaction store, and the private web handler sets them on the same store the live API uses (`src/live-api.ts:288`).
+
+dd95479 also changed two things:
+
+- The Desk GET no longer writes thread rows.
+- The operator backfill (`src/promise-thread-backfill.ts`) prints counts only. On error it prints `error.message`; PostgreSQL messages carry no row values, and `detail` is not printed. Each batch is its own owner-lock transaction with the 2 s budget.
+
+New, low priority:
+
+- **N1 (Low, trade-off):** after the P4 fix, a non-timeout link error inside `addCandidate` rolls back the candidate itself. A persistent linking bug would therefore stop all new candidates on PostgreSQL, where before it only stopped linking. This is the behaviour I asked for. If candidates should survive a link bug, catch in `addCandidate` only, record a fixed phrase, and leave the backfill to rethrow.
+- **N2 (Info):** PostgreSQL builds the set of thread IDs already in use from member rows, not from `commitment_threads`. A thread row whose members were all removed by an `ON DELETE CASCADE` from `live_obligations` stays behind. A new pair that picks the same ID then hits a plain PK conflict and raises. This needs the earlier member's own ID to come back, so it is very unlikely. The fix is to read in-use IDs from `commitment_threads`, or delete empty threads when obligations are removed.
