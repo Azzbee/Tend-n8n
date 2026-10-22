@@ -1,0 +1,230 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1043" width="1800" height="1043">
+<defs>
+<filter id="sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#0f2a20" flood-opacity=".10"/></filter>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+<marker id="ah-err" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/></marker>
+<pattern id="hatch" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="10" height="10" fill="#f7f8f7"/><line x1="0" y1="0" x2="0" y2="10" stroke="#eceeec" stroke-width="4"/></pattern>
+</defs>
+<rect width="1800" height="1043" fill="#ffffff"/>
+<text x="14" y="44" font-size="30" font-weight="700" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Tend architecture: the private lane</text>
+<line x1="14" y1="60" x2="1786" y2="60" stroke="#c9d6cf" stroke-width="2"/>
+<text x="14" y="88" font-size="16" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">The private lane runs Tend on the owner&#x27;s real accounts. Every box is one n8n workflow (numbered as in workflows/) or one service, and every arrow is labelled with what travels on it.</text>
+<text x="14" y="110" font-size="16" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">The classroom lane runs the same steps on fictional data (workflows 01 to 09, 21, 23 and 24); both lanes are drawn in Architecture.mmd in the repository.</text>
+<g transform="translate(0,118)">
+<rect x="10" y="672" width="1780" height="243" rx="16" fill="url(#hatch)"/>
+<path d="M270,312 L320,312 L320,370 L370,370" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="273.875" y="329.0" width="92.25" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="320.0" y="345.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Gmail pages</text>
+<path d="M270,477 L320,477 L320,420 L370,420" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="273.875" y="437.0" width="92.25" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="320.0" y="453.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">event pages</text>
+<path d="M580,395 L700,395" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="597.25" y="352.0" width="85.5" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="640.0" y="368.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">normalized</text>
+<text x="640.0" y="384.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">records</text>
+<path d="M1000,297 L1130,297" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="998.625" y="248.0" width="132.75" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1065.0" y="264.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">records, cursors,</text>
+<text x="1065.0" y="280.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">commitments</text>
+<path d="M1255,345 L1255,392" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="1151.5" y="356.0" width="207.0" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1255.0" y="372.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">eligible authored spans only</text>
+<path d="M1130,442 L1000,442" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="1015.5" y="398.0" width="99.0" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1065.0" y="414.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">exact quote,</text>
+<text x="1065.0" y="430.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">pending</text>
+<path d="M1000,582 L1130,582" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="1008.75" y="550.0" width="112.5" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1065.0" y="566.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">cited evidence</text>
+<path d="M1380,297 L1500,297" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="1373.625" y="248.0" width="132.75" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1440.0" y="264.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">local embeddings,</text>
+<text x="1440.0" y="280.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">20 per minute</text>
+<path d="M790,157 L790,268" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" marker-start="url(#ah)" stroke-linejoin="round"/>
+<rect x="620.25" y="192.0" width="159.75" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="700.125" y="208.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">your commands in,</text>
+<text x="700.125" y="224.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">formatted replies out</text>
+<path d="M960,157 L960,268" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" marker-start="url(#ah)" stroke-linejoin="round"/>
+<rect x="972" y="186.0" width="193.5" height="56" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1068.75" y="202.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">commitments to review out,</text>
+<text x="1068.75" y="218.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Confirm, Not a promise,</text>
+<text x="1068.75" y="234.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Approve with code in</text>
+<path d="M150,258 L150,158" fill="none" stroke="#b91c1c" stroke-width="1.7" stroke-dasharray="7 6" marker-end="url(#ah-err)" stroke-linejoin="round"/>
+<rect x="107.25" y="195.0" width="85.5" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="150.0" y="211.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">on failure</text>
+<path d="M300,97 L480,97 L480,300 L700,300" fill="none" stroke="#b91c1c" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="417.0" y="188.0" width="126.0" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="480.0" y="204.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">redacted failure</text>
+<path d="M590,815 L735,815 L735,622" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="651.75" y="695.0" width="166.5" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="735.0" y="711.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">one bounded page,</text>
+<text x="735.0" y="727.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">owner identity checked</text>
+<path d="M920,760 L920,622" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="863.75" y="695.0" width="112.5" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="920.0" y="711.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">proposals with</text>
+<text x="920.0" y="727.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">evidence</text>
+<path d="M1000,610 L1062,610 L1062,815 L1130,815" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="988.875" y="695.0" width="146.25" height="40" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1062.0" y="711.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">only the exact text</text>
+<text x="1062.0" y="727.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">you approved</text>
+<path d="M1770,815 L1788,815 L1788,18 L700,18 L700,38" fill="none" stroke="#334155" stroke-width="1.7" marker-end="url(#ah)" stroke-linejoin="round"/>
+<rect x="1156.625" y="6.0" width="186.75" height="24" rx="11" fill="#ffffff" stroke="#c8d3cd"/>
+<text x="1250.0" y="22.0" font-size="12.5" font-weight="500" fill="#1e293b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">one dated digest at 09:00</text>
+<line x1="14" y1="672" x2="1786" y2="672" stroke="#14211b" stroke-width="2.2" stroke-dasharray="14 9"/>
+<rect x="30" y="657" width="478.25" height="30" rx="15" fill="#14211b"/>
+<text x="44" y="677" font-size="13.5" font-weight="600" fill="#ffffff" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">CUT LINE  ·  above: the core  ·  below: first to go if time ran out</text>
+<circle cx="522" cy="672" r="12" fill="#be185d"/>
+<text x="522" y="677" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">1</text>
+<rect x="538" y="660" width="127.20000000000002" height="24" rx="12" fill="#fff" stroke="#c8d3cd"/>
+<text x="547" y="677" font-size="13" font-weight="500" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">first: outreach</text>
+<circle cx="1100" cy="672" r="12" fill="#be185d"/>
+<text x="1100" y="677" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">2</text>
+<rect x="1116" y="660" width="301.92" height="24" rx="12" fill="#fff" stroke="#c8d3cd"/>
+<text x="1125" y="677" font-size="13" font-weight="500" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">then: messaging readers, daily briefing</text>
+<rect x="30" y="40" width="270" height="115" rx="12" fill="#fef3f2" stroke="#b91c1c" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="30" y="50" width="5" height="95" rx="2.5" fill="#b91c1c"/>
+<circle cx="63" cy="67" r="14" fill="#b91c1c"/>
+<text x="63" y="72" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">22</text>
+<text x="85" y="72" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Error handler</text>
+<text x="50" y="98" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Error Trigger, set on every</text>
+<text x="50" y="117" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">private workflow; keeps names,</text>
+<text x="50" y="135" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">node and status, no message text</text>
+<rect x="540" y="40" width="320" height="115" rx="12" fill="#eff5ff" stroke="#1d4ed8" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="540" y="50" width="5" height="95" rx="2.5" fill="#1d4ed8"/>
+<circle cx="573" cy="67" r="14" fill="#1d4ed8"/>
+<text x="573" y="72" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">14</text>
+<text x="595" y="72" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Telegram bot</text>
+<text x="560" y="98" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Telegram Trigger, owner&#x27;s ID only</text>
+<text x="560" y="117" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">/status /today /prep /outreach /approve</text>
+<rect x="900" y="40" width="320" height="115" rx="12" fill="#eff5ff" stroke="#1d4ed8" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="900" y="50" width="5" height="95" rx="2.5" fill="#1d4ed8"/>
+<text x="920" y="72" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Commitment Desk</text>
+<text x="920" y="98" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">local web page, 127.0.0.1 only</text>
+<text x="920" y="117" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">review, search, approve with a code</text>
+<rect x="30" y="260" width="240" height="105" rx="12" fill="#effaf8" stroke="#0f766e" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="30" y="270" width="5" height="85" rx="2.5" fill="#0f766e"/>
+<circle cx="63" cy="287" r="14" fill="#0f766e"/>
+<text x="63" y="292" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">11</text>
+<text x="85" y="292" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Gmail sync</text>
+<text x="50" y="318" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Schedule + Manual Trigger</text>
+<text x="50" y="337" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">read-only, Retry-After backoff</text>
+<rect x="30" y="425" width="240" height="105" rx="12" fill="#effaf8" stroke="#0f766e" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="30" y="435" width="5" height="85" rx="2.5" fill="#0f766e"/>
+<circle cx="63" cy="452" r="14" fill="#0f766e"/>
+<text x="63" y="457" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">12</text>
+<text x="85" y="457" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Calendar sync</text>
+<text x="50" y="483" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Schedule + Manual Trigger</text>
+<text x="50" y="502" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">read-only, Retry-After backoff</text>
+<rect x="370" y="335" width="210" height="120" rx="12" fill="#f5f7f9" stroke="#475569" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="370" y="345" width="5" height="100" rx="2.5" fill="#475569"/>
+<circle cx="403" cy="362" r="14" fill="#475569"/>
+<text x="403" y="367" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">13</text>
+<text x="425" y="367" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Normalize, store</text>
+<text x="390" y="393" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">sub-workflow called by</text>
+<text x="390" y="412" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Execute Workflow, one</text>
+<text x="390" y="431" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">approved record per call</text>
+<rect x="700" y="270" width="300" height="350" rx="16" fill="#14332a" filter="url(#sh)"/>
+<text x="850" y="318" font-size="21" font-weight="700" fill="#ffffff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Tend private API</text>
+<text x="850" y="343" font-size="13.5" font-weight="400" fill="#b9d3c6" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">port 18768, local only</text>
+<circle cx="732" cy="388" r="3.5" fill="#7fd1a8"/>
+<text x="746" y="393" font-size="14" font-weight="450" fill="#e7f2ec" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">owner and scope guards</text>
+<circle cx="732" cy="418" r="3.5" fill="#7fd1a8"/>
+<text x="746" y="423" font-size="14" font-weight="450" fill="#e7f2ec" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">one idempotency key per record</text>
+<circle cx="732" cy="448" r="3.5" fill="#7fd1a8"/>
+<text x="746" y="453" font-size="14" font-weight="450" fill="#e7f2ec" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">bounded pages and cursors</text>
+<circle cx="732" cy="478" r="3.5" fill="#7fd1a8"/>
+<text x="746" y="483" font-size="14" font-weight="450" fill="#e7f2ec" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">semantic search for the Desk</text>
+<circle cx="732" cy="508" r="3.5" fill="#7fd1a8"/>
+<text x="746" y="513" font-size="14" font-weight="450" fill="#e7f2ec" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">nothing sent without your approval</text>
+<text x="850" y="600" font-size="12.5" font-weight="400" fill="#9fbfb0" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">n8n keeps no execution data here</text>
+<path d="M1130,264 a125.0,14 0 0,0 250,0 v67 a125.0,14 0 0,1 -250,0 z" fill="#fff8eb" stroke="#b45309" stroke-opacity=".7" stroke-width="1.4" filter="url(#sh)"/>
+<ellipse cx="1255.0" cy="264" rx="125.0" ry="14" fill="#fdecc8" stroke="#b45309" stroke-opacity=".7" stroke-width="1.4"/>
+<text x="1255.0" y="298" font-size="16" font-weight="650" fill="#14211b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">PostgreSQL 18</text>
+<text x="1255.0" y="320" font-size="13" font-weight="400" fill="#55625b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">canonical private store</text>
+<rect x="1130" y="392" width="250" height="105" rx="12" fill="#f6f3ff" stroke="#6d28d9" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="1130" y="402" width="5" height="85" rx="2.5" fill="#6d28d9"/>
+<circle cx="1163" cy="419" r="14" fill="#6d28d9"/>
+<text x="1163" y="424" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">15</text>
+<text x="1185" y="424" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Local AI extraction</text>
+<text x="1150" y="450" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">LLM Chain + Ollama (local)</text>
+<text x="1150" y="469" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">must return exact quote + date</text>
+<rect x="1130" y="540" width="250" height="85" rx="12" fill="#f6f3ff" stroke="#6d28d9" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="1130" y="550" width="5" height="65" rx="2.5" fill="#6d28d9"/>
+<circle cx="1163" cy="567" r="14" fill="#6d28d9"/>
+<text x="1163" y="572" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">16</text>
+<text x="1185" y="572" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Cited briefing / draft</text>
+<text x="1150" y="598" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">every claim cites its source</text>
+<path d="M1500,264 a135.0,14 0 0,0 270,0 v67 a135.0,14 0 0,1 -270,0 z" fill="#fff8eb" stroke="#b45309" stroke-opacity=".7" stroke-width="1.4" filter="url(#sh)"/>
+<ellipse cx="1635.0" cy="264" rx="135.0" ry="14" fill="#fdecc8" stroke="#b45309" stroke-opacity=".7" stroke-width="1.4"/>
+<text x="1635.0" y="298" font-size="16" font-weight="650" fill="#14211b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Semantic index</text>
+<text x="1635.0" y="320" font-size="13" font-weight="400" fill="#55625b" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">pgvector, 768 dims, 1 GiB cap</text>
+<rect x="1500" y="395" width="270" height="232" rx="12" fill="#fafbfa" stroke="#dfe5e1"/>
+<text x="1516" y="423" font-size="14" font-weight="700" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">How to read it</text>
+<rect x="1516" y="435" width="14" height="14" rx="3" fill="#0f766e"/>
+<text x="1538" y="447" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">read-only source</text>
+<rect x="1516" y="457" width="14" height="14" rx="3" fill="#475569"/>
+<text x="1538" y="469" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">n8n sub-workflow</text>
+<rect x="1516" y="479" width="14" height="14" rx="3" fill="#b45309"/>
+<text x="1538" y="491" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">storage</text>
+<rect x="1516" y="501" width="14" height="14" rx="3" fill="#6d28d9"/>
+<text x="1538" y="513" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">local AI, no cloud model</text>
+<rect x="1516" y="523" width="14" height="14" rx="3" fill="#1d4ed8"/>
+<text x="1538" y="535" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">what the owner sees</text>
+<rect x="1516" y="545" width="14" height="14" rx="3" fill="#be185d"/>
+<text x="1538" y="557" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">outreach, held for approval</text>
+<text x="1516" y="581" font-size="12.5" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">number = file in workflows/</text>
+<line x1="1516" y1="611" x2="1544" y2="611" stroke="#b91c1c" stroke-width="1.7" stroke-dasharray="6 5"/>
+<text x="1552" y="615" font-size="12.5" font-weight="400" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">failure path</text>
+<rect x="30" y="712" width="560" height="190" rx="14" fill="#ffffff" fill-opacity=".85" stroke="#0f766e" stroke-opacity=".5" stroke-dasharray="5 4"/>
+<circle cx="52" cy="738" r="12" fill="#be185d"/>
+<text x="52" y="743" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">2</text>
+<text x="72" y="743" font-size="13" font-weight="600" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Messaging readers: read-only, Manual Trigger, one verified page per run</text>
+<rect x="45" y="765" width="170" height="115" rx="12" fill="#effaf8" stroke="#0f766e" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="45" y="775" width="5" height="95" rx="2.5" fill="#0f766e"/>
+<circle cx="78" cy="792" r="14" fill="#0f766e"/>
+<text x="78" y="797" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">17</text>
+<text x="100" y="797" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">WhatsApp</text>
+<text x="65" y="823" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">personal account</text>
+<text x="65" y="842" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">via Unipile</text>
+<rect x="225" y="765" width="170" height="115" rx="12" fill="#effaf8" stroke="#0f766e" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="225" y="775" width="5" height="95" rx="2.5" fill="#0f766e"/>
+<circle cx="258" cy="792" r="14" fill="#0f766e"/>
+<text x="258" y="797" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">19</text>
+<text x="280" y="797" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">WhatsApp</text>
+<text x="245" y="823" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Business account</text>
+<text x="245" y="842" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">via Unipile</text>
+<rect x="405" y="765" width="170" height="115" rx="12" fill="#effaf8" stroke="#0f766e" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="405" y="775" width="5" height="95" rx="2.5" fill="#0f766e"/>
+<circle cx="438" cy="792" r="14" fill="#0f766e"/>
+<text x="438" y="797" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">18</text>
+<text x="460" y="797" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">LinkedIn</text>
+<text x="425" y="823" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">messages</text>
+<text x="425" y="842" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">read-only</text>
+<rect x="800" y="760" width="240" height="115" rx="12" fill="#fdf2f8" stroke="#be185d" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="800" y="770" width="5" height="95" rx="2.5" fill="#be185d"/>
+<circle cx="833" cy="787" r="14" fill="#be185d"/>
+<text x="833" y="792" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">25</text>
+<text x="855" y="792" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Outreach planner</text>
+<text x="820" y="818" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Schedule, hourly</text>
+<text x="820" y="837" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">at most 5 proposals a run</text>
+<circle cx="1024" cy="776" r="12" fill="#be185d"/>
+<text x="1024" y="781" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">1</text>
+<rect x="1130" y="760" width="250" height="115" rx="12" fill="#fdf2f8" stroke="#be185d" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="1130" y="770" width="5" height="95" rx="2.5" fill="#be185d"/>
+<circle cx="1163" cy="787" r="14" fill="#be185d"/>
+<text x="1163" y="792" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">26</text>
+<text x="1185" y="792" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Gmail drafts</text>
+<text x="1150" y="818" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">drafts.create, gmail.compose</text>
+<text x="1150" y="837" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">scope only, never sends</text>
+<circle cx="1364" cy="776" r="12" fill="#be185d"/>
+<text x="1364" y="781" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">1</text>
+<rect x="1500" y="760" width="270" height="115" rx="12" fill="#eff5ff" stroke="#1d4ed8" stroke-opacity=".55" stroke-width="1.4" filter="url(#sh)"/>
+<rect x="1500" y="770" width="5" height="95" rx="2.5" fill="#1d4ed8"/>
+<circle cx="1533" cy="787" r="14" fill="#1d4ed8"/>
+<text x="1533" y="792" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">20</text>
+<text x="1555" y="792" font-size="16" font-weight="650" fill="#14211b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Daily briefing</text>
+<text x="1520" y="818" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">Schedule Trigger, 09:00 Paris</text>
+<text x="1520" y="837" font-size="13" font-weight="400" fill="#55625b" text-anchor="start" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">today&#x27;s commitments, cited</text>
+<circle cx="1754" cy="776" r="12" fill="#be185d"/>
+<text x="1754" y="781" font-size="13" font-weight="700" fill="#fff" text-anchor="middle" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">2</text>
+</g></svg>

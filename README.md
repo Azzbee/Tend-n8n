@@ -4,7 +4,7 @@
 
 Tend is a set of n8n workflows plus a small local API. The workflows read messages, store them in a database, ask a local AI model (Ollama) to extract promises with an exact quote and date, and let the owner confirm, query and follow up from Telegram. Nothing is sent to a contact without the owner's explicit approval.
 
-- Architecture diagram: [`Architecture.mmd`](Architecture.mmd) (Mermaid; GitHub renders it)
+- Architecture diagrams: [`docs/architecture-private-lane.svg`](docs/architecture-private-lane.svg) (the private lane, with the cut line) and [`Architecture.mmd`](Architecture.mmd) (both lanes, Mermaid; GitHub renders it)
 - Workflows (exported JSON, the versions used in the demo): [`workflows/`](workflows/) (01-26)
 - Demo script: [`Demo-guide.txt`](Demo-guide.txt) · Full specification: [`Specification.txt`](Specification.txt)
 
@@ -92,6 +92,10 @@ Manual checks in the editor:
 
 ## Screenshots
 
-Architecture (rendered from `Architecture.mmd`; level 2, with the cut line between the fictional classroom lane and the private lane):
+Private lane, on the owner's real accounts (source [`docs/architecture-private-lane.svg`](docs/architecture-private-lane.svg)); the dashed line is the cut line, with what would have been cut first below it:
+
+![Tend private lane architecture](docs/architecture-private-lane.png)
+
+Both lanes (rendered from `Architecture.mmd`; level 2, fictional classroom lane on top, private lane below):
 
 ![Tend architecture](docs/screenshots/architecture.png)
