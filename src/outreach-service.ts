@@ -146,3 +146,58 @@ export function fixtureOutreachRoute(
     });
   return null;
 }
+// Private lane: drafts live in their own SQLite file next to the private
+// runtime state, and the send path stays shut unless OUTREACH_ENABLED=true.
+// Internal routes let n8n plan, draft and record Gmail receipts; approval is
+// only possible through the owner's Desk session or Telegram.
+export function createPrivateOutreach(
+  store: LiveStore,
+  owner: string,
+  env: Record<string, string | undefined> = process.env,
+): {
+  service: OutreachService;
+  route: (method: string, path: string, input: unknown) => Promise<RouteResult>;
+} {
+  const book = new OutreachBook(
+    env.TEND_OUTREACH_DB ?? ".scratch/live-private/outreach.sqlite",
+    {
+      owner_id: owner,
+      lane: "private",
+      sendingEnabled: env.OUTREACH_ENABLED === "true",
+    },
+  );
+  const load = () => liveSnapshotOf(store, owner);
+  return {
+    service: new OutreachService(book, load),
+    route: async (method, path, input) => {
+      if (!path.startsWith("/api/live/outreach/")) return null;
+      const body = isRecord(input) ? input : {};
+      const id = typeof body.id === "string" ? body.id : "";
+      if (method === "GET" && path === "/api/live/outreach/approved-email")
+        return { status: 200, body: book.approvedEmail(await load()) };
+      if (method !== "POST") return null;
+      if (path === "/api/live/outreach/plan") {
+        if (Object.keys(body).length) throw new Error("Plan takes no input");
+        return { status: 200, body: book.plan(await load()) };
+      }
+      if (path === "/api/live/outreach/draft")
+        return {
+          status: 200,
+          body: book.modelDraft(id, body.text, await load()),
+        };
+      if (path === "/api/live/outreach/gmail-draft")
+        return {
+          status: 200,
+          body: {
+            item: book.recordGmailDraft(
+              id,
+              body.approval_hash,
+              body.draft_id,
+              await load(),
+            ),
+          },
+        };
+      return null;
+    },
+  };
+}

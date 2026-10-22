@@ -23,6 +23,7 @@ import { OutreachBook } from "./outreach-store.ts";
 import { MockGmail } from "./outreach-gmail.ts";
 import {
   FIXTURE_OUTREACH_CLOCK,
+  createPrivateOutreach,
   fixtureOutreachRoute,
   snapshotOf,
 } from "./outreach-service.ts";
@@ -457,10 +458,12 @@ async function startLiveServer(): Promise<void> {
     throw new Error(
       "Daily briefing requires its persisted owner and activation timestamp together",
     );
+  const outreach = createPrivateOutreach(store, policy.principal_id);
   const server = createLiveServer({
     policy,
     store,
     auth,
+    outreach,
     normalModel: services.normalModel,
     normalSemanticSearch: services.normalSemanticSearch,
     privateSemanticSearch: services.privateSemanticSearch,

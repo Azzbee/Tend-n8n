@@ -50,6 +50,13 @@ export interface LiveServerOptions {
   privateSemanticSearch?: PrivateSemanticSearch;
   dailyOwner?: { owner_id: string; user_id: string; chat_id: string };
   dailyEnabledAt?: string;
+  outreach?: {
+    route: (
+      method: string,
+      path: string,
+      input: unknown,
+    ) => Promise<{ status: number; body: unknown } | null>;
+  };
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
@@ -699,6 +706,14 @@ export function createLiveServer(options: LiveServerOptions): Server {
         });
         return;
       }
+      const outreachRead =
+        req.method === "GET"
+          ? await options.outreach?.route("GET", url.pathname, null)
+          : null;
+      if (outreachRead) {
+        respond(outreachRead.status, outreachRead.body);
+        return;
+      }
       if (req.method !== "POST") {
         respond(404, { error: "Unknown route" });
         return;
@@ -720,6 +735,15 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      const outreachWrite = await options.outreach?.route(
+        "POST",
+        url.pathname,
+        value,
+      );
+      if (outreachWrite) {
+        respond(outreachWrite.status, outreachWrite.body);
+        return;
+      }
       if (url.pathname.startsWith("/api/live/daily/")) {
         if (!dailyAPI) {
           respond(409, { error: "Daily briefing is not configured" });
