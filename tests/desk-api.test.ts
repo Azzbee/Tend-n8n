@@ -413,6 +413,23 @@ describe("outreach routes", () => {
         (await post("/private/api/outreach/approve", { id: "missing" })).status,
       ).toBe(409);
       expect(outreach.edit).toHaveBeenCalledTimes(1);
+      outreach.approve.mockRejectedValueOnce(
+        new Error("fill in the bracketed placeholder first"),
+      );
+      expect(
+        (
+          await post("/private/api/outreach/approve", { id: "OUT-F17-2" })
+        ).json().error,
+      ).toBe("Not changed: fill in the bracketed placeholder first.");
+      outreach.edit.mockRejectedValueOnce(
+        new Error("uncited detail: Private Detail Text"),
+      );
+      const uncited = await post("/private/api/outreach/edit", {
+        id: "OUT-F17-2",
+        text: "Hi Mira",
+      });
+      expect(uncited.body).not.toContain("Private Detail Text");
+      expect(uncited.json().error).toContain("not in its cited evidence");
     } finally {
       store.close();
     }

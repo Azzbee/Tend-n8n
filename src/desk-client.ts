@@ -517,7 +517,9 @@ export function mountDesk(ctx: DeskContext): DeskController {
             ? `Approval window ends ${parisMoment(item.expires_at)}`
             : item.status === "approved" && item.channel !== "email"
               ? "Copy the text and send it yourself."
-              : outreachStatusDetail[item.status];
+              : item.status === "approved"
+                ? "Waiting for the Gmail step to create the draft. You press Send yourself."
+                : outreachStatusDetail[item.status];
         if (detail) node.append(el("p", detail, "meta"));
         const row = el("div", undefined, "actions");
         if (outreachActionable(item, now)) {

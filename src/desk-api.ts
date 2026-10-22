@@ -39,6 +39,16 @@ const day = /^\d{4}-\d{2}-\d{2}$/;
 // Engine errors that name a state rule, never private text; anything else stays generic.
 const safeEngineError =
   /^(invalid transition(: evidence review required)?|unknown commitment|explicit valid date required|invalid command arguments)$/;
+// Fixed rule phrases from the outreach service; anything that could echo draft text stays generic.
+const safeOutreachError =
+  /^(unknown outreach item|cannot (approve|edit|skip) an? (pending|approved|skipped|gmail_draft_created|expired) item|recipient is not a verified identity of this contact|empty draft|draft too long|dash not allowed|instruction-like draft|fill in the bracketed placeholder first|draft is no longer replaceable)$/;
+function safeMessage(message: string): string {
+  if (safeEngineError.test(message) || safeOutreachError.test(message))
+    return `Not changed: ${message}.`;
+  if (message.startsWith("uncited detail"))
+    return "Not changed: the draft names a detail that is not in its cited evidence.";
+  return "Not changed. Reload the desk and try again.";
+}
 function fields(
   data: Record<string, unknown>,
   allowed: string[],
@@ -58,12 +68,7 @@ async function guard<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    throw new DeskRequestError(
-      409,
-      safeEngineError.test(message)
-        ? `Not changed: ${message}.`
-        : "Not changed. Reload the desk and try again.",
-    );
+    throw new DeskRequestError(409, safeMessage(message));
   }
 }
 
