@@ -85,7 +85,7 @@ Items returned by `/api/outreach`, `/private/api/outreach` and Telegram /outreac
 
 ## Re-verification (22 Oct, about 11:10-11:20, merged improve/lead 03524f6)
 
-- F1: fresh fixture API on 18861, 01-05 and 07 re-run, `/confirm`, then 23 with real qwen3:0.6b. All four drafts are messages from Adam; the four model drafts were rejected (uncited date) and templates kept. The echo rule itself is covered by `tests/outreach.test.ts` ("model repeated the cited message"), not observed live in this run. `cmd/outreach-after-23-18861.json`.
+- F1: fresh fixture API on 18861, 01-05 and 07 re-run, `/confirm`, then 23 with real qwen3:0.6b. All four drafts are messages from Adam; the four model drafts were rejected (uncited date) and templates kept. The echo rule itself is covered by `tests/outreach.test.ts` ("model repeated the cited message"), not observed live in this run. tend-outreach reports a live hit ("template kept (model repeated the cited message)") from `src/outreach-demo.ts`; that script is not on any pushed branch at 11:25, so this is their observation, not mine. `cmd/outreach-after-23-18861.json`.
 - F2: `/approve` on a skipped item → `outreach_error: "cannot approve a skipped item"`; `/edit` with a URL → the fixed uncited-detail sentence; workflow 10 renders `Outreach refused: <reason>`. `cmd/telegram-refusals-18861.txt`.
 - F3: same forced failure against the new 21 → `"message": "unlisted error (text withheld)"`. `cmd/failure-log-recheck.txt`.
 - F5, F6, F9: Chrome at 1440 on harness 18859: 26 workflows listed, "what 21 and 22 kept", queue full width (1376 px), "Sending is switched off" on the queue, the notice and the approved card, plus Copy text. `screens/1440-recheck-*.jpg`.
