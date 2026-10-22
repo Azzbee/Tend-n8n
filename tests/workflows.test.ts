@@ -15,6 +15,29 @@ interface Workflow {
 const load = (n: string): Workflow =>
   JSON.parse(readFileSync(`workflows/${n}`, "utf8")) as Workflow;
 describe("import and node boundaries", () => {
+  it("explains every canvas with one sticky note naming purpose, inputs, outputs and privacy", () => {
+    for (const f of readdirSync("workflows").filter((f) =>
+      f.endsWith(".json"),
+    )) {
+      const w = JSON.parse(
+        readFileSync(`workflows/${f}`, "utf8"),
+      ) as Workflow & {
+        id: string;
+        connections: Record<string, unknown>;
+      };
+      const notes = w.nodes.filter(
+        (n) => n.type === "n8n-nodes-base.stickyNote",
+      );
+      expect(notes, f).toHaveLength(1);
+      const text = String(notes[0]!.parameters.content);
+      for (const heading of ["Purpose", "Inputs", "Outputs", "Privacy"])
+        expect(text, `${f} ${heading}`).toContain(`**${heading}:**`);
+      expect(text.length, f).toBeLessThan(900);
+      expect(notes[0]).not.toHaveProperty("credentials");
+      expect(Object.keys(w.connections)).not.toContain(notes[0]!.name);
+      if (/^(1\d|20)-/.test(f)) expect(text, f).toContain("no execution data");
+    }
+  });
   it("connects native LLM Chain to a local keyless Ollama model", () => {
     const w = load("07-extract-commitments.json");
     expect(
@@ -46,9 +69,11 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships twenty-one inactive exports without private account credentials or external recipients", () => {
+  it("ships twenty-six inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(21);
+    expect(files).toHaveLength(26);
+    expect(files).toContain("22-private-error-handler.json");
+    expect(files).toContain("26-private-outreach-gmail-drafts.json");
     expect(files).toContain("21-error-handler.json");
     expect(files).toContain("20-daily-owner-briefing.json");
     for (const f of files) {
@@ -80,10 +105,14 @@ describe("import and node boundaries", () => {
     expect(handler.nodes[0]?.type).toBe("n8n-nodes-base.errorTrigger");
     for (const f of readdirSync("workflows").filter((f) =>
       /^(1[0-9]|20)-/.test(f),
-    ))
-      expect(readFileSync(`workflows/${f}`, "utf8")).not.toContain(
-        "errorWorkflow",
-      );
+    )) {
+      const w = JSON.parse(readFileSync(`workflows/${f}`, "utf8")) as {
+        settings: Record<string, unknown>;
+      };
+      expect(w.settings.errorWorkflow, f).toBe("TendPrivate22");
+      expect(w.settings.saveDataErrorExecution, f).toBe("none");
+      expect(w.settings.saveDataSuccessExecution, f).toBe("none");
+    }
   });
   it("error workflow keeps only names and a short message, never item data", () => {
     const n = load("21-error-handler.json").nodes.find(

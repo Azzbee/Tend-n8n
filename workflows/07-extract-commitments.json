@@ -104,6 +104,20 @@
           "name": "Tend review local Ollama (no key)"
         }
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview07\n**Purpose:** Extract a promise from one fictional record with the local AI (Ollama).\n\n**Inputs:** Manual run; one fictional record from the fixture API.\n\n**Outputs:** A pending candidate with its exact quote. Never an active commitment until the owner confirms.\n\n**Privacy:** Local model only, no cloud AI. Quote must match the source text. Failures go to error workflow 21.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

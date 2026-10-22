@@ -315,6 +315,20 @@
       "parameters": {
         "jsCode": "const x=$input.first().json;if(!['page','connections','blocked'].includes(x.kind))throw new Error('Unknown provider receipt');const {_continue_connections,...receipt}=x;return [{json:{...receipt,outbound_sent:false,submission_sent:false}}];"
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendSocial18\n**Purpose:** Read one verified page of LinkedIn messages.\n\n**Inputs:** Manual run; approved provider account and phase.\n\n**Outputs:** One bounded page of records for the private store.\n\n**Privacy:** Read-only; owner identity verified first. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {
@@ -464,7 +478,8 @@
     "saveDataErrorExecution": "none",
     "timezone": "Europe/Paris",
     "saveManualExecutions": false,
-    "executionTimeout": 120
+    "executionTimeout": 120,
+    "errorWorkflow": "TendPrivate22"
   },
   "tags": [],
   "pinData": {},

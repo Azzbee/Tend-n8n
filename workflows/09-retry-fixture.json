@@ -44,6 +44,20 @@
       "parameters": {
         "jsCode": "const result=$input.first().json;if(result.recovered!==true||result.attempt!==3)throw new Error('three-attempt recovery failed');return $input.all();"
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview09\n**Purpose:** Show bounded retry: a synthetic 429 that recovers.\n\n**Inputs:** Manual run; isolated retry scenario on the fixture API.\n\n**Outputs:** One recovery record.\n\n**Privacy:** Synthetic data only. Failures go to error workflow 21.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

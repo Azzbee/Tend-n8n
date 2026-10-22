@@ -205,6 +205,20 @@
           "name": "Tend review local Ollama (no key)"
         }
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendGoogle15\n**Purpose:** Local AI promise extraction on newly authored Google evidence.\n\n**Inputs:** Schedule or manual run; eligible authored spans from the store.\n\n**Outputs:** Owner-scoped pending promises with exact quotes.\n\n**Privacy:** Local Ollama only; nothing is active until the owner confirms. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {
@@ -306,7 +320,8 @@
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
     "timezone": "Europe/Paris",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "errorWorkflow": "TendPrivate22"
   },
   "tags": [],
   "pinData": {},

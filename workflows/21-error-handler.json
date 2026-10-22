@@ -40,6 +40,20 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1000
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview21\n**Purpose:** Error workflow for fictional workflows 01-09.\n\n**Inputs:** n8n Error Trigger (production runs only; publish 21 after import).\n\n**Outputs:** POST /api/failure-log on the fixture API.\n\n**Privacy:** Keeps only workflow name, failing node, a 200-character message and execution ID. No item data.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

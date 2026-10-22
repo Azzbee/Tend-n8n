@@ -3,6 +3,15 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
 import { buildDailyBriefingWorkflow } from "./daily-workflow.ts";
 import {
+  buildOutreachWorkflows,
+  outreachCanvasNotes,
+} from "./outreach-workflows.ts";
+import {
+  guardMessages,
+  redactorCode,
+  workflowCodeSources,
+} from "./failure-redaction.ts";
+import {
   telegramGuardCode,
   telegramReplyCode,
   telegramLiveGuardCode,
@@ -1633,17 +1642,224 @@ errorHandler.nodes[0]!.notes =
 for (const w of workflows)
   if (/^TendReview0[1-9]$/.test(w.id))
     w.settings.errorWorkflow = "TendReview21";
+// Error workflow for the private lane: same shape as 21, but it saves no
+// execution data and keeps a message only when it is a literal guard string
+// from the private workflow code, otherwise just an HTTP status or nothing.
+const dailyWorkflow = buildDailyBriefingWorkflow();
+const outreachWorkflows = buildOutreachWorkflows();
+const privateWorkflows = [
+  ...workflows.filter((w) => /^Tend(Live|Google|Social)/.test(w.id)),
+  dailyWorkflow,
+];
+const privateOutreachCode = outreachWorkflows
+  .filter(({ workflow: w }) => w.settings.errorWorkflow === "TendPrivate22")
+  .flatMap(({ workflow: w }) => workflowCodeSources(w));
+const privateErrorHandler = workflow(
+  "TendPrivate22",
+  "Tend 22: Error handler (private lane)",
+  [
+    node("Error Trigger", "errorTrigger", {}, 0, 0, 1),
+    code(
+      "Keep names and allowlisted guard text only",
+      redactorCode(
+        guardMessages([
+          ...privateWorkflows.flatMap((w) => workflowCodeSources(w)),
+          ...privateOutreachCode,
+        ]),
+      ),
+      260,
+    ),
+    liveHttp(
+      "Record failure on private API",
+      "/api/live/failure-log",
+      520,
+      "={{ JSON.stringify($json) }}",
+    ),
+  ],
+);
+privateErrorHandler.settings.saveDataSuccessExecution = "none";
+privateErrorHandler.settings.saveDataErrorExecution = "none";
+privateErrorHandler.settings.saveManualExecutions = false;
+for (const w of privateWorkflows)
+  (w.settings as { errorWorkflow?: string }).errorWorkflow = "TendPrivate22";
+
+// One sticky note per canvas so each workflow explains itself in the editor.
+const NO_SAVE =
+  "Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.";
+const adapterNote = (source: string) => ({
+  purpose: `Fictional ${source} adapter for the demo lane.`,
+  inputs: `Manual run; GET /api/fixtures on the local fixture API.`,
+  outputs: "Records handed to sub-workflow 06 (normalize and store).",
+  privacy:
+    "Fictional fixtures only (Mira Tan, F17). No account or credential. Failures go to error workflow 21.",
+});
+const canvasNotes: Record<
+  string,
+  { purpose: string; inputs: string; outputs: string; privacy: string }
+> = {
+  TendReview01: adapterNote("Gmail"),
+  TendReview02: adapterNote("Calendar"),
+  TendReview03: adapterNote("personal WhatsApp"),
+  TendReview04: adapterNote("business WhatsApp"),
+  TendReview05: adapterNote("LinkedIn"),
+  TendReview06: {
+    purpose: "Sub-workflow: validate scope, normalize and store one record.",
+    inputs: "Called by adapters 01-05 with fictional source records.",
+    outputs: "One committed record in the local fixture store.",
+    privacy:
+      "Rejects anything outside the fictional scope. Failures go to error workflow 21.",
+  },
+  TendReview07: {
+    purpose:
+      "Extract a promise from one fictional record with the local AI (Ollama).",
+    inputs: "Manual run; one fictional record from the fixture API.",
+    outputs:
+      "A pending candidate with its exact quote. Never an active commitment until the owner confirms.",
+    privacy:
+      "Local model only, no cloud AI. Quote must match the source text. Failures go to error workflow 21.",
+  },
+  TendReview08: {
+    purpose: "Route an owner command and build a cited briefing preview.",
+    inputs: "Manual run with a fictional private command.",
+    outputs: "An owner-scoped reply preview, or a rejection.",
+    privacy:
+      "Owner and private chat checked first. Fictional data only. Failures go to error workflow 21.",
+  },
+  TendReview09: {
+    purpose: "Show bounded retry: a synthetic 429 that recovers.",
+    inputs: "Manual run; isolated retry scenario on the fixture API.",
+    outputs: "One recovery record.",
+    privacy: "Synthetic data only. Failures go to error workflow 21.",
+  },
+  TendLiveTelegram: {
+    purpose: "Owner control over Telegram (/status, /today, /confirm ...).",
+    inputs: "Telegram private message from the configured owner.",
+    outputs: "One reply to the authorized owner and a send acknowledgement.",
+    privacy: `Every other sender or chat is refused. ${NO_SAVE}`,
+  },
+  TendGoogle11: {
+    purpose: "Read-only Gmail sync inside the approved time window.",
+    inputs: "Schedule or manual run; Gmail API with read-only scope.",
+    outputs: "Raw records handed to sub-workflow 13; a saved sync cursor.",
+    privacy: `Read-only scope, approved window and request budget. ${NO_SAVE}`,
+  },
+  TendGoogle12: {
+    purpose: "Read-only sync of the chosen Google Calendars.",
+    inputs: "Schedule or manual run; Calendar API with read-only scope.",
+    outputs: "Events handed to sub-workflow 13; a saved sync cursor.",
+    privacy: `Read-only scope, chosen calendars only. ${NO_SAVE}`,
+  },
+  TendGoogle13: {
+    purpose: "Sub-workflow: normalize and store approved Google records.",
+    inputs: "Called by 11 and 12 with raw approved records.",
+    outputs: "Committed records in the canonical store and page context.",
+    privacy: `Validates the approved scope before any write. ${NO_SAVE}`,
+  },
+  TendGoogle14: {
+    purpose: "Owner control over Telegram for the approved Google lane.",
+    inputs: "Telegram private message from the configured owner.",
+    outputs: "One reply to the authorized owner and a send acknowledgement.",
+    privacy: `Every other sender or chat is refused. ${NO_SAVE}`,
+  },
+  TendGoogle15: {
+    purpose: "Local AI promise extraction on newly authored Google evidence.",
+    inputs: "Schedule or manual run; eligible authored spans from the store.",
+    outputs: "Owner-scoped pending promises with exact quotes.",
+    privacy: `Local Ollama only; nothing is active until the owner confirms. ${NO_SAVE}`,
+  },
+  TendLive16: {
+    purpose: "Local AI cited briefing or review draft for one chosen contact.",
+    inputs: "Manual run with an explicit contact and review purpose.",
+    outputs: "A cited briefing or draft for owner review. Nothing is sent.",
+    privacy: `Local Ollama only; every claim must cite stored evidence. ${NO_SAVE}`,
+  },
+  TendSocial17: {
+    purpose: "Read one verified page of personal WhatsApp (Unipile).",
+    inputs: "Manual run; approved provider account and phase.",
+    outputs: "One bounded page of records for the private store.",
+    privacy: `Read-only; owner identity verified first. ${NO_SAVE}`,
+  },
+  TendSocial18: {
+    purpose: "Read one verified page of LinkedIn messages.",
+    inputs: "Manual run; approved provider account and phase.",
+    outputs: "One bounded page of records for the private store.",
+    privacy: `Read-only; owner identity verified first. ${NO_SAVE}`,
+  },
+  TendSocial19: {
+    purpose: "Read one verified page of business WhatsApp (Unipile).",
+    inputs: "Manual run; approved provider account and phase.",
+    outputs: "One bounded page of records for the private store.",
+    privacy: `Read-only; owner identity verified first. ${NO_SAVE}`,
+  },
+  TendDailyOwnerBriefing: {
+    purpose: "Daily private briefing at 09:00 Paris, sent once per day.",
+    inputs: "Schedule with bounded catch-up; the dated priority digest.",
+    outputs: "One Telegram message to the owner and its acknowledgement.",
+    privacy: `Sent only to the exact configured owner chat. ${NO_SAVE}`,
+  },
+  TendPrivate22: {
+    purpose: "Error workflow for private workflows 10-20.",
+    inputs:
+      "n8n Error Trigger (production runs only; publish 22 after import).",
+    outputs: "POST /api/live/failure-log on the private API.",
+    privacy: `Keeps workflow and node names, plus a literal guard message or HTTP status; any other error text is withheld. ${NO_SAVE}`,
+  },
+  ...outreachCanvasNotes,
+  TendReview21: {
+    purpose: "Error workflow for fictional workflows 01-09.",
+    inputs:
+      "n8n Error Trigger (production runs only; publish 21 after import).",
+    outputs: "POST /api/failure-log on the fixture API.",
+    privacy:
+      "Keeps only workflow name, failing node, a 200-character message and execution ID. No item data.",
+  },
+};
+function withCanvasNote<
+  W extends {
+    id: string;
+    nodes: { position: [number, number] }[];
+  },
+>(w: W): W {
+  const note = canvasNotes[w.id];
+  if (!note) throw new Error(`Missing canvas note for ${w.id}`);
+  const x = Math.min(...w.nodes.map((n) => n.position[0]));
+  const y = Math.min(...w.nodes.map((n) => n.position[1]));
+  w.nodes.push({
+    id: "canvas-note",
+    name: "About this workflow",
+    type: "n8n-nodes-base.stickyNote",
+    typeVersion: 1,
+    position: [x, y - 340],
+    parameters: {
+      content: `## ${w.id}\n**Purpose:** ${note.purpose}\n\n**Inputs:** ${note.inputs}\n\n**Outputs:** ${note.outputs}\n\n**Privacy:** ${note.privacy}`,
+      width: 520,
+      height: 300,
+      color: 7,
+    },
+    retryOnFail: false,
+  } as unknown as W["nodes"][number]);
+  return w;
+}
 await mkdir("workflows", { recursive: true });
-await writeJson("workflows/21-error-handler.json", errorHandler);
+await writeJson(
+  "workflows/21-error-handler.json",
+  withCanvasNote(errorHandler),
+);
 for (let i = 0; i < workflows.length; i++)
   await writeJson(
     `workflows/${String(i + 1).padStart(2, "0")}-${["gmail", "calendar", "whatsapp-personal", "whatsapp-business", "linkedin", "normalize-store", "extract-commitments", "assistant", "retry-fixture", "telegram-private", "google-gmail-readonly", "google-calendar-readonly", "google-normalize-store", "google-telegram-private", "google-extract-commitments", "live-ai-review", "personal-whatsapp-readonly", "linkedin-portability-readonly", "business-whatsapp-readonly"][i]}.json`,
-    workflows[i],
+    withCanvasNote(workflows[i]!),
   );
 await writeJson(
   "workflows/20-daily-owner-briefing.json",
-  buildDailyBriefingWorkflow(),
+  withCanvasNote(dailyWorkflow),
 );
+await writeJson(
+  "workflows/22-private-error-handler.json",
+  withCanvasNote(privateErrorHandler),
+);
+for (const { file, workflow: w } of outreachWorkflows)
+  await writeJson(`workflows/${file}`, withCanvasNote(w));
 await mkdir("fixtures", { recursive: true });
 await writeJson("fixtures/local-ollama.json", [
   {
@@ -1663,5 +1879,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length + 2} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 3 + outreachWorkflows.length} inactive workflow exports and fictional fixture data.`,
 );

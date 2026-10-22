@@ -207,6 +207,20 @@
           "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
         }
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendDailyOwnerBriefing\n**Purpose:** Daily private briefing at 09:00 Paris, sent once per day.\n\n**Inputs:** Schedule with bounded catch-up; the dated priority digest.\n\n**Outputs:** One Telegram message to the owner and its acknowledgement.\n\n**Privacy:** Sent only to the exact configured owner chat. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {
@@ -312,7 +326,8 @@
     "executionTimeout": 180,
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "errorWorkflow": "TendPrivate22"
   },
   "pinData": {},
   "tags": []

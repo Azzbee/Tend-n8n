@@ -84,6 +84,20 @@
       "typeVersion": 2,
       "position": [1000, 180],
       "parameters": { "jsCode": "throw new Error('unsupported command');" }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview08\n**Purpose:** Route an owner command and build a cited briefing preview.\n\n**Inputs:** Manual run with a fictional private command.\n\n**Outputs:** An owner-scoped reply preview, or a rejection.\n\n**Privacy:** Owner and private chat checked first. Fictional data only. Failures go to error workflow 21.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

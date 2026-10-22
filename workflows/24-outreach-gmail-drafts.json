@@ -1,0 +1,150 @@
+{
+  "id": "TendReview24",
+  "name": "Tend 24: Approved outreach to mock Gmail drafts (fictional lane)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "every-10-minutes",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 10 }] }
+      }
+    },
+    {
+      "id": "run-fictional-demo",
+      "name": "Run fictional demo",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [260, 0],
+      "parameters": {}
+    },
+    {
+      "id": "approved-email-only",
+      "name": "Approved email only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/outreach/approved-email",
+        "options": { "timeout": 10000 }
+      },
+      "notes": "Returns only email items whose exact text the owner approved in the last 24 hours, with a re-verified recipient. Empty while OUTREACH_ENABLED is not true."
+    },
+    {
+      "id": "one-item-per-approved-draft",
+      "name": "One item per approved draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!x||!Array.isArray(x.items))throw new Error('invalid approved list');return x.items.map(i=>({json:{id:i.id,approval_hash:i.approval_hash,message:{raw:i.message.raw}}}));"
+      }
+    },
+    {
+      "id": "create-gmail-draft-drafts-create-only-",
+      "name": "Create Gmail draft (drafts.create only)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/mock-gmail/gmail/v1/users/me/drafts",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ message: { raw: $json.message.raw } }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "retryOnFail": false,
+      "notes": "Mock Gmail on the fixture API: accepts drafts.create for example.invalid recipients only.",
+      "notesInFlow": true
+    },
+    {
+      "id": "read-draft-receipt",
+      "name": "Read draft receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 0],
+      "parameters": {
+        "jsCode": "const sent=$('One item per approved draft').all();return $input.all().map((it,i)=>{if(!it.json||typeof it.json.id!=='string')throw new Error('Gmail draft receipt missing');return {json:{id:sent[i].json.id,approval_hash:sent[i].json.approval_hash,draft_id:it.json.id}};});"
+      }
+    },
+    {
+      "id": "record-draft-in-send-ledger",
+      "name": "Record draft in send ledger",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18767/api/outreach/gmail-draft",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 10000 }
+      }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview24\n**Purpose:** Turns owner-approved email drafts into mock Gmail drafts and records them in the send ledger.\n\n**Inputs:** Approved email items with their exact approved text from the fixture API.\n\n**Outputs:** A mock Gmail draft per item and a gmail_draft_created ledger entry.\n\n**Privacy:** Mock Gmail accepts drafts.create for example.invalid recipients only. No real account is reached.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Every 10 minutes": {
+      "main": [[{ "node": "Approved email only", "type": "main", "index": 0 }]]
+    },
+    "Run fictional demo": {
+      "main": [[{ "node": "Approved email only", "type": "main", "index": 0 }]]
+    },
+    "Approved email only": {
+      "main": [
+        [{ "node": "One item per approved draft", "type": "main", "index": 0 }]
+      ]
+    },
+    "One item per approved draft": {
+      "main": [
+        [
+          {
+            "node": "Create Gmail draft (drafts.create only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail draft (drafts.create only)": {
+      "main": [[{ "node": "Read draft receipt", "type": "main", "index": 0 }]]
+    },
+    "Read draft receipt": {
+      "main": [
+        [{ "node": "Record draft in send ledger", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "executionTimeout": 300,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "errorWorkflow": "TendReview21"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "tendreview24-v1",
+  "meta": { "templateCredsSetupCompleted": false }
+}

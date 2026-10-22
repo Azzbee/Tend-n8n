@@ -19,10 +19,36 @@ import {
 import { createLiveServer } from "./live-api.ts";
 import { InternalAuth } from "./internal-auth.ts";
 import { parseLivePolicy } from "./live-policy.ts";
+import { OutreachBook } from "./outreach-store.ts";
+import { MockGmail } from "./outreach-gmail.ts";
+import {
+  FIXTURE_OUTREACH_CLOCK,
+  createPrivateOutreach,
+  fixtureOutreachRoute,
+  snapshotOf,
+} from "./outreach-service.ts";
 function startFixtureServer(): void {
   mkdirSync(".scratch", { recursive: true });
-  const store = new TendStore(
+  // Fictional outreach lane: its own ledger file and a mock Gmail; nothing
+  // here can reach a real account.
+  const outreach = new OutreachBook(
+    process.env.TEND_OUTREACH_DB ?? ".scratch/outreach.sqlite",
+    {
+      owner_id: "demo-owner",
+      lane: "fictional",
+      clock: () =>
+        new Date(process.env.TEND_OUTREACH_CLOCK ?? FIXTURE_OUTREACH_CLOCK),
+      sendingEnabled: true,
+    },
+  );
+  const mockGmail = new MockGmail();
+  const outreachSnapshot = () => snapshotOf(store, "demo-owner");
+  const store: TendStore = new TendStore(
     process.env.TEND_DEMO_DB ?? ".scratch/demo.sqlite",
+    {
+      commandExtension: (auth) =>
+        outreach.telegram(auth.text, outreachSnapshot()),
+    },
   );
   store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
   const retryAttempts = new Map<string, number>();
@@ -164,6 +190,21 @@ function startFixtureServer(): void {
         });
         return;
       }
+      const outreachGet =
+        req.method === "GET"
+          ? fixtureOutreachRoute(
+              outreach,
+              mockGmail,
+              outreachSnapshot,
+              "GET",
+              url.pathname,
+              null,
+            )
+          : null;
+      if (outreachGet) {
+        respond(outreachGet.status, outreachGet.body);
+        return;
+      }
       if (req.method !== "POST") {
         respond(404, { error: "unknown endpoint" });
         return;
@@ -241,6 +282,18 @@ function startFixtureServer(): void {
             text: input.text,
           },
         });
+        return;
+      }
+      const outreachPost = fixtureOutreachRoute(
+        outreach,
+        mockGmail,
+        outreachSnapshot,
+        "POST",
+        url.pathname,
+        input,
+      );
+      if (outreachPost) {
+        respond(outreachPost.status, outreachPost.body);
         return;
       }
       if (url.pathname === "/api/failure-log") {
@@ -351,6 +404,7 @@ function startFixtureServer(): void {
     process.on(signal, () =>
       server.close(() => {
         store.close();
+        outreach.close();
         process.exit(0);
       }),
     );
@@ -404,10 +458,12 @@ async function startLiveServer(): Promise<void> {
     throw new Error(
       "Daily briefing requires its persisted owner and activation timestamp together",
     );
+  const outreach = createPrivateOutreach(store, policy.principal_id);
   const server = createLiveServer({
     policy,
     store,
     auth,
+    outreach,
     normalModel: services.normalModel,
     normalSemanticSearch: services.normalSemanticSearch,
     privateSemanticSearch: services.privateSemanticSearch,

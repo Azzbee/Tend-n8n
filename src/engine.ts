@@ -99,6 +99,8 @@ export interface StoreOptions {
   mode?: "fixture" | "live";
   principal?: { owner_id: string; user_id: string; chat_id: string };
   clock?: () => Date;
+  // Extra owner commands (outreach) handled before the built-in ones.
+  commandExtension?: (auth: AuthCommand) => Reply | null;
 }
 export interface LiveBatch {
   evidence_incomplete?: boolean;
@@ -970,6 +972,7 @@ export class TendStore {
     chat_id: string;
   };
   private readonly clock: () => Date;
+  private readonly commandExtension: StoreOptions["commandExtension"];
   constructor(path: string, options: StoreOptions = {}) {
     this.mode = options.mode ?? "fixture";
     if (this.mode === "live" && !options.principal)
@@ -980,6 +983,7 @@ export class TendStore {
       chat_id: "demo-private",
     };
     this.clock = options.clock ?? (() => new Date());
+    this.commandExtension = options.commandExtension;
     this.db = new DatabaseSync(path);
 
     this.db.exec(`PRAGMA foreign_keys=ON;
@@ -2924,6 +2928,8 @@ export class TendStore {
       throw new Error("invalid Telegram update key");
   }
   private executeCommand(auth: AuthCommand): Reply {
+    const extended = this.commandExtension?.(auth);
+    if (extended) return extended;
     const tokens = auth.text.trim().split(/\s+/);
     const [cmd, id, date, ...extra] = tokens;
     const expectedArgs =
