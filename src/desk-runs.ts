@@ -11,19 +11,20 @@ export interface RunRow {
 }
 export type RunRunner = (script: string, timeoutMs: number) => Promise<string>;
 
-// Insights types in n8n: 1 = success, 2 = failure. Raw rows are compacted into periods, so both are read.
+// n8n insights types: 0 time saved, 1 runtime, 2 success, 3 failure (checked against tend-nocode-live:
+// types 2 and 3 add up to the runtime count). Raw rows are compacted into periods, so both are read.
 export const insightsScript = (dbPath: string): string => `
 const { DatabaseSync } = require("node:sqlite");
 const db = new DatabaseSync(${JSON.stringify(dbPath)}, { readOnly: true });
 const rows = db.prepare(\`
   SELECT m.workflowName AS name,
-    MAX(CASE WHEN x.type = 1 THEN x.at END) AS last_success,
-    MAX(CASE WHEN x.type = 2 THEN x.at END) AS last_failure
+    MAX(CASE WHEN x.type = 2 THEN x.at END) AS last_success,
+    MAX(CASE WHEN x.type = 3 THEN x.at END) AS last_failure
   FROM insights_metadata m
   JOIN (
-    SELECT metaId, type, timestamp AS at FROM insights_raw WHERE type IN (1, 2)
+    SELECT metaId, type, timestamp AS at FROM insights_raw WHERE type IN (2, 3)
     UNION ALL
-    SELECT metaId, type, periodStart AS at FROM insights_by_period WHERE type IN (1, 2) AND value > 0
+    SELECT metaId, type, periodStart AS at FROM insights_by_period WHERE type IN (2, 3) AND value > 0
   ) x ON x.metaId = m.metaId
   GROUP BY m.metaId\`).all();
 db.close();
@@ -44,9 +45,16 @@ export function dockerRunner(container: string): RunRunner {
     });
 }
 
+// The live editor runs the social read pages 17-19 as scheduled pollers under these names
+// (same node shapes as the exports; checked read-only on 22 Oct).
+export const deployedWorkflowNames: Record<string, string> = {
+  "Tend private scheduled personal bounded polling": "17",
+  "Tend private scheduled linkedin bounded polling": "18",
+  "Tend private scheduled business bounded polling": "19",
+};
 // Exported workflow names map to catalog IDs; probes and copies with other names are ignored.
 export function exportedWorkflowNames(dir = "workflows"): Map<string, string> {
-  const names = new Map<string, string>();
+  const names = new Map<string, string>(Object.entries(deployedWorkflowNames));
   for (const file of readdirSync(dir))
     if (/^\d\d-.*\.json$/.test(file)) {
       const value: unknown = JSON.parse(readFileSync(`${dir}/${file}`, "utf8"));

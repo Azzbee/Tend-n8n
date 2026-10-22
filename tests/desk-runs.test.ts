@@ -15,7 +15,10 @@ const daily = [...names].find(([, id]) => id === "20")![0];
 describe("workflow run reader", () => {
   it("maps exported workflow names to catalog IDs and ignores probes and copies", () => {
     expect(names.get(gmail)).toBe("11");
-    expect(names.size).toBe(26);
+    expect(names.size).toBe(29);
+    expect(names.get("Tend private scheduled business bounded polling")).toBe(
+      "19",
+    );
     const runs = runsFromRows(
       [
         {
@@ -136,6 +139,8 @@ describe("workflow run reader", () => {
   it("opens the n8n database read-only and selects only names, outcomes and times", () => {
     const script = insightsScript("/home/node/.n8n/database.sqlite");
     expect(script).toContain("readOnly: true");
+    expect(script).toContain("WHEN x.type = 2 THEN x.at END) AS last_success");
+    expect(script).toContain("WHEN x.type = 3 THEN x.at END) AS last_failure");
     expect(script).toMatch(/SELECT m\.workflowName AS name/);
     expect(script).not.toMatch(
       /execution_data|execution_entity|credentials|INSERT|UPDATE|DELETE|DROP/i,
