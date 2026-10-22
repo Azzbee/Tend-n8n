@@ -46,7 +46,11 @@ import {
   buildRawMessage,
   decodeRawMessage,
 } from "../src/outreach-gmail.ts";
-import { telegramGuardCode, telegramReplyCode } from "../src/telegram.ts";
+import {
+  configuredLiveGuard,
+  telegramGuardCode,
+  telegramReplyCode,
+} from "../src/telegram.ts";
 
 const at = (iso: string) => () => new Date(iso);
 function world(clock: () => Date = at(FIXTURE_OUTREACH_CLOCK)) {
@@ -574,6 +578,38 @@ describe("Desk backend and Telegram commands", () => {
     expect(rendered[0]!.json.text).toContain(
       "Outreach refused: cannot approve a skipped item",
     );
+  });
+  it("lets the live owner guard route /outreach, /approve, /edit and /skip", () => {
+    const guard = configuredLiveGuard(
+      "424242",
+      "424242",
+      "owner-1",
+      "owner-channel",
+    );
+    for (const text of [
+      "/outreach",
+      "/approve Oabc 0a1b2c3d",
+      "/edit Oabc Hi",
+      "/skip Oabc",
+    ]) {
+      const routed = vm.runInNewContext(`(function(){${guard}})()`, {
+        $input: {
+          first: () => ({
+            json: {
+              update_id: 9,
+              message: {
+                message_id: 1,
+                from: { id: 424242, is_bot: false },
+                chat: { id: 424242, type: "private" },
+                text,
+              },
+            },
+          }),
+        },
+      }) as { json: { help: boolean; command: { text: string } } }[];
+      expect(routed[0]!.json.help, text).toBe(false);
+      expect(routed[0]!.json.command.text).toBe(text);
+    }
   });
   it("serves the Desk contract shape", async () => {
     const { service } = createFixtureOutreachService();
