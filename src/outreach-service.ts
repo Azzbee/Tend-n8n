@@ -1,0 +1,148 @@
+import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
+import type { LiveStore } from "./live-store.ts";
+import {
+  demoAuth,
+  fixtureContacts,
+  fixtureIdentities,
+  fixtureRecords,
+  fixtureSources,
+} from "./fixtures.ts";
+import type { OutreachSnapshot } from "./outreach.ts";
+import { OutreachBook, type OutreachItem } from "./outreach-store.ts";
+import { MockGmail } from "./outreach-gmail.ts";
+
+// Fixture world clock for outreach: four days after the fixture clock, at
+// 09:00 Paris, so every planner rule has a fictional example.
+export const FIXTURE_OUTREACH_CLOCK = "2026-10-17T07:00:00.000Z";
+
+export function snapshotOf(store: TendStore, owner: string): OutreachSnapshot {
+  return {
+    contacts: store.contacts(owner),
+    commitments: store.commitments(owner),
+    interactions: store.interactions(owner),
+  };
+}
+export async function liveSnapshotOf(
+  store: LiveStore,
+  owner: string,
+): Promise<OutreachSnapshot> {
+  const [contacts, commitments, interactions] = await Promise.all([
+    store.contacts(owner),
+    store.commitments(owner),
+    store.interactions(owner),
+  ]);
+  return { contacts, commitments, interactions };
+}
+// Async backend the Desk's /private/api/outreach routes call
+// (DeskOutreachBackend on improve/desk-ui). Throwing rejects the request.
+export class OutreachService {
+  readonly book: OutreachBook;
+  private load: () => OutreachSnapshot | Promise<OutreachSnapshot>;
+  constructor(
+    book: OutreachBook,
+    load: () => OutreachSnapshot | Promise<OutreachSnapshot>,
+  ) {
+    this.book = book;
+    this.load = load;
+  }
+  async list(): Promise<{ items: OutreachItem[] }> {
+    return this.book.list(await this.load());
+  }
+  async approve(id: string): Promise<OutreachItem> {
+    return this.book.approve(id, await this.load());
+  }
+  async edit(id: string, text: string): Promise<OutreachItem> {
+    return this.book.edit(id, text, await this.load());
+  }
+  async skip(id: string): Promise<OutreachItem> {
+    return this.book.skip(id, await this.load());
+  }
+}
+// Confirms the two fictional promises (g1 owed to the owner, g2 owed by the
+// owner) the way /confirm does, so the planner has open commitments.
+export function confirmFixturePromises(store: TendStore): void {
+  for (const id of ["g1", "g2"]) {
+    const record = fixtureRecords.find((r) => r.source_record_id === id)!;
+    const candidate = store.addCandidate(record, {
+      quote: record.body_text,
+      action: id === "g1" ? "send the demo" : "review your demo",
+      suggested_due: id === "g1" ? "2026-10-15" : "2026-10-16",
+    });
+    if (candidate.status === "pending")
+      store.command({
+        ...demoAuth,
+        text: `/confirm ${candidate.commitment_id} ${candidate.suggested_due}`,
+      });
+  }
+}
+// In-memory fictional lane for tests and Desk demos: Mira Tan (F17) data,
+// confirmed promises and one planner run at the fixture outreach clock.
+export function createFixtureOutreachService(
+  clock: () => Date = () => new Date(FIXTURE_OUTREACH_CLOCK),
+): { service: OutreachService; book: OutreachBook; store: TendStore } {
+  const store = new TendStore(":memory:");
+  store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
+  store.ingestBatch(fixtureRecords, "fixture");
+  confirmFixturePromises(store);
+  const book = new OutreachBook(":memory:", {
+    owner_id: "demo-owner",
+    lane: "fictional",
+    clock,
+    sendingEnabled: true,
+  });
+  const load = (): OutreachSnapshot => snapshotOf(store, "demo-owner");
+  book.plan(load());
+  return { service: new OutreachService(book, load), book, store };
+}
+export function outreachTelegramExtension(
+  book: () => OutreachBook,
+  load: () => OutreachSnapshot,
+): (auth: AuthCommand) => ReturnType<OutreachBook["telegram"]> {
+  return (auth) => book().telegram(auth.text, load());
+}
+type RouteResult = { status: number; body: unknown } | null;
+// Fixture API routes for workflows 22-23 and the integration check.
+export function fixtureOutreachRoute(
+  book: OutreachBook,
+  gmail: MockGmail,
+  load: () => OutreachSnapshot,
+  method: string,
+  path: string,
+  input: unknown,
+): RouteResult {
+  if (path.startsWith("/api/mock-gmail/"))
+    return gmail.handle(method, path, input);
+  if (path !== "/api/outreach" && !path.startsWith("/api/outreach/"))
+    return null;
+  const body = isRecord(input) ? input : {};
+  const id = typeof body.id === "string" ? body.id : "";
+  const ok = (data: unknown): RouteResult => ({
+    status: 200,
+    body: { fictional: true, ...(data as object) },
+  });
+  if (method === "GET" && path === "/api/outreach")
+    return ok(book.list(load()));
+  if (method === "GET" && path === "/api/outreach/approved-email")
+    return ok(book.approvedEmail(load()));
+  if (method === "GET" && path === "/api/outreach/ledger")
+    return ok({ ledger: book.ledger(), mock_gmail_drafts: gmail.drafts });
+  if (method !== "POST") return null;
+  if (path === "/api/outreach/plan") return ok(book.plan(load()));
+  if (path === "/api/outreach/draft")
+    return ok(book.modelDraft(id, body.text, load()));
+  if (path === "/api/outreach/approve")
+    return ok({ item: book.approve(id, load()) });
+  if (path === "/api/outreach/edit")
+    return ok({ item: book.edit(id, String(body.text ?? ""), load()) });
+  if (path === "/api/outreach/skip") return ok({ item: book.skip(id, load()) });
+  if (path === "/api/outreach/gmail-draft")
+    return ok({
+      item: book.recordGmailDraft(
+        id,
+        body.approval_hash,
+        body.draft_id,
+        load(),
+      ),
+    });
+  return null;
+}

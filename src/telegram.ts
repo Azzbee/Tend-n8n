@@ -12,7 +12,7 @@ if (!validId(message.from.id) || !validId(message.chat.id) || String(message.fro
 if (typeof message.text !== 'string' || message.text.length > 500) return [];
 const text = message.text.trim();
 if (!text.startsWith('/')) return [];
-const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel)(?:\\s|$)/.test(text);
+const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel|outreach|approve|edit|skip)(?:\\s|$)/.test(text);
 return [{json:{reply_chat_id:allowedChatId,help,telegram_update_id:update.update_id,telegram_channel_id:'tend-course-control',command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
 `;
 export const telegramLiveGuardCode = telegramGuardCode
@@ -23,6 +23,7 @@ export const telegramLiveGuardCode = telegramGuardCode
     "status|today|prep|draft|confirm|done|cancel",
     "status|today|contacts|prep|draft|confirm|done|cancel",
   )
+  .replace("|outreach|approve|edit|skip", "")
   .replace("demo-owner", "CONFIGURE_LIVE_PRINCIPAL_ID")
   .replace("demo-user", "live-owner")
   .replace("demo-private", "live-private")
@@ -39,7 +40,7 @@ const reply = $input.first().json;
 const record = value => typeof value === 'object' && value !== null && !Array.isArray(value);
 const string = value => typeof value === 'string' ? value : '';
 const lines = ['Course demo • fictional data'];
-if(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');
+if(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID, /outreach, /approve ID, /edit ID text, /skip ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');
 else if(!record(reply) || reply.error) lines.push('Command failed. Check the command and local service. Use /help for examples.');
 else {
  if(record(reply.counts)) lines.push('Source records: ' + reply.counts.interactions + '. Promise candidates: ' + reply.counts.commitments + '.');
@@ -58,6 +59,8 @@ else {
  if(Array.isArray(reply.evidence)) {lines.push('Evidence:');for(const item of reply.evidence.filter(record))lines.push(string(item.source) + ': ' + string(item.text) + ' [' + string(item.reference) + ']');}
  if(typeof reply.commitment_id === 'string')lines.push(reply.commitment_id + ': ' + string(reply.status) + '. Due ' + (reply.due_date || 'not confirmed') + '.',string(reply.action));
  if(typeof reply.preview === 'string')lines.push('Private draft preview only. Nothing sent to a contact.',reply.preview);
+ if(Array.isArray(reply.outreach)){lines.push('Outreach drafts. Nothing goes out until you approve; email becomes a Gmail draft you send yourself.');if(!reply.outreach.length)lines.push('None waiting.');for(const item of reply.outreach.filter(record))lines.push(string(item.id)+' ['+string(item.status)+'] '+string(item.contact_name)+' via '+string(item.channel)+': '+string(item.draft_text));}
+ if(record(reply.outreach_item)){const o=reply.outreach_item;lines.push(string(o.id)+': '+string(o.status)+'.',string(o.draft_text));if(typeof o.deep_link==='string')lines.push('Copy and send it yourself: '+o.deep_link);}
  if(typeof reply.warning === 'string')lines.push(reply.warning);
 }
 let text = lines.join('\\n');
@@ -94,6 +97,7 @@ export function configuredLiveGuard(
     .replaceAll("CONFIGURE_LIVE_CHANNEL_ID", channelId);
 }
 export const telegramLiveReplyCode = telegramReplyCode
+  .replace(", /outreach, /approve ID, /edit ID text, /skip ID.", ".")
   .replace("['Course demo • fictional data']", "['Tend • private assistant']")
   .replace(
     "Commands: /status, /today, /prep F17,",
