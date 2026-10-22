@@ -69,10 +69,11 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships twenty-two inactive exports without private account credentials or external recipients", () => {
+  it("ships twenty-six inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(22);
+    expect(files).toHaveLength(26);
     expect(files).toContain("22-private-error-handler.json");
+    expect(files).toContain("26-private-outreach-gmail-drafts.json");
     expect(files).toContain("21-error-handler.json");
     expect(files).toContain("20-daily-owner-briefing.json");
     for (const f of files) {

@@ -3,6 +3,10 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
 import { buildDailyBriefingWorkflow } from "./daily-workflow.ts";
 import {
+  buildOutreachWorkflows,
+  outreachCanvasNotes,
+} from "./outreach-workflows.ts";
+import {
   guardMessages,
   redactorCode,
   workflowCodeSources,
@@ -1642,10 +1646,14 @@ for (const w of workflows)
 // execution data and keeps a message only when it is a literal guard string
 // from the private workflow code, otherwise just an HTTP status or nothing.
 const dailyWorkflow = buildDailyBriefingWorkflow();
+const outreachWorkflows = buildOutreachWorkflows();
 const privateWorkflows = [
   ...workflows.filter((w) => /^Tend(Live|Google|Social)/.test(w.id)),
   dailyWorkflow,
 ];
+const privateOutreachCode = outreachWorkflows
+  .filter(({ workflow: w }) => w.settings.errorWorkflow === "TendPrivate22")
+  .flatMap(({ workflow: w }) => workflowCodeSources(w));
 const privateErrorHandler = workflow(
   "TendPrivate22",
   "Tend 22: Error handler (private lane)",
@@ -1654,7 +1662,10 @@ const privateErrorHandler = workflow(
     code(
       "Keep names and allowlisted guard text only",
       redactorCode(
-        guardMessages(privateWorkflows.flatMap((w) => workflowCodeSources(w))),
+        guardMessages([
+          ...privateWorkflows.flatMap((w) => workflowCodeSources(w)),
+          ...privateOutreachCode,
+        ]),
       ),
       260,
     ),
@@ -1793,6 +1804,7 @@ const canvasNotes: Record<
     outputs: "POST /api/live/failure-log on the private API.",
     privacy: `Keeps workflow and node names, plus a literal guard message or HTTP status; any other error text is withheld. ${NO_SAVE}`,
   },
+  ...outreachCanvasNotes,
   TendReview21: {
     purpose: "Error workflow for fictional workflows 01-09.",
     inputs:
@@ -1846,6 +1858,8 @@ await writeJson(
   "workflows/22-private-error-handler.json",
   withCanvasNote(privateErrorHandler),
 );
+for (const { file, workflow: w } of outreachWorkflows)
+  await writeJson(`workflows/${file}`, withCanvasNote(w));
 await mkdir("fixtures", { recursive: true });
 await writeJson("fixtures/local-ollama.json", [
   {
@@ -1865,5 +1879,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length + 3} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 3 + outreachWorkflows.length} inactive workflow exports and fictional fixture data.`,
 );

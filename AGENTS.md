@@ -6,7 +6,7 @@ The global rules in `~/.codex/AGENTS.md` still apply; this file adds only what i
 ## Layout
 
 - `src/`: typed fixture API, evidence/state engine, export builder and runnable checks.
-- `workflows/`: twenty-two inactive generated exports. Private live deployment IDs stay under ignored .scratch and must never enter public bundles.
+- `workflows/`: twenty-six inactive generated exports. Private live deployment IDs stay under ignored .scratch and must never enter public bundles.
 - `fixtures/`, `schema/`, `evidence/`: fictional inputs, proposed PostgreSQL schema and observed check records.
 - `Review.html`, `Specification.txt`, `Demo-guide.txt`: user review and rehearsal material.
 

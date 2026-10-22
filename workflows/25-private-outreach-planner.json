@@ -1,0 +1,176 @@
+{
+  "id": "TendLiveOutreachPlanner",
+  "name": "Tend 25: Outreach planner (private, inactive template)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "every-hour",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] }
+      }
+    },
+    {
+      "id": "plan-outreach-quiet-hours-3-day-limit-",
+      "name": "Plan outreach (quiet hours, 3-day limit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/outreach/plan",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({}) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 10000 }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Proposes nudges, updates, meeting follow-ups and replies from confirmed promises and meetings. Instruction-like messages are held back, never drafted.",
+      "notesInFlow": true
+    },
+    {
+      "id": "one-item-per-proposal",
+      "name": "One item per proposal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!x||!Array.isArray(x.created))throw new Error('invalid outreach plan');return x.created.map(i=>({json:{id:i.id,request:i.request}}));"
+      }
+    },
+    {
+      "id": "local-ai-draft-ollama-cited-evidence-only-",
+      "name": "Local AI draft (Ollama, cited evidence only)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:11434/api/chat",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.request) }}",
+        "options": { "timeout": 60000 }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "read-model-text",
+      "name": "Read model text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 0],
+      "parameters": {
+        "jsCode": "const props=$('One item per proposal').all();return $input.all().map((it,i)=>{let text=null;try{const c=it.json&&it.json.message&&it.json.message.content;const o=typeof c==='string'?JSON.parse(c):null;if(o&&typeof o.text==='string')text=o.text.slice(0,1200);}catch(e){}return {json:{id:props[i].json.id,text}};});"
+      }
+    },
+    {
+      "id": "save-draft-if-every-detail-is-cited",
+      "name": "Save draft if every detail is cited",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/outreach/draft",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 10000 }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind the private Header Auth credential. No secret is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendLiveOutreachPlanner\n**Purpose:** Private outreach planner template: the same rules as 23 against the private API.\n\n**Inputs:** Private promises, meetings and threads through the internal API; local Ollama.\n\n**Outputs:** Pending drafts for the owner to approve on the Desk or in Telegram.\n\n**Privacy:** Inactive template, no saved execution data, internal credential placeholder. n8n cannot approve; nothing is sent.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Plan outreach (quiet hours, 3-day limit)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan outreach (quiet hours, 3-day limit)": {
+      "main": [
+        [{ "node": "One item per proposal", "type": "main", "index": 0 }]
+      ]
+    },
+    "One item per proposal": {
+      "main": [
+        [
+          {
+            "node": "Local AI draft (Ollama, cited evidence only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Local AI draft (Ollama, cited evidence only)": {
+      "main": [[{ "node": "Read model text", "type": "main", "index": 0 }]]
+    },
+    "Read model text": {
+      "main": [
+        [
+          {
+            "node": "Save draft if every detail is cited",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "executionTimeout": 300,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false,
+    "errorWorkflow": "TendPrivate22"
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "tendliveoutreachplanner-v1",
+  "meta": { "templateCredsSetupCompleted": false }
+}

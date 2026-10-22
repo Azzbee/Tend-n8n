@@ -805,8 +805,8 @@ try {
       "import",
     );
     assert(
-      imported.includes("Successfully imported 22 workflows"),
-      "twenty-two-workflow import failed",
+      imported.includes("Successfully imported 26 workflows"),
+      "twenty-six-workflow import failed",
     );
     // n8n only calls a published error workflow, and only for production runs.
     command(
@@ -817,7 +817,7 @@ try {
       name: "Clean n8n import",
       pass: true,
       detail:
-        "22 workflows imported, error handler 21 published; local Ollama configuration, no private account secret; live Telegram template remains inactive",
+        "26 workflows imported, error handler 21 published; local Ollama configuration, no private account secret; live Telegram template remains inactive",
     });
     if (process.env.TEND_GOOGLE_CHECK_ONLY !== "1") {
       for (const wid of [

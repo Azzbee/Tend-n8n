@@ -34,10 +34,14 @@ export function loadPrivateGuardMessages(dir = "workflows"): string[] {
   try {
     return guardMessages(
       readdirSync(dir)
-        .filter((f) => /^(1\d|20)-.*\.json$/.test(f))
-        .flatMap((f) =>
-          workflowCodeSources(JSON.parse(readFileSync(`${dir}/${f}`, "utf8"))),
-        ),
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => JSON.parse(readFileSync(`${dir}/${f}`, "utf8")) as unknown)
+        .filter(
+          (w) =>
+            (w as { settings?: { errorWorkflow?: unknown } })?.settings
+              ?.errorWorkflow === "TendPrivate22",
+        )
+        .flatMap((w) => workflowCodeSources(w)),
     );
   } catch {
     // Fail closed: with no allowlist only HTTP statuses and WITHHELD pass.
