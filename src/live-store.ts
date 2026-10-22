@@ -92,6 +92,8 @@ export type LiveStoreMethod =
   | "resolveContact"
   | "addCandidate"
   | "commitments"
+  | "threadRows"
+  | "linkPromiseThreads"
   | "revokeSource"
   | "command"
   | "telegramCommand"

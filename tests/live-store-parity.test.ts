@@ -1739,6 +1739,148 @@ describe("canonical PostgreSQL live parity", () => {
       await store.close();
     }
   });
+  it("links, confirms, splits and counts promise threads the same way in PostgreSQL and SQLite", async () => {
+    const owner = "thread-owner",
+      threads = {
+        owner_id: owner,
+        user_id: "thread-user",
+        chat_id: "thread-chat",
+      },
+      auth = { ...threads, chat_type: "private" },
+      gmail = { ...state, owner_id: owner };
+    const pgThreads = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: threads,
+        clock,
+      }),
+      sqliteThreads = new TendStore(":memory:", {
+        mode: "live",
+        principal: threads,
+        clock,
+      });
+    // Fictional: Friend asks the same thing twice; Other writes the same words.
+    const sighting = (
+      id: string,
+      actor: string,
+      contact: string,
+      at: string,
+    ): LiveRecord => ({
+      ...record,
+      owner_id: owner,
+      source_record_id: id,
+      source_thread_id: `t-${id}`,
+      direction: "received",
+      actor_identity: actor,
+      participant_identities: [],
+      contact_ids: [contact],
+      occurred_at: at,
+      evidence_reference: `https://mail.google.com/mail/u/0/#all/${id}`,
+    });
+    const records = [
+      sighting("a1", "friend@example.com", "friend", "2026-10-12T10:00:00Z"),
+      sighting("a2", "friend@example.com", "friend", "2026-10-13T09:00:00Z"),
+      sighting("b1", "other@example.com", "other", "2026-10-13T10:00:00Z"),
+    ];
+    try {
+      for (const store of [pgThreads, sqliteThreads]) {
+        await store.seed(
+          [],
+          [
+            {
+              owner_id: owner,
+              identity: "owner@example.com",
+              contact_id: "OWNER",
+            },
+          ],
+          [gmail],
+        );
+        await store.commitLiveBatch({
+          ...batch(records),
+          owner_id: owner,
+          seen_record_ids: records.map((r) => r.source_record_id),
+          contacts: [
+            { owner_id: owner, contact_id: "friend", name: "Friend" },
+            { owner_id: owner, contact_id: "other", name: "Friend" },
+          ],
+          identities: [
+            {
+              owner_id: owner,
+              identity: "friend@example.com",
+              contact_id: "friend",
+            },
+            {
+              owner_id: owner,
+              identity: "other@example.com",
+              contact_id: "other",
+            },
+          ],
+          operation_hash: "c".repeat(64),
+        });
+        for (const r of records)
+          await store.addCandidate(r, {
+            quote: r.body_text,
+            action: "send the report",
+            suggested_due: "2026-10-15",
+          });
+      }
+      const same = async () => {
+        const [a, b] = [
+          await pgThreads.commitments(owner),
+          sqliteThreads.commitments(owner),
+        ];
+        const sort = (x: typeof b) =>
+          [...x].sort((p, q) => p.commitment_id.localeCompare(q.commitment_id));
+        expect(sort(a)).toEqual(sort(b));
+        expect(await pgThreads.threadRows(owner)).toEqual(
+          sqliteThreads.threadRows(owner),
+        );
+        expect(await pgThreads.counts(owner)).toEqual(
+          sqliteThreads.counts(owner),
+        );
+        return sort(b);
+      };
+      let rows = await same();
+      const [a1, a2, b1] = ["a1", "a2", "b1"].map((id) =>
+        rows.find(
+          (c) =>
+            c.quote === record.body_text &&
+            c.record_key ===
+              sqliteThreads
+                .interactions(owner)
+                .find((r) => r.source_record_id === id)!.record_key,
+        )!,
+      );
+      expect(a1!.thread_id).toBeDefined();
+      expect(a2!.thread_id).toBe(a1!.thread_id);
+      expect(b1!.thread_id).toBeUndefined();
+      expect(sqliteThreads.counts(owner).commitments).toBe(2);
+      for (const text of [
+        `/confirm ${a2!.commitment_id} 2026-10-15`,
+        "/status",
+        "/today",
+      ])
+        expect(await pgThreads.command({ ...auth, text })).toEqual(
+          sqliteThreads.command({ ...auth, text }),
+        );
+      rows = await same();
+      expect(rows.filter((c) => c.thread_id).map((c) => c.status)).toEqual([
+        "confirmed",
+        "confirmed",
+      ]);
+      const separate = `/separate ${a2!.commitment_id}`;
+      expect(await pgThreads.command({ ...auth, text: separate })).toEqual(
+        sqliteThreads.command({ ...auth, text: separate }),
+      );
+      expect(await pgThreads.linkPromiseThreads(owner)).toEqual([]);
+      expect(sqliteThreads.linkPromiseThreads(owner)).toEqual([]);
+      rows = await same();
+      expect(rows.some((c) => c.thread_id)).toBe(false);
+      expect(sqliteThreads.counts(owner).commitments).toBe(3);
+    } finally {
+      await pgThreads.close();
+      sqliteThreads.close();
+    }
+  });
   it("returns retryable failure when async storage initialization fails, without SQLite fallback", async () => {
     const policy = { ...exampleLivePolicy, principal_id: "failed-http-owner" },
       key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
