@@ -1,3 +1,4 @@
+import { INDEX_BUDGET } from "./semantic-search.ts";
 import { createHash } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import type { TendStore, Contact, Identity } from "./engine.ts";
@@ -43,7 +44,7 @@ export function createHistoryAPI(options: Options) {
     if (Object.values(size).some((x) => !Number.isFinite(x) || x < 0))
       throw new Error("History resource measurement unavailable");
     if (size.free_bytes < 2 * 1024 ** 3) return "disk_floor";
-    if (size.index_bytes >= 512 * 1024 ** 2) return "index_budget";
+    if (size.index_bytes >= INDEX_BUDGET) return "index_budget";
     return null;
   }
   const approved = (): void => {
