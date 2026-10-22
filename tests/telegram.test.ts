@@ -598,3 +598,30 @@ describe("private Google Telegram boundary", () => {
     expect(text).toContain("&lt;Same&gt;");
   });
 });
+
+describe("/dismiss reaches the owner command handler", () => {
+  const update = (text: string) => ({
+    update_id: 7,
+    message: {
+      text,
+      from: { id: 111, is_bot: false },
+      chat: { id: 222, type: "private" },
+    },
+  });
+  const run = (code: string, text: string) =>
+    vm.runInNewContext(`(function(){${code}})()`, {
+      $input: { first: () => ({ json: update(text) }) },
+    }) as { json: { help: boolean; command: { text: string } } }[];
+  it("passes /dismiss ID through the fictional and live guards and lists it in help", () => {
+    for (const code of [
+      configuredGuard("111", "222"),
+      configuredLiveGuard("111", "222", "live-principal", "live-channel"),
+    ]) {
+      const [out] = run(code, "/dismiss c-123");
+      expect(out!.json.help).toBe(false);
+      expect(out!.json.command.text).toBe("/dismiss c-123");
+    }
+    expect(telegramReplyCode).toContain("/dismiss ID");
+    expect(telegramLiveReplyCode).toContain("/dismiss ID");
+  });
+});
