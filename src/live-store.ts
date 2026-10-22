@@ -86,6 +86,7 @@ export type LiveStoreMethod =
   | "interactions"
   | "originalMessageTimes"
   | "extractionAttempted"
+  | "extractionCandidates"
   | "markExtractionAttempt"
   | "extractionReviewCount"
   | "resolveContact"

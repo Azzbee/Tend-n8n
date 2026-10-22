@@ -2550,6 +2550,24 @@ export class TendStore {
       ]),
     );
   }
+  // Records that may still yield a promise: direct authored messages, not yet
+  // attempted at this content (unless one record is asked for by key).
+  extractionCandidates(
+    owner: string,
+    recordKey: string | null,
+  ): NormalizedRecord[] {
+    return this.interactions(owner).filter(
+      (r) =>
+        r.kind === "message" &&
+        r.direction !== "event" &&
+        r.attribution === "direct" &&
+        r.eligible_for_extraction === true &&
+        !r.cancelled &&
+        (recordKey === null
+          ? !this.extractionAttempted(r)
+          : r.record_key === recordKey),
+    );
+  }
   extractionAttempted(record: NormalizedRecord): boolean {
     this.assertOwner(record.owner_id);
     const row = this.db
