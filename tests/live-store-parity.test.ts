@@ -191,6 +191,134 @@ describe("canonical PostgreSQL live parity", () => {
       await bot.close();
     }
   });
+  it("approves a real outreach draft through the private bot with /approve ID CODE", async () => {
+    // Relies on the promise the first test confirmed (owed by the owner, due 2026-10-15).
+    const bot = await PostgresStore.open({
+      connectionString: runtime.connectionString,
+      principal,
+      clock,
+    });
+    try {
+      const outreach = createPrivateOutreach(
+        bot,
+        principal.owner_id,
+        { TEND_OUTREACH_DB: ":memory:", OUTREACH_ENABLED: "false" },
+        clock,
+      );
+      const planned = (await outreach.route(
+        "POST",
+        "/api/live/outreach/plan",
+        {},
+      ))!.body as { created: { id: string; reason: string }[] };
+      expect(planned.created.map((c) => c.reason)).toEqual(["you_owe_soon"]);
+      const id = planned.created[0]!.id;
+      const say = async (text: string, update: number) =>
+        (
+          await bot.telegramCommand(
+            { ...principal, chat_type: "private", text },
+            "outreach-approve",
+            update,
+          )
+        ).reply as Record<string, unknown>;
+      // The template carries a placeholder, so the owner edits before approving.
+      const edited = (await say(
+        `/edit ${id} Hi Friend, the report is on track.`,
+        1,
+      )) as { outreach_item: { status: string; text_code: string } };
+      expect(edited.outreach_item.status).toBe("pending");
+      expect(await say(`/approve ${id} 00000000`, 2)).toMatchObject({
+        outreach_error: "draft changed since you saw it",
+      });
+      expect(
+        await say(`/approve ${id} ${edited.outreach_item.text_code}`, 3),
+      ).toMatchObject({
+        outbound_sent: false,
+        outreach_item: {
+          id,
+          status: "approved",
+          draft_text: "Hi Friend, the report is on track.",
+        },
+      });
+    } finally {
+      await bot.close();
+    }
+  });
+  it("selects the same extraction candidates in SQL as the SQLite rule", async () => {
+    // A separate principal so earlier tests' attempts and candidates do not count.
+    const own = {
+      owner_id: "ec-owner",
+      user_id: "ec-user",
+      chat_id: "ec-chat",
+    };
+    const remap = <T>(value: T): T =>
+      JSON.parse(
+        JSON.stringify(value).replaceAll(principal.owner_id, own.owner_id),
+      ) as T;
+    const ecPg = await PostgresStore.open({
+      connectionString: runtime.connectionString,
+      principal: own,
+      clock,
+    });
+    const ecSqlite = new TendStore(":memory:", {
+      mode: "live",
+      principal: own,
+      clock,
+    });
+    try {
+      const ownerIdentity = {
+        owner_id: own.owner_id,
+        identity: "owner@example.com",
+        contact_id: "OWNER",
+      };
+      await ecPg.seed([], [ownerIdentity], [remap(state)]);
+      ecSqlite.seed([], [ownerIdentity], [remap(state)]);
+      const received: LiveRecord = {
+        ...record,
+        source_record_id: "r-in",
+        direction: "received",
+        actor_identity: "friend@example.com",
+        participant_identities: ["owner@example.com"],
+        attribution: "group",
+        eligible_for_extraction: false,
+        authored_spans: [],
+      };
+      const page = {
+        ...remap(batch([record, received])),
+        operation_hash: "e".repeat(64),
+      };
+      await ecPg.commitLiveBatch(page);
+      ecSqlite.commitLiveBatch(page);
+      const keys = (rows: { record_key: string }[]) =>
+        rows.map((r) => r.record_key).sort();
+      const pgAll = keys(await ecPg.extractionCandidates(own.owner_id, null));
+      expect(pgAll).toEqual(
+        keys(ecSqlite.extractionCandidates(own.owner_id, null)),
+      );
+      // The eligible authored message is a candidate; the received one is not.
+      expect(pgAll).toHaveLength(1);
+      const key = pgAll[0]!;
+      expect(keys(await ecPg.extractionCandidates(own.owner_id, key))).toEqual(
+        keys(ecSqlite.extractionCandidates(own.owner_id, key)),
+      );
+      const stored = (await ecPg.interactions(own.owner_id)).find(
+        (r) => r.record_key === key,
+      )!;
+      await ecPg.markExtractionAttempt(own.owner_id, key, stored.content_hash);
+      ecSqlite.markExtractionAttempt(own.owner_id, key, stored.content_hash);
+      // Attempted: gone from the poll, still reachable by key.
+      expect(await ecPg.extractionCandidates(own.owner_id, null)).toEqual([]);
+      expect(ecSqlite.extractionCandidates(own.owner_id, null)).toEqual([]);
+      expect(keys(await ecPg.extractionCandidates(own.owner_id, key))).toEqual([
+        key,
+      ]);
+      expect(keys(ecSqlite.extractionCandidates(own.owner_id, key))).toEqual([
+        key,
+      ]);
+    } finally {
+      await ecPg.close();
+      ecSqlite.close();
+    }
+  });
   it("serializes concurrent duplicate commands across independent connections", async () => {
     const second = await PostgresStore.open({
       connectionString: runtime.connectionString,

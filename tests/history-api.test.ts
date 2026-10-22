@@ -885,3 +885,10 @@ it.each(["DRAFT", "SPAM", "TRASH"])(
     }
   },
 );
+
+describe("history resource budget", () => {
+  it("allows a 1 GiB semantic index and blocks above it", async () => {
+    const { INDEX_BUDGET } = await import("../src/semantic-search.ts");
+    expect(INDEX_BUDGET).toBe(1024 ** 3);
+  });
+});

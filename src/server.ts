@@ -1,7 +1,7 @@
 import { createPrivateServices } from "./private-services.ts";
 import { PostgresStore } from "./postgres-store.ts";
 import { createServer } from "node:http";
-import { readFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, readFileSync, mkdirSync } from "node:fs";
 import {
   TendStore,
   parseRaw,
@@ -17,12 +17,18 @@ import {
   fixtureIdentities,
 } from "./fixtures.ts";
 import { createLiveServer } from "./live-api.ts";
+import {
+  createWorkflowRunsReader,
+  dockerRunner,
+  exportedWorkflowNames,
+} from "./desk-runs.ts";
 import { InternalAuth } from "./internal-auth.ts";
 import { parseLivePolicy } from "./live-policy.ts";
 import { OutreachBook } from "./outreach-store.ts";
 import { MockGmail } from "./outreach-gmail.ts";
 import {
   FIXTURE_OUTREACH_CLOCK,
+  createDraftModelResolver,
   createPrivateOutreach,
   fixtureOutreachRoute,
   snapshotOf,
@@ -42,6 +48,7 @@ function startFixtureServer(): void {
     },
   );
   const mockGmail = new MockGmail();
+  const draftModel = createDraftModelResolver(process.env.TEND_OUTREACH_MODEL);
   const outreachSnapshot = () => snapshotOf(store, "demo-owner");
   const store: TendStore = new TendStore(
     process.env.TEND_DEMO_DB ?? ".scratch/demo.sqlite",
@@ -291,6 +298,7 @@ function startFixtureServer(): void {
         "POST",
         url.pathname,
         input,
+        url.pathname === "/api/outreach/plan" ? await draftModel() : undefined,
       );
       if (outreachPost) {
         respond(outreachPost.status, outreachPost.body);
@@ -459,11 +467,25 @@ async function startLiveServer(): Promise<void> {
       "Daily briefing requires its persisted owner and activation timestamp together",
     );
   const outreach = createPrivateOutreach(store, policy.principal_id);
+  const rejections = ".scratch/live-private/api-rejections.log";
   const server = createLiveServer({
     policy,
     store,
     auth,
     outreach,
+    rejectionLog: (entry) =>
+      appendFileSync(rejections, JSON.stringify(entry) + "\n", { mode: 0o600 }),
+    // Last-run status for How it runs: read-only insights from the n8n container; off with TEND_N8N_CONTAINER=off.
+    ...(process.env.TEND_N8N_CONTAINER === "off"
+      ? {}
+      : {
+          workflowRuns: createWorkflowRunsReader({
+            run: dockerRunner(
+              process.env.TEND_N8N_CONTAINER ?? "tend-nocode-live",
+            ),
+            names: exportedWorkflowNames(),
+          }),
+        }),
     normalModel: services.normalModel,
     normalSemanticSearch: services.normalSemanticSearch,
     privateSemanticSearch: services.privateSemanticSearch,

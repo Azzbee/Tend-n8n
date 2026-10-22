@@ -342,6 +342,51 @@ describe("drafts never send without an exact approval", () => {
         .status,
     ).toBe("gmail_draft_created");
   });
+  it("answers a resent /approve with the same approval, never a second one", () => {
+    const { book, load, setNow } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    const code = codeOf(book, id);
+    const first = book.approve(id, code, load());
+    setNow(
+      new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + 3600000).toISOString(),
+    );
+    // The private bot's reply was rolled back; the owner sends it again.
+    const again = book.approve(id, code, load());
+    expect(again).toMatchObject({
+      status: "approved",
+      expires_at: first.expires_at,
+    });
+    expect(book.ledger().filter((l) => l.action === "approved")).toHaveLength(
+      1,
+    );
+    expect(() => book.approve(id, "00000000", load())).toThrow(
+      "cannot approve a approved item",
+    );
+  });
+  it("flags an approved email whose Gmail receipt never arrived", () => {
+    const { book, load, setNow } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    const flag = () =>
+      book.list(load()).items.find((i) => i.id === id)!.gmail_unconfirmed;
+    expect(flag()).toBe(false);
+    book.approvedEmail(load());
+    expect(flag()).toBe(false);
+    setNow(
+      new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + 16 * 60000).toISOString(),
+    );
+    expect(flag()).toBe(true);
+    const hash = book
+      .ledger()
+      .find((l) => l.action === "handed_to_gmail")!.detail;
+    expect(hash).toHaveLength(16);
+    // Re-approval clears it until the next hand-off is overdue.
+    book.edit(id, "Hi Mira, could you share an update? Thanks.", load());
+    book.approve(id, codeOf(book, id), load());
+    expect(flag()).toBe(false);
+  });
   it("hands an email again only after the owner approves it again", () => {
     const { book, load } = world();
     book.plan(load());
@@ -453,10 +498,81 @@ describe("drafts never send without an exact approval", () => {
     expect(
       book.modelDraft(
         items.reply_waiting!.id,
-        "Hi Mira, thanks for the note about the checklist. I will take a look.",
+        "Hi Mira, thanks for the note about the checklist. It looks useful.",
         load(),
       ).accepted,
     ).toBe(true);
+  });
+  it("rejects model drafts seen with qwen3:4b: copied promises, clock times, invented progress", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const items = byReason(book, load());
+    const overdue = items.overdue_owed_to_you!.id;
+    expect(
+      book.modelDraft(
+        overdue,
+        "I will send the demo by 2:00 PM on 2026-10-15.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, I will send the demo tomorrow, ok?",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model spoke as the contact" });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, can we talk at 14:30 about the demo?",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "uncited detail: 14:30" });
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "I've reviewed the prototype checklist.",
+        load(),
+      ),
+    ).toMatchObject({
+      accepted: false,
+      problem: "model claimed progress the evidence does not show",
+    });
+    expect(
+      book.modelDraft(
+        items.you_owe_soon!.id,
+        "Hi Mira, I'll review your demo by 2026-10-16.",
+        load(),
+      ),
+    ).toMatchObject({
+      accepted: false,
+      problem: "model made a promise for the owner",
+    });
+    for (const promise of [
+      "Hi Mira, I'll check the demo by 2026-10-15.",
+      "Hi Mira, we will look at it.",
+      "Hi Mira, I am going to send notes.",
+    ])
+      expect(book.modelDraft(overdue, promise, load())).toMatchObject({
+        accepted: false,
+        problem: "model made a promise for the owner",
+      });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, how is the demo going? Let me know if you need anything from me.",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
+  it("keeps every template free of promises the owner did not make", () => {
+    const { book, load } = world();
+    for (const item of book.plan(load()).created)
+      if (!/\[[^\]]*\]/.test(item.draft_text))
+        expect(item.draft_text.replace(/"[^"]*"/g, "")).not.toMatch(
+          /\b(will|shall)\b|'ll\b/i,
+        );
   });
   it("tells the model who wrote each cited message and what the draft is for", () => {
     const { book, load } = world();
@@ -662,6 +778,7 @@ describe("Desk backend and Telegram commands", () => {
           "draft_text",
           "evidence",
           "expires_at",
+          "gmail_unconfirmed",
           "id",
           "reason",
           "recipient",

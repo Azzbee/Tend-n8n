@@ -66,7 +66,7 @@ async function plan(): Promise<void> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(item.json.request),
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(120000),
       });
       replies.push({ json: (await r.json()) as Record<string, unknown> });
     } catch {

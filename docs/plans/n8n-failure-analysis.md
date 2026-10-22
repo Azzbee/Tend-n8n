@@ -35,7 +35,7 @@ The Overview reports about 8% failed production executions over 7 days. The priv
    ```
 3. Map each workflow ID to its export (`workflows/*.json` `id`, or the private deployment IDs in the main checkout's ignored `.scratch`). Flag workflows that are not among the 21 exports (old probes and diagnostics) for the archive list in brief step 4.5.
 4. For each failing workflow, find the cause without reading message content:
-   - `docker logs --since 168h tend-nocode-live 2>&1 | grep -iE "error|failed" | cut -c1-200`, redacted to workflow, node and a short message.
+   - `docker logs --since 168h tend-nocode-live 2>&1 | grep -iE "error|failed" | grep -oE 'workflow(Id)?[=:" ]+[A-Za-z0-9]{1,40}|node[=:" ]+"[^"]{1,60}"' | sort | uniq -c`. This keeps only workflow IDs, node names and counts: n8n error lines can quote provider responses (message snippets, names, addresses), and cutting them to 200 characters does not redact them. Never save the raw log lines.
    - Read the workflow design and the guard code in `src/build-workflows.ts` to tell real bugs from deliberate rejections (owner guard, scope guard, provider 429 retry window).
    - Reproduce a suspected bug with the fictional fixtures in the isolated integration n8n, never in the live one.
 5. For each failure, decide: a bug (fix it with a test), a deliberate guard (turn it into a handled branch if it should not count as a failure), or by design (document why it stays a failure).

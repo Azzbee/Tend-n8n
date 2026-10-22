@@ -138,6 +138,22 @@ describe("fictional outreach lane over HTTP", () => {
       expect((await call("/api/outreach/approved-email")).json.items).toEqual(
         [],
       );
+      // A web page can POST text/plain cross-origin without a preflight; the
+      // fixture API must not treat that as an approval.
+      const simple = await fetch(base + "/api/outreach/approve", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ id: target.id, text_code: target.text_code }),
+      });
+      expect(simple.status).toBe(400);
+      expect(
+        (
+          (await call("/api/outreach")).json.items as {
+            id: string;
+            status: string;
+          }[]
+        ).find((i) => i.id === target.id)!.status,
+      ).toBe("pending");
       expect(
         (
           await call("/api/outreach/approve", {
@@ -279,5 +295,39 @@ describe("private outreach routes", () => {
       outreach.service.book.close();
       rmSync(dbDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("private outreach kill switch", () => {
+  it("opens the send path only for OUTREACH_ENABLED=true exactly", () => {
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: exampleLivePolicy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+    });
+    const enabled = (value: string | undefined): boolean => {
+      const env: Record<string, string | undefined> = {
+        TEND_OUTREACH_DB: ":memory:",
+      };
+      if (value !== undefined) env.OUTREACH_ENABLED = value;
+      const { service } = createPrivateOutreach(
+        store as unknown as LiveStore,
+        exampleLivePolicy.principal_id,
+        env,
+      );
+      try {
+        return service.book.options.sendingEnabled;
+      } finally {
+        service.book.close();
+      }
+    };
+    expect(enabled(undefined)).toBe(false);
+    for (const off of ["false", "", "1", "yes", "TRUE", " true"])
+      expect(enabled(off)).toBe(false);
+    expect(enabled("true")).toBe(true);
+    store.close();
   });
 });

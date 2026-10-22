@@ -10,7 +10,11 @@ import {
   fixtureRecords,
   fixtureSources,
 } from "./fixtures.ts";
-import type { OutreachSnapshot } from "./outreach.ts";
+import {
+  DEFAULT_DRAFT_MODEL,
+  FALLBACK_DRAFT_MODEL,
+  type OutreachSnapshot,
+} from "./outreach.ts";
 import { OutreachBook, type OutreachItem } from "./outreach-store.ts";
 import { MockGmail } from "./outreach-gmail.ts";
 
@@ -98,6 +102,35 @@ export function createFixtureOutreachService(
   return { service: new OutreachService(book, load), book, store };
 }
 type RouteResult = { status: number; body: unknown } | null;
+// Picks the draft model for a planner run: the configured one (default
+// qwen3:4b) when Ollama lists it, else the small fallback. Cached a minute
+// so an hourly planner asks Ollama once per run.
+export function createDraftModelResolver(
+  configured: string | undefined,
+  fetchFn: typeof fetch = fetch,
+  now: () => number = Date.now,
+  base = "http://127.0.0.1:11434",
+): () => Promise<string> {
+  const wanted = configured ?? DEFAULT_DRAFT_MODEL;
+  let cached: { model: string; at: number } | null = null;
+  return async () => {
+    if (!/^[A-Za-z0-9._/-]{1,80}(?::[A-Za-z0-9._-]{1,40})?$/.test(wanted))
+      return FALLBACK_DRAFT_MODEL;
+    if (cached && now() - cached.at < 60000) return cached.model;
+    let model = FALLBACK_DRAFT_MODEL;
+    try {
+      const r = await fetchFn(`${base}/api/tags`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      const body = (await r.json()) as { models?: { name?: unknown }[] };
+      if (body.models?.some((m) => m.name === wanted)) model = wanted;
+    } catch {
+      // Ollama unreachable: the small model, and the template if that fails too.
+    }
+    cached = { model, at: now() };
+    return model;
+  };
+}
 // Fixture API routes for workflows 22-23 and the integration check.
 export function fixtureOutreachRoute(
   book: OutreachBook,
@@ -106,6 +139,7 @@ export function fixtureOutreachRoute(
   method: string,
   path: string,
   input: unknown,
+  model?: string,
 ): RouteResult {
   if (path.startsWith("/api/mock-gmail/"))
     return gmail.handle(method, path, input);
@@ -124,7 +158,7 @@ export function fixtureOutreachRoute(
   if (method === "GET" && path === "/api/outreach/ledger")
     return ok({ ledger: book.ledger(), mock_gmail_drafts: gmail.drafts });
   if (method !== "POST") return null;
-  if (path === "/api/outreach/plan") return ok(book.plan(load()));
+  if (path === "/api/outreach/plan") return ok(book.plan(load(), model));
   if (path === "/api/outreach/draft")
     return ok(book.modelDraft(id, body.text, load()));
   if (path === "/api/outreach/approve")
@@ -157,6 +191,8 @@ export function createPrivateOutreach(
   store: LiveStore,
   owner: string,
   env: Record<string, string | undefined> = process.env,
+  clock?: () => Date,
+  fetchFn: typeof fetch = fetch,
 ): {
   service: OutreachService;
   route: (method: string, path: string, input: unknown) => Promise<RouteResult>;
@@ -168,8 +204,10 @@ export function createPrivateOutreach(
     owner_id: owner,
     lane: "private",
     sendingEnabled: env.OUTREACH_ENABLED === "true",
+    ...(clock ? { clock } : {}),
   });
   const load = () => liveSnapshotOf(store, owner);
+  const draftModel = createDraftModelResolver(env.TEND_OUTREACH_MODEL, fetchFn);
   // The private bot routes /outreach /approve /edit /skip through the book;
   // every other command falls through to the store's own handler.
   if (store instanceof PostgresStore)
@@ -187,7 +225,10 @@ export function createPrivateOutreach(
       if (method !== "POST") return null;
       if (path === "/api/live/outreach/plan") {
         if (Object.keys(body).length) throw new Error("Plan takes no input");
-        return { status: 200, body: book.plan(await load()) };
+        return {
+          status: 200,
+          body: book.plan(await load(), await draftModel()),
+        };
       }
       if (path === "/api/live/outreach/draft")
         return {

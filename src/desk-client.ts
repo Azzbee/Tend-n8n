@@ -562,9 +562,11 @@ export function mountDesk(ctx: DeskContext): DeskController {
             ? `Approval window ends ${parisMoment(item.expires_at)}`
             : item.status === "approved" && item.channel !== "email"
               ? "Copy the text and send it yourself."
-              : item.status === "approved"
-                ? emailApproval(sending).detail
-                : outreachStatusDetail[item.status];
+              : item.status === "approved" && item.gmail_unconfirmed
+                ? "Gmail did not confirm this draft. Check your Gmail drafts; to try again, edit and approve it again."
+                : item.status === "approved"
+                  ? emailApproval(sending).detail
+                  : outreachStatusDetail[item.status];
         if (detail) node.append(el("p", detail, "meta"));
         if (item.status === "approved")
           node.append(
@@ -790,7 +792,9 @@ export function mountDesk(ctx: DeskContext): DeskController {
               el("span", w.name, "run-name"),
               el(
                 "span",
-                runLabels[w.last_status] +
+                (w.last_status === "unknown" && runs.runs_connected
+                  ? "No runs recorded in n8n"
+                  : runLabels[w.last_status]) +
                   (w.last_run_at ? ` · ${parisMoment(w.last_run_at)}` : ""),
                 "run-status",
               ),

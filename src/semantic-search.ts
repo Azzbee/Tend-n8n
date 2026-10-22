@@ -5,7 +5,8 @@ import type { NormalizedRecord, Source, SourceState } from "./engine.ts";
 export const SEMANTIC_MODEL = "granite-embedding:278m";
 export const SEMANTIC_DIMENSIONS = 768;
 const GiB = 1024 ** 3;
-const INDEX_BUDGET = 512 * 1024 ** 2;
+// Shared with the history/social resource gate in history-api.ts.
+export const INDEX_BUDGET = 1024 ** 3;
 export interface SemanticPassage {
   index: number;
   start: number;

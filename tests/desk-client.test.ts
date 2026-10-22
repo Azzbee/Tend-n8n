@@ -86,7 +86,7 @@ function snapshot(): DeskSnapshot {
 }
 function browser(
   hash: string,
-  outreach: "off" | "on" | "approved" | "approved-off" = "off",
+  outreach: "off" | "on" | "approved" | "approved-off" | "unconfirmed" = "off",
 ) {
   const elements = new Map<string, FakeElement>();
   let releaseConfirm: () => void = () => {};
@@ -128,17 +128,26 @@ function browser(
                   status: "approved",
                 })),
               })
-            : outreach === "approved"
+            : outreach === "unconfirmed"
               ? Response.json({
+                  sending_enabled: true,
                   items: deskFixtureOutreach(deskFixtureClock()).map((i) => ({
                     ...i,
                     status: "approved",
+                    gmail_unconfirmed: true,
                   })),
                 })
-              : Response.json(
-                  { error: "Unknown private route" },
-                  { status: 404 },
-                );
+              : outreach === "approved"
+                ? Response.json({
+                    items: deskFixtureOutreach(deskFixtureClock()).map((i) => ({
+                      ...i,
+                      status: "approved",
+                    })),
+                  })
+                : Response.json(
+                    { error: "Unknown private route" },
+                    { status: 404 },
+                  );
       if (path === "/private/api/desk/confirm" && init?.method === "POST")
         return new Promise<Response>((resolve) => {
           releaseConfirm = () => resolve(Response.json({ commitment: {} }));
@@ -304,6 +313,16 @@ describe("mounted desk", () => {
     expect(after.slice(after.indexOf("/private/api/logout"))).not.toContain(
       "/private/api/desk",
     );
+  });
+  it("tells the owner when Gmail never confirmed an approved email draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(deskFixtureClock());
+    const { elements } = browser("#desk", "unconfirmed");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const queue = text(elements.get("desk-outreach")!);
+    expect(queue).toContain("Gmail did not confirm this draft.");
+    expect(queue).not.toContain("Waiting for the Gmail step");
   });
   it("asks for a second click before withdrawing an approved draft", async () => {
     vi.useFakeTimers();

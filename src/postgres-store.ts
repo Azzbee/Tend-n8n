@@ -1645,6 +1645,22 @@ export class PostgresStore implements LiveStore {
       return c;
     });
   }
+  // Same rule as TendStore.extractionCandidates, filtered in SQL so the
+  // per-minute extraction poll never loads every record for the owner.
+  async extractionCandidates(
+    owner: string,
+    recordKey: string | null,
+  ): Promise<NormalizedRecord[]> {
+    this.owner(owner);
+    return this.run(async (s) =>
+      (
+        await s.q(
+          "SELECT r.* FROM live_records r WHERE r.owner_id=$1 AND r.kind='message' AND r.direction<>'event' AND r.attribution='direct' AND r.eligible_for_extraction AND NOT r.cancelled AND CASE WHEN $2::text IS NULL THEN NOT EXISTS(SELECT 1 FROM live_attempts a WHERE a.owner_id=r.owner_id AND a.record_key=r.record_key AND a.content_hash=r.content_hash) ELSE r.record_key=$2::text END ORDER BY r.source,r.source_record_id",
+          [owner, recordKey],
+        )
+      ).map((x) => s.record(x)),
+    );
+  }
   async extractionAttempted(record: NormalizedRecord): Promise<boolean> {
     this.owner(record.owner_id);
     return this.run(

@@ -91,6 +91,21 @@ export async function resolvePrivateSearchSelection(
   if (!exact) throw new Error("Unknown contact selection");
   return [exact.contact_id];
 }
+// One minute's share of semantic indexing: a resumed backlog is embedded a
+// few records per cycle instead of all at once, so local Ollama stays light.
+export const INDEX_RECORDS_PER_CYCLE = 20;
+export async function indexCycle(
+  step: () => Promise<{ pending: number }>,
+  signal: AbortSignal,
+  max = INDEX_RECORDS_PER_CYCLE,
+): Promise<number> {
+  let done = 0;
+  while (!signal.aborted && done < max) {
+    done++;
+    if ((await step()).pending === 0) break;
+  }
+  return done;
+}
 export function createPrivateServices(options: {
   policy: LivePolicy;
   store: LiveStore;
@@ -275,10 +290,10 @@ export function createPrivateServices(options: {
     try {
       const initial = await service.initialiseSnapshot(owner);
       if (initial.pending === 0) await service.refreshSnapshot(owner);
-      while (!stop.signal.aborted) {
-        const progress = await service.indexBatch(owner, stop.signal);
-        if (progress.pending === 0) break;
-      }
+      await indexCycle(
+        () => service.indexBatch(owner, stop.signal),
+        stop.signal,
+      );
     } catch {
       if (!stop.signal.aborted)
         console.error(

@@ -76,6 +76,7 @@ export interface DeskRuns {
   workflows: DeskWorkflowRun[];
   failures: DeskFailure[];
   failure_log_connected: boolean;
+  runs_connected: boolean;
 }
 export const outreachChannels = [
   "email",
@@ -110,6 +111,7 @@ export interface OutreachItem {
   expires_at: string;
   deep_link?: string | null;
   recipient?: string;
+  gmail_unconfirmed?: boolean;
 }
 // Implemented by the outreach service (improve/outreach) and injected by live-api.ts.
 export interface DeskOutreachBackend {
@@ -387,6 +389,7 @@ export function buildDeskRuns(
       execution_id: String(f.execution_id).slice(0, 40),
     })),
     failure_log_connected: failures !== null,
+    runs_connected: runs !== null,
   };
 }
 
@@ -441,6 +444,7 @@ export function parseOutreachList(value: unknown): OutreachItem[] {
       ...(typeof raw.recipient === "string"
         ? { recipient: raw.recipient }
         : {}),
+      ...(raw.gmail_unconfirmed === true ? { gmail_unconfirmed: true } : {}),
     });
   }
   return items;

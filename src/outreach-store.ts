@@ -9,9 +9,11 @@ import {
   draftProblem,
   evidenceHash,
   outreachDraftRequest,
+  FALLBACK_DRAFT_MODEL,
   planOutreach,
   purposes,
   repeatsAny,
+  modelOnlyProblem,
   styleOnly,
   textHash,
   verifiedRecipient,
@@ -23,6 +25,8 @@ import {
   type OutreachStatus,
 } from "./outreach.ts";
 const textCode = (text: string): string => textHash(text).slice(0, 8);
+// Workflows 24/26 run every 10 minutes; a receipt later than this is overdue.
+export const GMAIL_RECEIPT_GRACE_MS = 15 * 60000;
 import { buildRawMessage } from "./outreach-gmail.ts";
 
 // The shape the Desk renders (shared contract with improve/desk-ui), plus two
@@ -41,10 +45,13 @@ export interface OutreachItem {
   recipient: string;
   deep_link: string | null;
   style_basis: "recipient_examples" | "default" | "owner_edit";
+  // Handed to the Gmail step but no receipt after a grace period: the draft
+  // may not exist, so the owner checks Gmail or approves again.
+  gmail_unconfirmed: boolean;
 }
 interface StoredItem extends Omit<
   OutreachItem,
-  "deep_link" | "style_basis" | "text_code"
+  "deep_link" | "style_basis" | "text_code" | "gmail_unconfirmed"
 > {
   owner_id: string;
   item_key: string;
@@ -62,6 +69,7 @@ interface StoredItem extends Omit<
   handed_at?: string | null;
   // Scrubbed style examples sent to the model, kept to catch echoes.
   style_examples?: string[];
+  evidence_from?: string[];
 }
 export interface OutreachBookOptions {
   owner_id: string;
@@ -214,13 +222,22 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       expires_at: item.expires_at,
       recipient: item.recipient,
       style_basis: item.style_basis,
+      gmail_unconfirmed:
+        item.status === "approved" &&
+        item.channel === "email" &&
+        !!item.handed_at &&
+        this.now().getTime() - Date.parse(item.handed_at) >=
+          GMAIL_RECEIPT_GRACE_MS,
       deep_link:
         item.status === "approved"
           ? deepLink(item.channel, item.recipient, item.draft_text)
           : null,
     };
   }
-  plan(snapshot: OutreachSnapshot): {
+  plan(
+    snapshot: OutreachSnapshot,
+    model: string = FALLBACK_DRAFT_MODEL,
+  ): {
     fictional: boolean;
     quiet_hours: boolean;
     held_back: string[];
@@ -258,6 +275,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         evidence_hash: p.evidence_hash,
         style_basis: p.style_examples.length ? "recipient_examples" : "default",
         style_examples: p.style_examples.map(styleOnly),
+        evidence_from: p.evidence_from,
         draft_source: "template",
         status: "pending",
         created_at,
@@ -280,7 +298,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       return {
         ...this.view(item),
         style_basis: item.style_basis,
-        request: outreachDraftRequest(p),
+        request: outreachDraftRequest(p, model),
       };
     });
     return {
@@ -318,7 +336,19 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
                 purposes[item.reason],
               ])
             ? "model repeated the prompt"
-            : draftProblem(text, item.evidence);
+            : (draftProblem(text, item.evidence) ??
+              modelOnlyProblem(
+                text,
+                item.evidence,
+                item.evidence
+                  .filter(
+                    (_, i) =>
+                      !["you", "calendar"].includes(
+                        item.evidence_from?.[i] ?? "you",
+                      ),
+                  )
+                  .map((e) => e.text),
+              ));
     if (problem) {
       this.log(item.id, "model_draft_rejected", problem);
       return { accepted: false, problem, item: this.view(item) };
@@ -343,6 +373,16 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   approve(id: string, seen: string, snapshot: OutreachSnapshot): OutreachItem {
     this.refresh(snapshot);
     const item = this.get(id);
+    // The book is SQLite, outside the private bot's PostgreSQL transaction: if
+    // the reply is rolled back after an approval, resending the same
+    // /approve ID CODE returns that approval instead of an error. It never
+    // extends the 24-hour window.
+    if (
+      item.status === "approved" &&
+      seen === textCode(item.draft_text) &&
+      item.approved_text_hash === textHash(item.draft_text)
+    )
+      return this.view(item);
     if (item.status !== "pending")
       throw new Error(`cannot approve a ${item.status} item`);
     if (seen !== textCode(item.draft_text))

@@ -4,6 +4,11 @@ import { exampleLivePolicy } from "./live-policy.ts";
 import { createPrivateOutreach } from "./outreach-service.ts";
 import { createDeskFixtureStore } from "./desk-fixture.ts";
 import type { LiveStore } from "./live-store.ts";
+import {
+  createWorkflowRunsReader,
+  dockerRunner,
+  exportedWorkflowNames,
+} from "./desk-runs.ts";
 
 // Fictional-only Desk preview through the production live server and outreach wiring.
 // Never point it at the private store or the live ports.
@@ -29,6 +34,15 @@ createLiveServer({
   auth: new InternalAuth(),
   store,
   outreach,
+  // DESK_DEV_RUNS=live reads last-run status (names, outcomes, times only) from the n8n container.
+  ...(process.env.DESK_DEV_RUNS === "live"
+    ? {
+        workflowRuns: createWorkflowRunsReader({
+          run: dockerRunner("tend-nocode-live"),
+          names: exportedWorkflowNames(),
+        }),
+      }
+    : {}),
 }).listen(port, "127.0.0.1", () =>
   console.log(
     `Fictional Desk preview at http://127.0.0.1:${port}/private (planner: ${JSON.stringify(plan?.body).slice(0, 200)})`,

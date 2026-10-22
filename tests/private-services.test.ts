@@ -1,3 +1,7 @@
+import {
+  indexCycle,
+  INDEX_RECORDS_PER_CYCLE,
+} from "../src/private-services.ts";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPrivateServices,
@@ -262,5 +266,29 @@ describe("semantic actor display names", () => {
         ],
       ).size,
     ).toBe(0);
+  });
+});
+
+describe("semantic indexing cycle", () => {
+  it("embeds at most a fixed number of records per cycle and stops when none are pending", async () => {
+    let calls = 0;
+    const backlog = () => {
+      calls++;
+      return Promise.resolve({ pending: 5000 - calls });
+    };
+    expect(await indexCycle(backlog, new AbortController().signal)).toBe(
+      INDEX_RECORDS_PER_CYCLE,
+    );
+    expect(calls).toBe(INDEX_RECORDS_PER_CYCLE);
+    let left = 3;
+    expect(
+      await indexCycle(
+        () => Promise.resolve({ pending: --left }),
+        new AbortController().signal,
+      ),
+    ).toBe(3);
+    const stopped = new AbortController();
+    stopped.abort();
+    expect(await indexCycle(backlog, stopped.signal)).toBe(0);
   });
 });
