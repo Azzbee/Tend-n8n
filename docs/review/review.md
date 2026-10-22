@@ -163,3 +163,23 @@ Still open: M1 (duplicate Gmail drafts, the lead's next item), M3 (the integrati
 - **Gate on the merged tree** (Postgres and Docker tests excluded at the lead's request, demo load): typecheck, lint, build (26 exports, no diff) and format pass. 52 files, 1315 passed, 2 skipped.
 
 Still open: M3 (the integration run and re-recorded evidence, held until the lead clears Docker use), the Low above, and L1, L3 to L6.
+
+## Re-review 5: improve/lead at 450591f (22 Oct, 11:40 Paris)
+
+- **M3 closed.** I ran `bun run integration` myself on the merged tree, in the isolated Docker container (the lead cleared Docker until 12:25): `{"pass":true,"checks":23}`. The checks that cover this branch passed:
+  - 26 workflows were imported and 21 was published.
+  - A forced fictional production failure reached 21 with its message withheld.
+  - 23 planned 4 cited drafts. `/outreach`, `/edit`, `/approve` and `/skip` ran through the native Telegram trigger, and 24 created exactly one mock Gmail draft.
+
+  I did not commit the evidence files my run rewrote (the lead owns `evidence/`).
+
+- **F8, private bot outreach routing (14b46f8).** `PostgresStore` hands outreach commands to the book inside the scoped transaction. Other commands fall through, and the live guard now admits the four outreach commands.
+  - Refusals are fixed phrases. Reply data sits in `live_reply_ledger` only until it is sent, then it is cleared, as for `/prep`.
+  - Low: the parity test runs on an empty book, so it covers listing and refusal but never a successful `/approve ID CODE` through the private bot.
+  - Low: book writes (SQLite) are outside the PostgreSQL transaction. A rolled-back reply-ledger insert can therefore leave an approval recorded with no reply sent. Re-sending `/approve` then answers "cannot approve an approved item", which is safe.
+- **bb70be4 and bf2e826.** Style examples are scrubbed of dates, links, emails and numbers before they reach the model. Drafts that copy a style example or the purpose text are rejected. Both checks only narrow what is accepted. The scrubbed examples are stored in the private outreach SQLite and are not exposed by `view()`.
+- **`src/outreach-demo.ts`.** A fictional demo on ports 18831/18832 that refuses 18767, 18768, 18769 and 5678.
+- **Process, for Adam to confirm.** `Specification.txt` (f71c5cd) records that, before the demo, the live editor's workflows 11 and 12 were rebound and republished (from 08:32 UTC) and 59 workflows were archived. The brief allows live changes only after 14:00, and archiving only of the workflows Adam approves. If Adam approved this directly to the lead, there is nothing to do; otherwise it needs his attention. It is not a code finding.
+- **Gate.** Typecheck, lint, build (26 exports, no diff) and format pass. Unit tests (Postgres-named files excluded): 52 files, 1319 passed, 2 skipped. `tests/live-store-parity.test.ts` passes in full, including the new outreach test. Integration: 23 out of 23.
+
+Still open: "Gmail draft not confirmed" (Low, which the lead lists as a known limitation), L1 (Telegram `/dismiss`, still not in the guard), and L3 to L6.
