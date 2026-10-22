@@ -72,3 +72,5 @@ No button failed outright. The items below need an owner decision.
 57 Desk and private-web tests pass on 27ae5d5.
 
 F13 reproduction: `DESK_DEV_PORT=18896 node --experimental-strip-types src/desk-dev-server.ts` on 27ae5d5, open `http://127.0.0.1:18896/private`, reload once, Unlock, People → Mira Tan → Prepare briefing. The excerpt list contains `tend-source:gmail/owner%40example.invalid/g-injection`. Expected: instruction-like messages (the same filter as the Desk's Held back list and the outreach planner, `src/instruction-like.ts`) are left out of briefing and draft evidence, or shown under a separate "held back" note.
+
+F13 owner: tend-lead. tend-desk confirmed the cause at 16:30: `selected()` in `src/live-ai.ts` never calls `isInstructionLike`. Re-check on improve/lead when the fix lands.
