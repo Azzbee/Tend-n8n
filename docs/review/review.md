@@ -213,3 +213,55 @@ Gate on review/codex after these commits: typecheck, lint, build (26 exports, no
 `3b05416` replaces the per-minute `/api/live/model-input` scan of every record with `extractionCandidates(owner, key)`. The PostgreSQL version filters in SQL with the same rule as SQLite: kind, direction, attribution, eligibility and cancelled, plus "no attempt at this content_hash" when no key is given. No findings.
 
 `b224952` adds the parity test the lead asked for, in `tests/live-store-parity.test.ts`. It was run against Docker PostgreSQL, which the lead cleared for this file only, and all 22 parity tests pass. That includes `a02c1f0`'s private-bot `/approve ID CODE` test, which is therefore now verified. Making the SQL attempt filter always true makes the new test fail. The commit cherry-picks cleanly onto 3b05416 on its own.
+
+## Promise threads: improve/desk-ui 292e532..9610c3b (22 Oct, 17:45 Paris)
+
+Requested by tend-desk. Reviewed the five commits against the five focus points. Repros run against an export of 9610c3b; the repro file is `.scratch/review-repro/promise-threads.repro.ts` (gitignored, fictional data only). All three repro tests fail on 9610c3b, which confirms P1-P3.
+
+| ID | Severity | Location | Finding |
+|---|---|---|---|
+| P1 | High | `src/promise-threads.ts:64` | Stopwords are checked after stemming, so "the" becomes "th" and counts as a content word. False links between different asks from the same person. |
+| P2 | High | `src/promise-threads.ts:208` | Thread IDs are reused, so a member the owner separated can be pulled back into the thread they split it from. |
+| P3 | Medium | `src/outreach.ts:263` | The thread's follow-up can move to a new lead member, which plans a second follow-up for one promise. |
+| P4 | Medium | `src/postgres-store.ts:1741` | The savepoint catch swallows every error, not only the timeout. |
+| P5 | Low | `src/engine.ts:3280`, `src/postgres-store.ts:2310` | `/done` and `/cancel` also close pending members whose evidence is invalid. |
+| P6 | Low | `src/promise-threads.ts:19` | Verified groups are remembered in a process-global map. |
+
+- **P1 (High): focus 1, a false link joins two asks.** At `src/promise-threads.ts:64`, `actionTokens` strips the endings `ing|ed|s|e` before the stopword filter runs.
+  - "the" becomes "th", which is not in the stopword list, so nearly every action carries a shared token. "please" becomes "pleas", and "are" becomes "ar".
+  - **Failing scenario:** Mira writes "send the signed contract" in one message and "review the signed contract" in another. `tokenSimilarity` returns 0.75, above `THREAD_TOKEN_THRESHOLD` 0.7, so the two different asks are linked automatically. Without "th" the score is 4/6 = 0.667 and they stay apart.
+  - The calibration note at line 37 ("send the contract" vs "send the demo") also only clears by one token for the same reason.
+  - **Fix:** filter stopwords before stemming as well as after, and add the repro pair as a test.
+- **P2 (High): focus 1 and 2, an owner override is undone.** At `src/promise-threads.ts:208`, a new pair always takes the ID `T<earlier commitment_id>`. Both stores then insert the thread with `INSERT OR IGNORE` (engine) or `ON CONFLICT DO NOTHING` (PostgreSQL).
+  - When the owner separates the member whose ID names a thread of three or more, the thread keeps that ID with the remaining members.
+  - **Failing scenario:**
+    1. A ("send the signed contract"), B and C ("send the contract") from F17 auto-link as `T<A>`.
+    2. The owner runs `/separate A`. Overrides A-B and A-C are stored, and B and C stay in `T<A>`.
+    3. D ("send the signed contract copy now") arrives. D fits A but not B or C, so `linkThreads` pairs A with D under `T<A>`.
+    4. A is back in the same thread as B and C, despite the owner's "Not the same ask". The Desk shows one card again, and `/done` on any member closes all four.
+  - **Reachable from the UI:** "Not the same ask" is offered on every member except index 0. If an older sighting joins later (a history backfill), the naming member is no longer index 0.
+  - **Fix:** never reuse an existing thread ID for a new pair. Either pick a fresh one (for example `T<earlier>_<n>`), or make the pair insert fail instead of ignoring the conflict.
+- **P3 (Medium): focus 4, two follow-ups for one promise.** At `src/outreach.ts:263`, `threadRepresentatives` picks the earliest *confirmed* member as the thread's lead. That lead can change after an item was planned.
+  - **Failing scenario:**
+    1. The owner confirms sighting x2. `plan()` creates `overdue_owed_to_you:<x2>`.
+    2. An older sighting x1 of the same ask arrives and links into the thread. The owner confirms it with "Confirm and link".
+    3. The lead becomes x1, so the next `plan()` creates `overdue_owed_to_you:<x1>`.
+    4. `refresh()` reads `split(":")[1]` = x2, which is still confirmed and valid, so the first item stays pending. Two live drafts now exist for the same promise.
+  - `withinRateLimit` only compares exact `item_key` values, so it does not stop this.
+  - **Fix:** when planning a threaded commitment, treat a prior item on any member of the thread as blocking. Also expire a thread item in `refresh()` once its commitment is no longer the lead.
+- **P4 (Medium): focus 3, a swallowed error hides real bugs.** At `src/postgres-store.ts:1741`, the bare `catch {}` around `linkWithin` turns every failure into "no thread" with no trace. That includes a TypeError in `linkThreads`, a CHECK violation on `thread_id ~ '^T[A-Za-z0-9_-]{1,80}$'` (the SQLite table has no such CHECK) and an FK violation.
+  - **Failing scenario:** a future record-key format containing ":" makes every PostgreSQL link fail its CHECK, while SQLite keeps linking. The parity test would pass the empty case, and production would silently never thread.
+  - **Fix:** roll back to the savepoint and return `[]` only for SQLSTATE 57014 (`query_canceled`). For any other error, roll back to the savepoint, count or log a fixed phrase (no text), and rethrow or record it.
+  - Also, `statement_timeout` bounds each statement, not the 2 s total the commit message describes.
+- **P5 (Low): focus 2.** At `src/engine.ts:3280` and `src/postgres-store.ts:2310`, `/done` and `/cancel` close every pending member, including members with `evidence_valid === false`. `/confirm` skips those members, and its comment says they need owner review.
+  - **Fix:** use the same filter as `/confirm`.
+- **P6 (Low): focus 1.** At `src/promise-threads.ts:19`, `threadGroups` is a module-global map. Groups passed by one Desk GET stay in force for `addCandidate` links until the next Desk GET in the same process.
+  - **Failing scenario:** the owner removes a verified group from the policy. Until the Desk is reopened, new candidates from either contact can still auto-link.
+  - Tests that pass groups for `exampleLivePolicy.principal_id` also leak them into later tests in the same worker.
+
+**Checked with no finding:**
+- **Focus 1:** `personKey` uses only `contact_id` or an accepted proof kind. Names never count.
+- **Focus 2:** `/confirm` confirms only valid pending members. `/separate` rejects a single member.
+- **Focus 5:** the new error strings are fixed phrases.
+  - The Desk now shows each sighting's `evidence_reference`, which contains the account email and message ID. The page is owner-only, behind the session, CSRF and `default-src 'none'`, so this is acceptable. Keep it out of any export or log.
+- The Desk GET now writes thread rows. It is not exploitable cross-site (linking is automatic anyway), but it is a write on GET.
