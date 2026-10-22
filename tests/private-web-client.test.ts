@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   mountPrivateWorkspace,
   safeEvidenceUrl,
+  preparedHeading,
   replyPresentation,
   historyQuery,
   parisTime,
@@ -210,7 +211,12 @@ class TestChannel {
   }
 }
 function browserFixture(
-  options: { revoked?: boolean; contact?: boolean; history?: unknown[] } = {},
+  options: {
+    revoked?: boolean;
+    contact?: boolean;
+    history?: unknown[];
+    fallback?: boolean;
+  } = {},
 ): {
   elements: Map<string, BrowserElement>;
   window: EventTarget;
@@ -239,10 +245,24 @@ function browserFixture(
   let checks = 0;
   const reply = {
     view_id: "view",
-    reply: {
-      outbound_sent: false,
-      preview: "Hello Mira, here is the requested update.",
-    },
+    reply: options.fallback
+      ? {
+          outbound_sent: false,
+          normal_message:
+            "AI output was unavailable or unsupported. Showing current source excerpts only; no generated claim was retained.",
+          ai: { status: "fallback", draft: null },
+          evidence: [
+            {
+              source: "gmail",
+              text: "I will send the demo by 2026-10-15.",
+              reference: "tend-source:gmail/owner/g1",
+            },
+          ],
+        }
+      : {
+          outbound_sent: false,
+          preview: "Hello Mira, here is the requested update.",
+        },
     checked_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 5 * 60000).toISOString(),
     valid: true,
@@ -384,6 +404,37 @@ describe("mounted private session withdrawal", () => {
   });
 });
 
+describe("held draft fallback", () => {
+  it("says no draft was written and shows the fallback reason when the model returns none", async () => {
+    vi.useFakeTimers();
+    const browser = browserFixture({ contact: true, fallback: true });
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    browser.elements
+      .get("contacts")!
+      .children[0]!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    browser.elements.get("draft")!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(browser.elements.get("prepared-label")?.textContent).toBe(
+      "NO DRAFT WRITTEN · SOURCE EXCERPTS ONLY",
+    );
+    expect(browser.elements.get("prepared-message")?.textContent).toContain(
+      "AI output was unavailable",
+    );
+    expect(browser.elements.get("copy-draft")?.hidden).toBe(true);
+    expect(preparedHeading("briefing", { draft: null, evidence: [] })).toBe(
+      "CONTACT BRIEFING",
+    );
+    expect(preparedHeading("draft", { draft: null, evidence: [] })).toBe(
+      "NO DRAFT WRITTEN",
+    );
+    expect(preparedHeading("draft", { draft: "Hi", evidence: [] })).toBe(
+      "HELD DRAFT · REVIEW BEFORE USE",
+    );
+  });
+});
+
 describe("historical content review coverage", () => {
   it("refreshes only saved progress without retrying or replacing a held draft", async () => {
     vi.useFakeTimers();
@@ -405,6 +456,9 @@ describe("historical content review coverage", () => {
     ).toBe(false);
     expect(browser.elements.get("timeline")!.textContent).toBe(
       "Held work stays here",
+    );
+    expect(browser.elements.get("progress-checked")!.textContent).toMatch(
+      /^Saved progress checked \d{2} \w{3} \d{4}/,
     );
   });
 
