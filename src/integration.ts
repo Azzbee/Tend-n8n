@@ -808,11 +808,16 @@ try {
       imported.includes("Successfully imported 21 workflows"),
       "twenty-one-workflow import failed",
     );
+    // n8n only calls a published error workflow, and only for production runs.
+    command(
+      ["exec", name, "n8n", "publish:workflow", "--id", "TendReview21"],
+      "error-handler-publish",
+    );
     checks.push({
       name: "Clean n8n import",
       pass: true,
       detail:
-        "19 inactive workflows; local Ollama configuration, no private account secret; live Telegram template remains inactive",
+        "21 workflows imported, error handler 21 published; local Ollama configuration, no private account secret; live Telegram template remains inactive",
     });
     if (process.env.TEND_GOOGLE_CHECK_ONLY !== "1") {
       for (const wid of [
