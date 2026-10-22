@@ -110,6 +110,7 @@ export interface OutreachItem {
   expires_at: string;
   deep_link?: string | null;
   recipient?: string;
+  gmail_unconfirmed?: boolean;
 }
 // Implemented by the outreach service (improve/outreach) and injected by live-api.ts.
 export interface DeskOutreachBackend {
@@ -441,6 +442,7 @@ export function parseOutreachList(value: unknown): OutreachItem[] {
       ...(typeof raw.recipient === "string"
         ? { recipient: raw.recipient }
         : {}),
+      ...(raw.gmail_unconfirmed === true ? { gmail_unconfirmed: true } : {}),
     });
   }
   return items;

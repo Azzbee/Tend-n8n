@@ -23,6 +23,8 @@ import {
   type OutreachStatus,
 } from "./outreach.ts";
 const textCode = (text: string): string => textHash(text).slice(0, 8);
+// Workflows 24/26 run every 10 minutes; a receipt later than this is overdue.
+export const GMAIL_RECEIPT_GRACE_MS = 15 * 60000;
 import { buildRawMessage } from "./outreach-gmail.ts";
 
 // The shape the Desk renders (shared contract with improve/desk-ui), plus two
@@ -41,10 +43,13 @@ export interface OutreachItem {
   recipient: string;
   deep_link: string | null;
   style_basis: "recipient_examples" | "default" | "owner_edit";
+  // Handed to the Gmail step but no receipt after a grace period: the draft
+  // may not exist, so the owner checks Gmail or approves again.
+  gmail_unconfirmed: boolean;
 }
 interface StoredItem extends Omit<
   OutreachItem,
-  "deep_link" | "style_basis" | "text_code"
+  "deep_link" | "style_basis" | "text_code" | "gmail_unconfirmed"
 > {
   owner_id: string;
   item_key: string;
@@ -214,6 +219,12 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       expires_at: item.expires_at,
       recipient: item.recipient,
       style_basis: item.style_basis,
+      gmail_unconfirmed:
+        item.status === "approved" &&
+        item.channel === "email" &&
+        !!item.handed_at &&
+        this.now().getTime() - Date.parse(item.handed_at) >=
+          GMAIL_RECEIPT_GRACE_MS,
       deep_link:
         item.status === "approved"
           ? deepLink(item.channel, item.recipient, item.draft_text)

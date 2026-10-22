@@ -342,6 +342,29 @@ describe("drafts never send without an exact approval", () => {
         .status,
     ).toBe("gmail_draft_created");
   });
+  it("flags an approved email whose Gmail receipt never arrived", () => {
+    const { book, load, setNow } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    const flag = () =>
+      book.list(load()).items.find((i) => i.id === id)!.gmail_unconfirmed;
+    expect(flag()).toBe(false);
+    book.approvedEmail(load());
+    expect(flag()).toBe(false);
+    setNow(
+      new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + 16 * 60000).toISOString(),
+    );
+    expect(flag()).toBe(true);
+    const hash = book
+      .ledger()
+      .find((l) => l.action === "handed_to_gmail")!.detail;
+    expect(hash).toHaveLength(16);
+    // Re-approval clears it until the next hand-off is overdue.
+    book.edit(id, "Hi Mira, could you share an update? Thanks.", load());
+    book.approve(id, codeOf(book, id), load());
+    expect(flag()).toBe(false);
+  });
   it("hands an email again only after the owner approves it again", () => {
     const { book, load } = world();
     book.plan(load());
@@ -662,6 +685,7 @@ describe("Desk backend and Telegram commands", () => {
           "draft_text",
           "evidence",
           "expires_at",
+          "gmail_unconfirmed",
           "id",
           "reason",
           "recipient",
