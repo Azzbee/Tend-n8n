@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs";
 import { isInstructionLike } from "../src/outreach.ts";
 import {
   buildDeskRuns,
+  deskHeadline,
   workflowCatalog,
   buildDeskSnapshot,
   confirmDefaultDate,
@@ -44,7 +45,7 @@ describe("desk model", () => {
     const { desk } = snapshot();
     expect(desk.you_owe.map((c) => c.record_id)).toEqual(["g2"]);
     expect(desk.owed_to_you.map((c) => c.record_id)).toEqual(["g1"]);
-    expect(desk.pending.map((c) => c.record_id)).toEqual(["li1"]);
+    expect(desk.pending.map((c) => c.record_id)).toEqual(["wp2"]);
     expect(desk.you_owe[0]).toMatchObject({
       quote: "I will review your demo by 2026-10-16.",
       source: "gmail",
@@ -52,6 +53,25 @@ describe("desk model", () => {
       contact_name: "Mira Tan",
       due_date: "2026-10-16",
     });
+  });
+  it("shows Mira's email and LinkedIn promise as one thread, each source quoted exactly with its reference", () => {
+    const { desk } = snapshot();
+    const [thread] = desk.owed_to_you;
+    expect(desk.owed_to_you).toHaveLength(1);
+    expect(thread!.thread_id).toMatch(/^TC/);
+    expect(
+      thread!.sources.map((s) => [s.record_id, s.source, s.status, s.quote]),
+    ).toEqual([
+      ["g1", "gmail", "confirmed", "I will send the demo by 2026-10-15."],
+      ["li1", "linkedin", "pending", "I will send the demo by 2026-10-15."],
+    ]);
+    expect(thread!.sources.map((s) => s.reference)).toEqual([
+      "tend-source:gmail/owner%40example.invalid/g1",
+      "tend-source:linkedin/fixture-linkedin/li1",
+    ]);
+    expect(deskHeadline(desk)).toBe(
+      "Two promises in motion. One waits for your yes.",
+    );
   });
   it("holds back instruction-like messages and never lists them as promises or not-promises", () => {
     const { desk } = snapshot();
@@ -156,9 +176,9 @@ describe("desk model", () => {
     expect(desk.next_meeting?.open.map((c) => c.record_id).sort()).toEqual([
       "g1",
       "g2",
-      "li1",
+      "wp2",
     ]);
-    expect(desk.next_meeting?.last_message?.record_id).toBe("li1");
+    expect(desk.next_meeting?.last_message?.record_id).toBe("wp2");
   });
   it("moves dismissed and finished promises off the desk and shows dismissed records as not promises", () => {
     const store = createDeskFixtureStore();
@@ -169,9 +189,12 @@ describe("desk model", () => {
         chat_id: "live-private",
         chat_type: "private",
       };
+      const wp2 = store
+        .interactions(owner)
+        .find((r) => r.source_record_id === "wp2")!;
       const pending = store
         .commitments(owner)
-        .find((c) => c.status === "pending")!;
+        .find((c) => c.record_key === wp2.record_key)!;
       store.command({ ...auth, text: `/dismiss ${pending.commitment_id}` });
       const owe = store
         .commitments(owner)
@@ -187,7 +210,7 @@ describe("desk model", () => {
       });
       expect(desk.pending).toEqual([]);
       expect(desk.you_owe).toEqual([]);
-      expect(desk.not_promises.find((r) => r.record_id === "li1")?.reason).toBe(
+      expect(desk.not_promises.find((r) => r.record_id === "wp2")?.reason).toBe(
         "You marked it: not a promise",
       );
       expect(desk.pipeline.find((s) => s.id === "review")).toMatchObject({

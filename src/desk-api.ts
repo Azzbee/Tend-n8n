@@ -1,5 +1,8 @@
 import type { AuthCommand, TendStore } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
+import type { VerifiedContactGroup } from "./live-policy.ts";
+import type { EmbeddingClient } from "./semantic-search.ts";
+import type { ActionCosine } from "./promise-threads.ts";
 import {
   buildDeskRuns,
   buildDeskSnapshot,
@@ -14,12 +17,15 @@ export interface DeskOptions {
   failureLog?: () => Promise<DeskFailure[]>;
   workflowRuns?: () => Promise<DeskWorkflowRun[]>;
   outreach?: DeskOutreachBackend;
+  /** Optional local embedding model for promise-thread similarity; tokens decide when it is absent or slow. */
+  actionEmbeddings?: EmbeddingClient;
 }
 export const deskRoutes = [
   "/private/api/desk",
   "/private/api/desk/confirm",
   "/private/api/desk/dismiss",
   "/private/api/desk/done",
+  "/private/api/desk/separate",
   "/private/api/runs",
 ];
 export const outreachRoutes = [
@@ -73,6 +79,42 @@ async function guard<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+const EMBED_BUDGET_MS = 3000;
+const EMBED_LIMIT = 40;
+const vectors = new Map<string, number[]>();
+/** Embeds open action texts before any store lock; returns null when the model is unavailable or slow. */
+export async function actionCosine(
+  client: EmbeddingClient | undefined,
+  actions: readonly string[],
+): Promise<ActionCosine | undefined> {
+  if (!client) return undefined;
+  const texts = [...new Set(actions)].slice(0, EMBED_LIMIT);
+  const signal = AbortSignal.timeout(EMBED_BUDGET_MS);
+  try {
+    for (const text of texts)
+      if (!vectors.has(text)) {
+        if (vectors.size >= 500) vectors.clear();
+        vectors.set(text, await client.embed(text, signal));
+      }
+  } catch {
+    return undefined;
+  }
+  return (a, b) => {
+    const x = vectors.get(a),
+      y = vectors.get(b);
+    if (!x || !y || x.length !== y.length) return null;
+    let dot = 0,
+      nx = 0,
+      ny = 0;
+    for (let i = 0; i < x.length; i++) {
+      dot += x[i]! * y[i]!;
+      nx += x[i]! * x[i]!;
+      ny += y[i]! * y[i]!;
+    }
+    return nx && ny ? dot / Math.sqrt(nx * ny) : null;
+  };
+}
+
 export async function handleDeskRoute(input: {
   path: string;
   method: string;
@@ -81,12 +123,22 @@ export async function handleDeskRoute(input: {
   auth: Omit<AuthCommand, "text">;
   now: Date;
   options: DeskOptions;
+  groups?: readonly VerifiedContactGroup[];
 }): Promise<{ status: number; body: unknown }> {
   const { path, method, data, store, auth, options } = input;
   const owner = auth.owner_id;
   const failures = async (): Promise<DeskFailure[] | null> =>
     options.failureLog ? await options.failureLog().catch(() => null) : null;
   if (method === "GET" && path === "/private/api/desk") {
+    // Link the same ask seen on several channels before reading; writes only when something links.
+    const before = await store.commitments(owner);
+    const cosine = await actionCosine(
+      options.actionEmbeddings,
+      before
+        .filter((c) => c.status === "pending" || c.status === "confirmed")
+        .map((c) => c.action),
+    );
+    await store.linkPromiseThreads(owner, input.groups ?? [], cosine);
     const [commitments, records, contacts, sources, log] = await Promise.all([
       store.commitments(owner),
       store.interactions(owner),
@@ -146,10 +198,15 @@ export async function handleDeskRoute(input: {
   }
   if (
     path === "/private/api/desk/dismiss" ||
-    path === "/private/api/desk/done"
+    path === "/private/api/desk/done" ||
+    path === "/private/api/desk/separate"
   ) {
     fields(data, ["id"]);
-    const verb = path.endsWith("dismiss") ? "/dismiss" : "/done";
+    const verb = path.endsWith("dismiss")
+      ? "/dismiss"
+      : path.endsWith("separate")
+        ? "/separate"
+        : "/done";
     return {
       status: 200,
       body: { commitment: await command(`${verb} ${id(data)}`) },

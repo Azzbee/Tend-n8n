@@ -316,6 +316,7 @@ export function createPrivateWebHandler(
               },
               now: clock(),
               options,
+              groups: policy.verified_contact_groups ?? [],
             });
             send(result.status, result.body);
           } catch (error) {
