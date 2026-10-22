@@ -54,9 +54,15 @@ Demo: `node --experimental-strip-types src/outreach-demo.ts serve` (fictional on
 - `bun run integration` with the outreach step: pass, 22 checks (`evidence/runtime-checks.json`, "Outreach planner, Telegram approval and mock Gmail draft"); workflows 23 and 24 ended with n8n status `success`. Two earlier attempts failed before or at the outreach step, for harness reasons fixed in this commit: the 18 s n8n start wait under host load, and the task-broker port clash.
 - Verifier findings F1, F2, F6 and F10 are fixed (3e2f0b0, aef8216); tend-verify re-verified them on the merged stack. F11 (copied style-example dates) is mitigated in bb70be4 and bf2e826, and tend-verify confirmed 8 of 8 rejections with no uncited-date cases.
 
-## Model-size limit (decision for Adam)
+## Draft model (F11, decided by Adam at 11:41)
 
-With qwen3:0.6b, almost every model draft is rejected: it echoes the cited message, the style example or the purpose instruction, or it invents a date. The owner therefore sees the safe templates or their own edits, never an unchecked model draft. To get real "in your style" drafts, use a larger local model for workflow 23 (for example a 3-4B instruct model in Ollama). That is a resource and setup choice, so it is left to you. The checks stay as they are.
+`TEND_OUTREACH_MODEL` defaults to `qwen3:4b`, which was already installed (2.5 GB weights, 3.18 GB loaded). Before each planner run, the API checks Ollama's installed models, with the answer cached for a minute. It falls back to `qwen3:0.6b` when the configured model is missing, the name is invalid or Ollama is unreachable. Workflows 23 and 25 take the model from `$json.request` and allow 120 s per call. `qwen3:8b` (6+ GB loaded) was ruled out: this 16 GB Mac had about 7.6 GB in the memory compressor at the time.
+
+Live runs with fictional data, temperature 0, 11:50 to 12:00, Ollama only:
+
+- With the earlier checks, qwen3:4b drafts passed the validator but several were wrong. It restated Mira's promise as Adam's, invented "2:00 PM", claimed "I've reviewed the prototype checklist", and made new promises ("I'll check the demo by 2026-10-15", re-promising an overdue date).
+- Model drafts now also fail on an uncited clock time, a first-person clause copied from the contact's message, a first-person completion claim, or any first-person commitment (commits 4c37b88, 213d331, c07faf9). Owner edits are not held to these checks. The reply template no longer promises a reply (e5724d4).
+- Final run: 2 of 4 model drafts accepted, both usable as written. "Hi Mira, your demo was promised for 2026-10-15 but hasn't been sent yet. Could you please share an update?" and "Hi Mira, I see the prototype checklist is ready for review." The other two were blocked as promises, so their templates were kept. A planner run takes 10 to 20 s for 4 drafts. qwen3:4b was unloaded after the runs.
 
 ## Pending, and what Adam must do
 
