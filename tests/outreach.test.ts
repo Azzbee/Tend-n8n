@@ -551,6 +551,26 @@ describe("Desk backend and Telegram commands", () => {
         },
       },
     ) as { json: { text: string } }[];
+    const edited = vm.runInNewContext(`(function(){${telegramReplyCode}})()`, {
+      $: () => ({
+        first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+      }),
+      $input: {
+        first: () => ({
+          json: {
+            outbound_sent: false,
+            outreach_item: {
+              id: item.id,
+              status: "pending",
+              text_code: "0a1b2c3d",
+              draft_text: "Hi Mira, any news?",
+            },
+          },
+        }),
+      },
+    }) as { json: { text: string } }[];
+    // After /edit the owner sees the code needed for /approve ID CODE.
+    expect(edited[0]!.json.text).toContain("Code 0a1b2c3d.");
     expect(rendered[0]!.json.text).toContain(
       "Outreach refused: cannot approve a skipped item",
     );
