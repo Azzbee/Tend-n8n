@@ -1092,7 +1092,12 @@ try {
       const failuresBefore = (
         (await request("/api/status")).failure_log as unknown[]
       ).length;
-      const forcedResponse = await fetch(`${base}/webhook/tend-forced-failure`);
+      // Published webhooks register a moment after /healthz answers.
+      let forcedResponse = await fetch(`${base}/webhook/tend-forced-failure`);
+      for (let i = 0; i < 20 && forcedResponse.status === 404; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        forcedResponse = await fetch(`${base}/webhook/tend-forced-failure`);
+      }
       let failureEntry: Record<string, unknown> | undefined;
       for (let i = 0; i < 40 && !failureEntry; i++) {
         await new Promise((r) => setTimeout(r, 500));
