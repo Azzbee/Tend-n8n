@@ -13,6 +13,7 @@ import {
   planOutreach,
   purposes,
   repeatsAny,
+  modelOnlyProblem,
   styleOnly,
   textHash,
   verifiedRecipient,
@@ -63,6 +64,7 @@ interface StoredItem extends Omit<
   handed_at?: string | null;
   // Scrubbed style examples sent to the model, kept to catch echoes.
   style_examples?: string[];
+  evidence_from?: string[];
 }
 export interface OutreachBookOptions {
   owner_id: string;
@@ -262,6 +264,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         evidence_hash: p.evidence_hash,
         style_basis: p.style_examples.length ? "recipient_examples" : "default",
         style_examples: p.style_examples.map(styleOnly),
+        evidence_from: p.evidence_from,
         draft_source: "template",
         status: "pending",
         created_at,
@@ -322,7 +325,19 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
                 purposes[item.reason],
               ])
             ? "model repeated the prompt"
-            : draftProblem(text, item.evidence);
+            : (draftProblem(text, item.evidence) ??
+              modelOnlyProblem(
+                text,
+                item.evidence,
+                item.evidence
+                  .filter(
+                    (_, i) =>
+                      !["you", "calendar"].includes(
+                        item.evidence_from?.[i] ?? "you",
+                      ),
+                  )
+                  .map((e) => e.text),
+              ));
     if (problem) {
       this.log(item.id, "model_draft_rejected", problem);
       return { accepted: false, problem, item: this.view(item) };

@@ -458,6 +458,50 @@ describe("drafts never send without an exact approval", () => {
       ).accepted,
     ).toBe(true);
   });
+  it("rejects model drafts seen with qwen3:4b: copied promises, clock times, invented progress", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const items = byReason(book, load());
+    const overdue = items.overdue_owed_to_you!.id;
+    expect(
+      book.modelDraft(
+        overdue,
+        "I will send the demo by 2:00 PM on 2026-10-15.",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, I will send the demo tomorrow, ok?",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "model spoke as the contact" });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, can we talk at 14:30 about the demo?",
+        load(),
+      ),
+    ).toMatchObject({ accepted: false, problem: "uncited detail: 14:30" });
+    expect(
+      book.modelDraft(
+        items.reply_waiting!.id,
+        "I've reviewed the prototype checklist.",
+        load(),
+      ),
+    ).toMatchObject({
+      accepted: false,
+      problem: "model claimed progress the evidence does not show",
+    });
+    expect(
+      book.modelDraft(
+        overdue,
+        "Hi Mira, how is the demo going? Let me know if you need anything from me.",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
   it("tells the model who wrote each cited message and what the draft is for", () => {
     const { book, load } = world();
     const created = book.plan(load()).created;
