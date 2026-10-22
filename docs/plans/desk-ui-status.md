@@ -61,6 +61,14 @@ No other wiring is needed: the Desk reads `store.commitments/interactions/contac
 
 Chrome note for parallel testers: session cookies are scoped by host, not port, so two previews on 127.0.0.1 in one Chrome profile log each other out. Take turns.
 
+## Verifier findings (tend-verify, 11:15)
+
+- F5 (How it runs missed 22 to 26; log heading said 21 only): fixed in `30e486a` before the report. Checked in Chrome: 12 classroom and 14 private workflows, heading "what 21 and 22 kept".
+- F6 (approving an email promised a Gmail draft with sending off): the outreach service now returns `sending_enabled` (improve/outreach `aef8216`, merged here in `45ab491`). The Desk shows "Sending is switched off: approvals never create Gmail drafts.", gives a matching notice and detail, and offers Copy text on approved emails. With no flag it promises nothing. Checked in Chrome on the private-lane preview (`OUTREACH_ENABLED=false`).
+- F9 (Outreach queue squeezed into the side column at 1440): the queue is now a full-width card grid below the Desk (4 columns at 1440, 1 column at 390). Checked in a real 390 px popup window: 3 cards, no overflow, buttons at least 44 px.
+
+Full suite after the merge: 1313 passed, 16 skipped; only the two PostgreSQL files fail (sandbox `shmget`).
+
 ## Open items
 
 - Cross-vendor review: `codex exec` cannot start in this sandbox ("failed to initialize in-process app-server client"). A fresh-context Claude review ran instead and returned BLOCK on one issue: an action in flight during lock re-rendered private Desk text into the hidden page. Fixed in `cdaa49b` with a regression test that fails on the old client. Its nits were also fixed: aborting superseded loads, re-enabling buttons after a failed reload, focus after actions and review steps, held-back candidates kept off promise lists, meeting times compared as instants, validated run statuses, a held-back total, expiry gating and a second click on Withdraw, and lock resetting section titles. Not done: moving focus when switching to People (the People view keeps its existing behaviour). Run `/codex:review` before merging to main.

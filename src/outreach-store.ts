@@ -20,6 +20,7 @@ import {
   type OutreachSnapshot,
   type OutreachStatus,
 } from "./outreach.ts";
+const textCode = (text: string): string => textHash(text).slice(0, 8);
 import { buildRawMessage } from "./outreach-gmail.ts";
 
 // The shape the Desk renders (shared contract with improve/desk-ui), plus two
@@ -31,6 +32,7 @@ export interface OutreachItem {
   channel: OutreachChannel;
   reason: OutreachReason;
   draft_text: string;
+  text_code: string;
   evidence: OutreachEvidence[];
   status: OutreachStatus;
   expires_at: string;
@@ -38,7 +40,10 @@ export interface OutreachItem {
   deep_link: string | null;
   style_basis: "recipient_examples" | "default" | "owner_edit";
 }
-interface StoredItem extends Omit<OutreachItem, "deep_link" | "style_basis"> {
+interface StoredItem extends Omit<
+  OutreachItem,
+  "deep_link" | "style_basis" | "text_code"
+> {
   owner_id: string;
   item_key: string;
   evidence_keys: string[];
@@ -68,6 +73,7 @@ const safeReasons = [
   /^(empty draft|draft too long|dash not allowed|instruction-like draft)$/,
   /^fill in the bracketed placeholder first$/,
   /^draft is no longer replaceable$/,
+  /^draft changed since you saw it$/,
 ];
 export function safeOutreachReason(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
@@ -195,6 +201,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       channel: item.channel,
       reason: item.reason,
       draft_text: item.draft_text,
+      text_code: textCode(item.draft_text),
       evidence: item.evidence,
       status: item.status,
       expires_at: item.expires_at,
@@ -315,11 +322,15 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       sending_enabled: this.options.sendingEnabled,
     };
   }
-  approve(id: string, snapshot: OutreachSnapshot): OutreachItem {
+  // `seen` is the text_code of the draft the owner was shown; a planner or
+  // model rewrite in between makes it stale, so the owner reviews again.
+  approve(id: string, seen: string, snapshot: OutreachSnapshot): OutreachItem {
     this.refresh(snapshot);
     const item = this.get(id);
     if (item.status !== "pending")
       throw new Error(`cannot approve a ${item.status} item`);
+    if (seen !== textCode(item.draft_text))
+      throw new Error("draft changed since you saw it");
     const contact = snapshot.contacts.find(
       (c) => c.contact_id === item.contact_id,
     );
@@ -421,7 +432,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     this.log(item.id, "gmail_draft_created", draftId);
     return this.view(item);
   }
-  // Telegram /outreach, /approve <id>, /edit <id> <text>, /skip <id>.
+  // Telegram /outreach, /approve <id> <code>, /edit <id> <text>, /skip <id>.
   // Returns null for any other command so the normal handler runs.
   telegram(text: string, snapshot: OutreachSnapshot): Reply | null {
     const match = /^\/(outreach|approve|edit|skip)(?:\s+([\s\S]*))?$/.exec(
@@ -439,8 +450,8 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       };
     try {
       const item =
-        cmd === "approve" && id && !words.length
-          ? this.approve(id, snapshot)
+        cmd === "approve" && id && words.length === 1
+          ? this.approve(id, words[0]!, snapshot)
           : cmd === "skip" && id && !words.length
             ? this.skip(id, snapshot)
             : cmd === "edit" && words.length
@@ -450,7 +461,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         return {
           outbound_sent: false,
           outreach_error:
-            "Use /outreach, /approve ID, /edit ID text or /skip ID.",
+            "Use /outreach, /approve ID CODE, /edit ID text or /skip ID.",
         };
       return { outbound_sent: false, outreach_item: item };
     } catch (error) {

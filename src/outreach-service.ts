@@ -50,8 +50,8 @@ export class OutreachService {
   async list(): Promise<ReturnType<OutreachBook["list"]>> {
     return this.book.list(await this.load());
   }
-  async approve(id: string): Promise<OutreachItem> {
-    return this.book.approve(id, await this.load());
+  async approve(id: string, seen: string): Promise<OutreachItem> {
+    return this.book.approve(id, seen, await this.load());
   }
   async edit(id: string, text: string): Promise<OutreachItem> {
     return this.book.edit(id, text, await this.load());
@@ -127,7 +127,13 @@ export function fixtureOutreachRoute(
   if (path === "/api/outreach/draft")
     return ok(book.modelDraft(id, body.text, load()));
   if (path === "/api/outreach/approve")
-    return ok({ item: book.approve(id, load()) });
+    return ok({
+      item: book.approve(
+        id,
+        typeof body.text_code === "string" ? body.text_code : "",
+        load(),
+      ),
+    });
   if (path === "/api/outreach/edit")
     return ok({ item: book.edit(id, String(body.text ?? ""), load()) });
   if (path === "/api/outreach/skip") return ok({ item: book.skip(id, load()) });

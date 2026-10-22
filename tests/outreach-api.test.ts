@@ -132,13 +132,19 @@ describe("fictional outreach lane over HTTP", () => {
         id: string;
         reason: string;
         status: string;
+        text_code: string;
       }[];
       const target = listed.find((i) => i.reason === "overdue_owed_to_you")!;
       expect((await call("/api/outreach/approved-email")).json.items).toEqual(
         [],
       );
       expect(
-        (await call("/api/outreach/approve", { id: target.id })).json.item,
+        (
+          await call("/api/outreach/approve", {
+            id: target.id,
+            text_code: target.text_code,
+          })
+        ).json.item,
       ).toMatchObject({ status: "approved" });
       // Workflow 23: approved email only, mock drafts.create, ledger.
       const approved = await call("/api/outreach/approved-email");
