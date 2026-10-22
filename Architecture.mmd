@@ -1,35 +1,43 @@
+%% Level 2: n8n workflows, local services and stores (one box per workflow or service).
+%% Cut line: the dashed boundary between the fictional classroom lane (top, runs on demand,
+%% fixture API 18767, no accounts) and the private live lane (bottom, approved accounts,
+%% private API 18768, no execution data saved). Nothing crosses from private to classroom.
 flowchart LR
- G[Gmail fictional adapter] --> N[n8n Normalize and Store sub-workflow]
- C[Calendar fictional adapter] --> N
- WP[Personal WhatsApp fictional adapter] --> N
- WB[Business WhatsApp fictional adapter] --> N
- L[LinkedIn fictional snapshot adapter] --> N
- N --> V[Local API: schema, identity and date checks]
- V --> D[(Persistent local SQLite)]
- D --> A[n8n local Ollama request]
- A --> Q[Validate exact quote and date]
- Q --> P[Pending commitment]
- P --> D
- CMD[Fictional private owner command] --> AUTH[Owner, user and private chat check]
- AUTH --> R[n8n branch and local command router]
- R --> D
- D --> B[Briefing with evidence and coverage]
- B --> OUT[Private preview only]
- RETRY[Synthetic 429 endpoint] --> ERR[n8n bounded retry]
- ERR --> REC[Recovery result]
-
- subgraph Approved_Google_Extension[Inactive approved Google extension]
-  S[Manual initial sync or n8n Schedule] --> GS[Authenticated anchored window and cursor]
-  GS --> GP[Native Gmail profile and Calendar metadata checks]
-  GP --> GET[Native read-only Google GET bounded page]
-  GET --> NS[Callable normalize and store child]
-  NS --> LS[(Separate private SQLite evidence and seen IDs)]
-  NS --> ACK[Advance checkpoint only after complete page]
-  GET --> RA[Bounded Retry-After or persisted deferral]
-  LS --> SP[Newly authored eligible direct span]
-  SP --> LA[Native LLM Chain and local Ollama]
-  LA --> EQ[Exact span and date validation]
-  EQ --> LP[Pending owner confirmation]
-  TG[Verified private Telegram transport] --> LG[Exact owner guard and Header Auth]
-  LG --> LS
+ subgraph Classroom[Classroom lane, fictional data, fixture API 18767]
+  F01[01-05 Fictional adapters, Manual trigger] -- fixture records --> F06[06 Normalize and store, sub-workflow]
+  F06 -- validated record --> FDB[(Fixture SQLite)]
+  FDB -- one fictional record --> F07[07 Extract commitments, LLM Chain + Ollama]
+  F07 -- quoted candidate, pending --> FDB
+  F08[08 Assistant router, If branches] -- owner command --> FDB
+  FDB -- cited briefing text --> F08
+  F09[09 Retry fixture] -- synthetic 429 then 200 --> F09R[Recovery record]
+  F23[23 Outreach planner] -- cited proposals --> FDB
+  FDB -- approved email only --> F24[24 Mock Gmail drafts.create]
+  F01 -. failure: name, node, id .-> F21[21 Error handler]
+  F21 -- redacted failure --> FDB
  end
+
+ CUT{{Cut line: fictional above, private below}}
+ Classroom -.-> CUT
+
+ subgraph Private[Private lane, approved accounts, private API 18768, no execution data saved]
+  TG[14 Telegram trigger, owner only] -- owner command, /outreach /approve ID CODE --> API[Private API, owner and scope guards]
+  API -- formatted reply, no JSON --> TG
+  G11[11 Gmail read-only sync, Schedule] -- approved-window page --> G13[13 Normalize and store, sub-workflow]
+  G12[12 Calendar read-only sync, Schedule] -- event page --> G13
+  G13 -- normalized records --> API
+  W17[17-19 WhatsApp and LinkedIn pollers] -- bounded provider page --> API
+  API -- records, cursors, commitments --> PG[(PostgreSQL canonical store)]
+  PG -- eligible authored spans only --> G15[15 Local AI extraction, LLM Chain + Ollama]
+  G15 -- exact-quote candidate, pending --> API
+  API -- cited evidence --> G16[16 Cited briefing or draft]
+  D20[20 Daily briefing, 09:00 Paris] -- one dated digest --> TG
+  G25[25 Outreach planner, hourly] -- proposals with evidence --> API
+  API -- exact approved draft --> G26[26 Gmail drafts.create, gmail.compose only]
+  API -- Desk, phone review, How it runs --> DESK[Commitment Desk, 127.0.0.1 only]
+  DESK -- Confirm, Not a promise, Approve with code --> API
+  G11 -. failure: names, guard text or HTTP status .-> G22[22 Error handler]
+  G22 -- redacted failure --> API
+  API -- embeddings, 20 per minute --> SEM[(Semantic index, 1 GiB budget)]
+ end
+ CUT -.-> Private

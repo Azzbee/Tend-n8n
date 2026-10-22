@@ -91,4 +91,6 @@ Manual checks in the editor:
 
 ## Screenshots
 
-See [`docs/screenshots/`](docs/screenshots/).
+Architecture (rendered from `Architecture.mmd`; level 2, with the cut line between the fictional classroom lane and the private lane):
+
+![Tend architecture](docs/screenshots/architecture.png)
