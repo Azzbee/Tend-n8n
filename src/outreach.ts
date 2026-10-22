@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Commitment, Contact, NormalizedRecord } from "./engine.ts";
+import { isInstructionLike } from "./instruction-like.ts";
 
 // Pure outreach rules: no I/O, so the planner, quiet hours, rate limit,
 // recipient check and draft validation are testable on plain data.
@@ -89,18 +90,7 @@ export function withinRateLimit(
       now.getTime() - Date.parse(p.created_at) < RATE_LIMIT_MS,
   );
 }
-const instructionPatterns = [
-  /\b(ignore|disregard|forget|override)\b[^.]{0,60}\b(rules?|instructions?|prompts?|previous|earlier|above)\b/i,
-  /\b(system prompt|you are now|act as|new instructions?)\b/i,
-  /\b(send|forward|export)\b[^.]{0,30}\b(all|every)\b[^.]{0,30}\b(contacts?|messages?|emails?|data)\b/i,
-  /\bmark\b[^.]{0,20}\b(all|every)\b/i,
-  /\b(api[ -]?key|password|access token|credentials?)\b/i,
-];
-// Messages that try to steer the assistant are never drafted from: they go to
-// the held-back list instead of becoming a reply proposal.
-export function isInstructionLike(text: string): boolean {
-  return instructionPatterns.some((p) => p.test(text));
-}
+export { isInstructionLike };
 const channelOf = (source: string): OutreachChannel | null =>
   source === "gmail" || source === "calendar"
     ? "email"
