@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-22T10:03:32.155Z",
+  "checked_at": "2026-10-22T13:00:56.973Z",
   "workflow_sha256": {
     "01-gmail.json": "d73b089dc73c842be2e0c2e35c68eef27f00347dc30a46e669d005b21ac9cfb5",
     "02-calendar.json": "a19473151eb14ff76deaaeb3a18f24c28dc4bfa9f5f56c51a53f1b22d624f1ba",
@@ -21,19 +21,19 @@
     "18-linkedin-portability-readonly.json": "188fceec82f285af0e81f0e065759209e6626cfd71a3c97673256280516980d7",
     "19-business-whatsapp-readonly.json": "b3ab04a03cb32c657b56f0571d7c8041426b02ea9f80d94cc92f61aa7e6e4067",
     "20-daily-owner-briefing.json": "e2121b582e036ba312571e802774cdac279bc54fa4c1c3288533af3831b6a21c",
-    "21-error-handler.json": "bf4b0d7bc2e9086dc2b0a6e960b934a68fa47f8de95b608ce3c0e778b11bf06d",
-    "22-private-error-handler.json": "9eaa13abb24680c2a1eaafc83b83186c512833b67a12ac1ac7d66f1e309d4ed6",
-    "23-outreach-planner.json": "6a38c4e2e1cedeb9054e7c6beec305502d74273cc8cbd665dc9f916aa92ba2ee",
-    "24-outreach-gmail-drafts.json": "afa95276768b85535e6732ed4d78db34647c4e1a84762f8fe0935ff1ef3494f2",
-    "25-private-outreach-planner.json": "cff3a60e1162dc9d40d4e2ddd364e95e89c31f4747270b26c5f645b91fe10b3a",
-    "26-private-outreach-gmail-drafts.json": "4a47bf2041706f143f447fa76aeb352b1c95ea516ab4644a7d9c618e2045bc0d"
+    "21-error-handler.json": "0d5ce6b7dd885abdba29fc46800a3f15ce9ab4c78cd6b9abd7b2f1f7fdbf9ddb",
+    "22-private-error-handler.json": "96ac3c137d6f6101e604dbee71888a670df1ed1999c2ed033f0de3f5070b37e4",
+    "23-outreach-planner.json": "1ed0b3aee265d363dd252784d82262c6af1f2ffda0ac6acca109ac119c77104a",
+    "24-outreach-gmail-drafts.json": "7f71067adae25f2645b0d3932d0f825741270d4903ce04e33d75645db44dde3b",
+    "25-private-outreach-planner.json": "cc95dfe436a895e2d8aedc9c927d0fedbc12d19133fd69babe40785ab76689f1",
+    "26-private-outreach-gmail-drafts.json": "232c8a90bb864d18d4cd0778122cc0ae18a63153ec0cffb3d732a8173371ae15"
   },
   "source_sha256": {
     "engine.ts": "16f9d61210d7367992556cab47ddf936992aa93087aea0febff799dd82aa25ae",
-    "server.ts": "29bc50a05e5e8361f40d45354616a25b4541e1a285b1718eb68480c248057e80",
+    "server.ts": "378be723166a75722de613976575d815973ddd6a20e325306c001b6fc35b4b18",
     "build-workflows.ts": "d6b57867aece44fec26abf412931b659284868b7a09b63384657588fa085bdd0",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "369501100cf66c364c5bb8d5f84c57308d37f1d5f5cb043a88d4784ed0d6ca63"
+    "integration.ts": "47f6566af38fb14d477ebd17a615d9888313180466c6e5d440b4124c324cf9ff"
   },
   "runtime": {
     "node": "v22.17.0",
