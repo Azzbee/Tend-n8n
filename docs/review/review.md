@@ -207,3 +207,9 @@ One commit per item on review/codex. Each test was checked to fail with the fix 
 Not done: `.env.example` (`OUTREACH_ENABLED=false`). This session's sandbox denies reading `./.env.*`, so the lead or Adam has to add that line.
 
 Gate on review/codex after these commits: typecheck, lint, build (26 exports, no diff) and format pass. Unit tests without the Docker-backed files: 53 files, 1307 passed, 2 skipped.
+
+## Re-review 7: improve/lead at 3b05416, plus the extraction-candidates parity test (22 Oct, 12:00 Paris)
+
+`3b05416` replaces the per-minute `/api/live/model-input` scan of every record with `extractionCandidates(owner, key)`. The PostgreSQL version filters in SQL with the same rule as SQLite: kind, direction, attribution, eligibility and cancelled, plus "no attempt at this content_hash" when no key is given. No findings.
+
+`b224952` adds the parity test the lead asked for, in `tests/live-store-parity.test.ts`. It was run against Docker PostgreSQL, which the lead cleared for this file only, and all 22 parity tests pass. That includes `a02c1f0`'s private-bot `/approve ID CODE` test, which is therefore now verified. Making the SQL attempt filter always true makes the new test fail. The commit cherry-picks cleanly onto 3b05416 on its own.
