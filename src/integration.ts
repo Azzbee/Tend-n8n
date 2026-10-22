@@ -890,6 +890,7 @@ try {
         id: string;
         channel: string;
         status: string;
+        text_code: string;
       }[];
       const email = queue.find(
         (i) => i.channel === "email" && i.status === "pending",
@@ -907,7 +908,10 @@ try {
           .length === 0,
         "workflow 24 drafted an unapproved item",
       );
-      await request("/api/outreach/approve", { id: email.id });
+      await request("/api/outreach/approve", {
+        id: email.id,
+        text_code: email.text_code,
+      });
       execution("TendReview24");
       const ledger = await request("/api/outreach/ledger");
       assert(

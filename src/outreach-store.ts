@@ -10,6 +10,7 @@ import {
   evidenceHash,
   outreachDraftRequest,
   planOutreach,
+  repeatsEvidence,
   textHash,
   verifiedRecipient,
   type OutreachChannel,
@@ -19,6 +20,7 @@ import {
   type OutreachSnapshot,
   type OutreachStatus,
 } from "./outreach.ts";
+const textCode = (text: string): string => textHash(text).slice(0, 8);
 import { buildRawMessage } from "./outreach-gmail.ts";
 
 // The shape the Desk renders (shared contract with improve/desk-ui), plus two
@@ -30,13 +32,18 @@ export interface OutreachItem {
   channel: OutreachChannel;
   reason: OutreachReason;
   draft_text: string;
+  text_code: string;
   evidence: OutreachEvidence[];
   status: OutreachStatus;
   expires_at: string;
   recipient: string;
   deep_link: string | null;
+  style_basis: "recipient_examples" | "default" | "owner_edit";
 }
-interface StoredItem extends Omit<OutreachItem, "deep_link"> {
+interface StoredItem extends Omit<
+  OutreachItem,
+  "deep_link" | "style_basis" | "text_code"
+> {
   owner_id: string;
   item_key: string;
   evidence_keys: string[];
@@ -56,6 +63,25 @@ export interface OutreachBookOptions {
   // Kill switch for the send path. Off means no item is ever handed to a
   // Gmail step and no Gmail receipt is accepted.
   sendingEnabled: boolean;
+}
+// Refusal reasons safe to show the owner; matches safeOutreachError in
+// src/desk-api.ts. Anything else (and any draft text) stays generic.
+const safeReasons = [
+  /^unknown outreach item$/,
+  /^cannot (approve|edit|skip) a [a-z_]+ item$/,
+  /^recipient is not a verified identity of this contact$/,
+  /^(empty draft|draft too long|dash not allowed|instruction-like draft)$/,
+  /^fill in the bracketed placeholder first$/,
+  /^draft is no longer replaceable$/,
+  /^draft changed since you saw it$/,
+];
+export function safeOutreachReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.startsWith("uncited detail: "))
+    return "The draft mentions a link, address, number or date that is not in the cited messages.";
+  return safeReasons.some((r) => r.test(message))
+    ? message
+    : "Outreach command failed.";
 }
 const subjects: Record<OutreachReason, string> = {
   overdue_owed_to_you: "Following up",
@@ -175,10 +201,12 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
       channel: item.channel,
       reason: item.reason,
       draft_text: item.draft_text,
+      text_code: textCode(item.draft_text),
       evidence: item.evidence,
       status: item.status,
       expires_at: item.expires_at,
       recipient: item.recipient,
+      style_basis: item.style_basis,
       deep_link:
         item.status === "approved"
           ? deepLink(item.channel, item.recipient, item.draft_text)
@@ -270,9 +298,11 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         item: this.view(item),
       };
     const problem =
-      typeof text === "string"
-        ? draftProblem(text, item.evidence)
-        : "missing model text";
+      typeof text !== "string"
+        ? "missing model text"
+        : repeatsEvidence(text, item.evidence)
+          ? "model repeated the cited message"
+          : draftProblem(text, item.evidence);
     if (problem) {
       this.log(item.id, "model_draft_rejected", problem);
       return { accepted: false, problem, item: this.view(item) };
@@ -283,14 +313,24 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     this.log(item.id, "model_draft", item.style_basis);
     return { accepted: true, problem: null, item: this.view(item) };
   }
-  list(snapshot: OutreachSnapshot): { items: OutreachItem[] } {
-    return { items: this.refresh(snapshot).map((i) => this.view(i)) };
+  list(snapshot: OutreachSnapshot): {
+    items: OutreachItem[];
+    sending_enabled: boolean;
+  } {
+    return {
+      items: this.refresh(snapshot).map((i) => this.view(i)),
+      sending_enabled: this.options.sendingEnabled,
+    };
   }
-  approve(id: string, snapshot: OutreachSnapshot): OutreachItem {
+  // `seen` is the text_code of the draft the owner was shown; a planner or
+  // model rewrite in between makes it stale, so the owner reviews again.
+  approve(id: string, seen: string, snapshot: OutreachSnapshot): OutreachItem {
     this.refresh(snapshot);
     const item = this.get(id);
     if (item.status !== "pending")
       throw new Error(`cannot approve a ${item.status} item`);
+    if (seen !== textCode(item.draft_text))
+      throw new Error("draft changed since you saw it");
     const contact = snapshot.contacts.find(
       (c) => c.contact_id === item.contact_id,
     );
@@ -392,7 +432,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     this.log(item.id, "gmail_draft_created", draftId);
     return this.view(item);
   }
-  // Telegram /outreach, /approve <id>, /edit <id> <text>, /skip <id>.
+  // Telegram /outreach, /approve <id> <code>, /edit <id> <text>, /skip <id>.
   // Returns null for any other command so the normal handler runs.
   telegram(text: string, snapshot: OutreachSnapshot): Reply | null {
     const match = /^\/(outreach|approve|edit|skip)(?:\s+([\s\S]*))?$/.exec(
@@ -401,24 +441,34 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     if (!match) return null;
     const [, cmd, rest = ""] = match;
     const [id = "", ...words] = rest.trim().split(/\s+/);
-    if (cmd === "outreach") {
-      if (rest.trim()) throw new Error("invalid command arguments");
+    if (cmd === "outreach" && !rest.trim())
       return {
         outbound_sent: false,
         outreach: this.list(snapshot).items.filter(
           (i) => i.status === "pending" || i.status === "approved",
         ),
       };
+    try {
+      const item =
+        cmd === "approve" && id && words.length === 1
+          ? this.approve(id, words[0]!, snapshot)
+          : cmd === "skip" && id && !words.length
+            ? this.skip(id, snapshot)
+            : cmd === "edit" && words.length
+              ? this.edit(id, rest.trim().slice(id.length).trim(), snapshot)
+              : null;
+      if (!item)
+        return {
+          outbound_sent: false,
+          outreach_error:
+            "Use /outreach, /approve ID CODE, /edit ID text or /skip ID.",
+        };
+      return { outbound_sent: false, outreach_item: item };
+    } catch (error) {
+      return {
+        outbound_sent: false,
+        outreach_error: safeOutreachReason(error),
+      };
     }
-    const item =
-      cmd === "approve" && !words.length
-        ? this.approve(id, snapshot)
-        : cmd === "skip" && !words.length
-          ? this.skip(id, snapshot)
-          : cmd === "edit" && words.length
-            ? this.edit(id, rest.trim().slice(id.length).trim(), snapshot)
-            : null;
-    if (!item) throw new Error("invalid command arguments");
-    return { outbound_sent: false, outreach_item: item };
   }
 }

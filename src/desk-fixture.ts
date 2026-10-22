@@ -2,6 +2,9 @@ import { TendStore, type Source } from "./engine.ts";
 import type { LiveRecord } from "./google-records.ts";
 import { exampleLivePolicy } from "./live-policy.ts";
 import type { DeskFailure, OutreachItem } from "./desk-model.ts";
+import { textHash } from "./outreach.ts";
+
+const textCode = (text: string): string => textHash(text).slice(0, 8);
 
 // Fictional Mira Tan (F17) data in live record shape, mirroring src/fixtures.ts, for Desk tests and the local demo.
 export const deskFixtureClock = (): Date => new Date("2026-10-13T09:00:00Z");
@@ -195,43 +198,45 @@ export const deskFixtureFailures: DeskFailure[] = [
   },
 ];
 export function deskFixtureOutreach(now: Date): OutreachItem[] {
-  return [
-    {
-      id: "OUT-F17-1",
-      contact_id: "F17",
-      contact_name: "Mira Tan",
-      channel: "email",
-      reason: "overdue_owed_to_you",
-      draft_text: "Hi Mira, could you share an update on the demo? Thanks.",
-      evidence: [
-        {
-          source: "gmail",
-          text: "I will send the demo by 2026-10-15.",
-          reference: "fixture://gmail/g1",
-        },
-      ],
-      status: "pending",
-      expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
-      recipient: "mira@example.invalid",
-    },
-    {
-      id: "OUT-F17-2",
-      contact_id: "F17",
-      contact_name: "Mira Tan",
-      channel: "whatsapp_business",
-      reason: "reply_waiting",
-      draft_text:
-        "Hi Mira, thanks for the checklist. I will go through it this week.",
-      evidence: [
-        {
-          source: "whatsapp_business",
-          text: "The prototype checklist is available for review.",
-          reference: "fixture://whatsapp_business/wb1",
-        },
-      ],
-      status: "pending",
-      expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
-      deep_link: null,
-    },
-  ];
+  return (
+    [
+      {
+        id: "OUT-F17-1",
+        contact_id: "F17",
+        contact_name: "Mira Tan",
+        channel: "email",
+        reason: "overdue_owed_to_you",
+        draft_text: "Hi Mira, could you share an update on the demo? Thanks.",
+        evidence: [
+          {
+            source: "gmail",
+            text: "I will send the demo by 2026-10-15.",
+            reference: "fixture://gmail/g1",
+          },
+        ],
+        status: "pending",
+        expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
+        recipient: "mira@example.invalid",
+      },
+      {
+        id: "OUT-F17-2",
+        contact_id: "F17",
+        contact_name: "Mira Tan",
+        channel: "whatsapp_business",
+        reason: "reply_waiting",
+        draft_text:
+          "Hi Mira, thanks for the checklist. I will go through it this week.",
+        evidence: [
+          {
+            source: "whatsapp_business",
+            text: "The prototype checklist is available for review.",
+            reference: "fixture://whatsapp_business/wb1",
+          },
+        ],
+        status: "pending",
+        expires_at: new Date(now.getTime() + 24 * 3600_000).toISOString(),
+        deep_link: null,
+      },
+    ] as Omit<OutreachItem, "text_code">[]
+  ).map((item) => ({ ...item, text_code: textCode(item.draft_text) }));
 }

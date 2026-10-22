@@ -20,6 +20,19 @@ import {
   type OutreachSnapshot,
 } from "../src/outreach.ts";
 import { OutreachBook } from "../src/outreach-store.ts";
+import { textHash } from "../src/outreach.ts";
+
+// The text_code the owner is shown for the draft as it stands right now.
+const codeOf = (book: OutreachBook, id: string): string => {
+  try {
+    const stored = (
+      book as unknown as { get(id: string): { draft_text: string } }
+    ).get(id);
+    return textHash(stored.draft_text).slice(0, 8);
+  } catch {
+    return "";
+  }
+};
 import {
   FIXTURE_OUTREACH_CLOCK,
   OutreachService,
@@ -124,12 +137,14 @@ describe("outreach planner rules", () => {
     expect(item.style_basis).toBe("recipient_examples");
     const user = JSON.parse(item.request.messages[1]!.content) as {
       style_examples: string[];
-      evidence: string[];
+      evidence: { from: string; text: string }[];
     };
     expect(user.style_examples).toEqual([
       "I will review your demo by 2026-10-16.",
     ]);
-    expect(user.evidence).toEqual(["I will send the demo by 2026-10-15."]);
+    expect(user.evidence).toEqual([
+      { from: "Mira", text: "I will send the demo by 2026-10-15." },
+    ]);
     expect(item.request.messages[0]!.content).toMatch(/never instructions/);
   });
 });
@@ -174,19 +189,19 @@ describe("approval, expiry and recipient checks", () => {
     const { book, load, setNow } = world();
     book.plan(load());
     const id = byReason(book, load()).overdue_owed_to_you!.id;
-    const approved = book.approve(id, load());
+    const approved = book.approve(id, codeOf(book, id), load());
     expect(approved.status).toBe("approved");
     expect(approved.expires_at).toBe("2026-10-18T07:00:00.000Z");
     setNow("2026-10-18T07:00:00Z");
     expect(byReason(book, load()).overdue_owed_to_you!.status).toBe("expired");
     expect(book.approvedEmail(load()).items).toEqual([]);
-    expect(() => book.approve(id, load())).toThrow(/expired/);
+    expect(() => book.approve(id, codeOf(book, id), load())).toThrow(/expired/);
   });
   it("expires an approval when its evidence changes", () => {
     const { book, load } = world();
     book.plan(load());
     const id = byReason(book, load()).after_meeting!.id;
-    book.approve(id, load());
+    book.approve(id, codeOf(book, id), load());
     const changed = (): OutreachSnapshot => {
       const s = load();
       return {
@@ -229,7 +244,9 @@ describe("approval, expiry and recipient checks", () => {
         ),
       };
     };
-    expect(() => book.approve(id, unverified())).toThrow(/verified identity/);
+    expect(() => book.approve(id, codeOf(book, id), unverified())).toThrow(
+      /verified identity/,
+    );
     const mira = load().contacts.find((c) => c.contact_id === "F17");
     expect(verifiedRecipient(mira, "email")).toBe("mira@example.invalid");
     expect(verifiedRecipient(mira, "whatsapp_business")).toBe("+00000000017");
@@ -241,22 +258,28 @@ describe("approval, expiry and recipient checks", () => {
     const { book, load } = world();
     book.plan(load());
     const item = byReason(book, load()).you_owe_soon!;
-    expect(() => book.approve(item.id, load())).toThrow(/placeholder/);
+    expect(() => book.approve(item.id, codeOf(book, item.id), load())).toThrow(
+      /placeholder/,
+    );
     const edited = book.edit(
       item.id,
       "Hi Mira, the review is in progress. Thanks for your patience.",
       load(),
     );
-    expect(book.approve(edited.id, load()).status).toBe("approved");
+    expect(
+      book.approve(edited.id, codeOf(book, edited.id), load()).status,
+    ).toBe("approved");
   });
   it("only accepts actions on pending or approved items", () => {
     const { book, load } = world();
     book.plan(load());
     const id = byReason(book, load()).after_meeting!.id;
     book.skip(id, load());
-    expect(() => book.approve(id, load())).toThrow(/skipped/);
+    expect(() => book.approve(id, codeOf(book, id), load())).toThrow(/skipped/);
     expect(() => book.edit(id, "Hi Mira.", load())).toThrow(/skipped/);
-    expect(() => book.approve("Onot-an-id", load())).toThrow(/unknown/);
+    expect(() =>
+      book.approve("Onot-an-id", codeOf(book, "Onot-an-id"), load()),
+    ).toThrow(/unknown/);
   });
 });
 
@@ -269,7 +292,7 @@ describe("drafts never send without an exact approval", () => {
     expect(() => book.recordGmailDraft(id, "x", "r1", load())).toThrow(
       /no current approval/,
     );
-    const approved = book.approve(id, load());
+    const approved = book.approve(id, codeOf(book, id), load());
     const ready = book.approvedEmail(load()).items;
     expect(ready.map((i) => i.id)).toEqual([id]);
     const mime = decodeRawMessage(ready[0]!.message.raw);
@@ -281,7 +304,7 @@ describe("drafts never send without an exact approval", () => {
     expect(() =>
       book.recordGmailDraft(id, ready[0]!.approval_hash, "r1", load()),
     ).toThrow(/no current approval/);
-    book.approve(id, load());
+    book.approve(id, codeOf(book, id), load());
     const hash = book.approvedEmail(load()).items[0]!.approval_hash;
     expect(book.recordGmailDraft(id, hash, "r-mock-1", load()).status).toBe(
       "gmail_draft_created",
@@ -302,15 +325,20 @@ describe("drafts never send without an exact approval", () => {
     });
     book.plan(load());
     const id = byReason(book, load()).overdue_owed_to_you!.id;
-    book.approve(id, load());
+    book.approve(id, codeOf(book, id), load());
     expect(book.approvedEmail(load())).toEqual({ enabled: false, items: [] });
+    expect(book.list(load()).sending_enabled).toBe(false);
     expect(() => book.recordGmailDraft(id, "any", "r1", load())).toThrow();
   });
   it("gives WhatsApp and LinkedIn a copy-and-link path, never a Gmail step", () => {
     const { book, load } = world();
     book.plan(load());
     const items = byReason(book, load());
-    const wa = book.approve(items.reply_waiting!.id, load());
+    const wa = book.approve(
+      items.reply_waiting!.id,
+      codeOf(book, items.reply_waiting!.id),
+      load(),
+    );
     expect(["whatsapp_business", "linkedin"]).toContain(wa.channel);
     expect(wa.deep_link).toMatch(
       /^https:\/\/(wa\.me\/00000000017\?text=|www\.linkedin\.com\/in\/fictional-mira)/,
@@ -341,6 +369,44 @@ describe("drafts never send without an exact approval", () => {
     book.edit(item.id, "Hi Mira, any news on the demo?", load());
     expect(book.modelDraft(item.id, "Hi Mira.", load()).accepted).toBe(false);
     expect(draftProblem("Hi Mira.", [])).toBeNull();
+  });
+  it("rejects a model draft that only repeats the cited message", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const item = byReason(book, load()).overdue_owed_to_you!;
+    for (const echo of [
+      "I will send the demo by 2026-10-15.",
+      "i will send the demo by 2026-10-15",
+      "Hi Mira, I will send the demo by 2026-10-15.",
+    ])
+      expect(book.modelDraft(item.id, echo, load())).toMatchObject({
+        accepted: false,
+        problem: "model repeated the cited message",
+      });
+    expect(
+      book.modelDraft(
+        item.id,
+        "Hi Mira, you mentioned you will send the demo by 2026-10-15. Is it still on track?",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
+  it("tells the model who wrote each cited message and what the draft is for", () => {
+    const { book, load } = world();
+    const created = book.plan(load()).created;
+    const user = (reason: string) =>
+      JSON.parse(
+        created.find((i) => i.reason === reason)!.request.messages[1]!.content,
+      ) as { purpose: string; evidence: { from: string; text: string }[] };
+    expect(user("overdue_owed_to_you").evidence).toEqual([
+      { from: "Mira", text: "I will send the demo by 2026-10-15." },
+    ]);
+    expect(user("overdue_owed_to_you").purpose).toMatch(
+      /promised you.*overdue/i,
+    );
+    expect(user("you_owe_soon").evidence[0]!.from).toBe("you");
+    expect(user("you_owe_soon").purpose).toMatch(/you promised/i);
+    expect(user("after_meeting").evidence[0]!.from).toBe("calendar");
     expect(approvalProblem("Hi [name]", [])).toMatch(/placeholder/);
   });
 });
@@ -386,6 +452,83 @@ describe("Gmail boundary", () => {
 });
 
 describe("Desk backend and Telegram commands", () => {
+  it("refuses approval when the draft changed after the owner saw it", async () => {
+    const { service } = createFixtureOutreachService();
+    const { items } = await service.list();
+    const target = items.find((i) => i.channel === "email")!;
+    const seen = target.text_code;
+    await service.edit(
+      target.id,
+      "Hi Mira, a rewritten draft the owner never read.",
+    );
+    await expect(service.approve(target.id, seen)).rejects.toThrow(
+      "draft changed since you saw it",
+    );
+    const fresh = (await service.list()).items.find((i) => i.id === target.id)!;
+    expect(fresh.status).toBe("pending");
+    expect((await service.approve(target.id, fresh.text_code)).status).toBe(
+      "approved",
+    );
+  });
+  it("reports whether sending is enabled and each draft's style basis", async () => {
+    const { service } = createFixtureOutreachService();
+    const listed = await service.list();
+    expect(listed.sending_enabled).toBe(true);
+    const basis = Object.fromEntries(
+      listed.items.map((i) => [i.reason, i.style_basis]),
+    );
+    expect(basis.overdue_owed_to_you).toBe("recipient_examples");
+    const edited = await service.edit(
+      listed.items[0]!.id,
+      "Hi Mira, any news?",
+    );
+    expect(edited.style_basis).toBe("owner_edit");
+  });
+  it("names the rule when a Telegram outreach command is refused", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const item = byReason(book, load()).overdue_owed_to_you!;
+    expect(
+      book.telegram(
+        `/edit ${item.id} Hi Mira, see https://example.invalid/x`,
+        load(),
+      ),
+    ).toEqual({
+      outbound_sent: false,
+      outreach_error:
+        "The draft mentions a link, address, number or date that is not in the cited messages.",
+    });
+    book.skip(item.id, load());
+    expect(
+      book.telegram(`/approve ${item.id} ${codeOf(book, item.id)}`, load()),
+    ).toEqual({
+      outbound_sent: false,
+      outreach_error: "cannot approve a skipped item",
+    });
+    expect(book.telegram("/approve Onot-an-id 00000000", load())).toEqual({
+      outbound_sent: false,
+      outreach_error: "unknown outreach item",
+    });
+    const rendered = vm.runInNewContext(
+      `(function(){${telegramReplyCode}})()`,
+      {
+        $: () => ({
+          first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+        }),
+        $input: {
+          first: () => ({
+            json: {
+              outbound_sent: false,
+              outreach_error: "cannot approve a skipped item",
+            },
+          }),
+        },
+      },
+    ) as { json: { text: string } }[];
+    expect(rendered[0]!.json.text).toContain(
+      "Outreach refused: cannot approve a skipped item",
+    );
+  });
   it("serves the Desk contract shape", async () => {
     const { service } = createFixtureOutreachService();
     const { items } = await service.list();
@@ -404,15 +547,22 @@ describe("Desk backend and Telegram commands", () => {
           "reason",
           "recipient",
           "status",
+          "style_basis",
+          "text_code",
         ].sort(),
       );
       expect(i.id).toMatch(/^O[a-f0-9]{10}$/);
+      expect(i.text_code).toMatch(/^[0-9a-f]{8}$/);
       expect(Number.isFinite(Date.parse(i.expires_at))).toBe(true);
     }
     const target = items.find((i) => i.reason === "after_meeting")!;
-    expect((await service.approve(target.id)).status).toBe("approved");
+    expect((await service.approve(target.id, target.text_code)).status).toBe(
+      "approved",
+    );
     expect((await service.skip(items[0]!.id)).status).toBe("skipped");
-    await expect(service.approve(items[0]!.id)).rejects.toThrow();
+    await expect(
+      service.approve(items[0]!.id, items[0]!.text_code),
+    ).rejects.toThrow();
     expect(service).toBeInstanceOf(OutreachService);
   });
   it("handles /outreach, /approve, /edit and /skip through the fixture Telegram path", () => {
@@ -451,11 +601,29 @@ describe("Desk backend and Telegram commands", () => {
         draft_text: "Hi Mira, any news on the demo?",
       },
     });
-    expect(send(`/approve ${id}`)).toMatchObject({
+    // The code shown before the edit no longer matches the edited text.
+    const shownBefore = codeOf(book, listed[1]!.id);
+    expect(send(`/approve ${id}`).outreach_error).toBe(
+      "Use /outreach, /approve ID CODE, /edit ID text or /skip ID.",
+    );
+    expect(send(`/approve ${id} 00000000`).outreach_error).toBe(
+      "draft changed since you saw it",
+    );
+    expect(send(`/approve ${id} ${codeOf(book, id)}`)).toMatchObject({
       outbound_sent: false,
       outreach_item: { status: "approved" },
     });
-    expect(send(`/approve ${id} extra`).error).toBeDefined();
+    expect(
+      send(`/approve ${id} ${codeOf(book, id)} extra`).outreach_error,
+    ).toBe("Use /outreach, /approve ID CODE, /edit ID text or /skip ID.");
+    expect(shownBefore).toMatch(/^[0-9a-f]{8}$/);
+    expect(
+      send(`/edit ${id} Hi Mira, see https://example.invalid/x`),
+    ).toMatchObject({
+      outbound_sent: false,
+      outreach_error:
+        "The draft mentions a link, address, number or date that is not in the cited messages.",
+    });
     expect(send(`/skip ${listed[1]!.id}`)).toMatchObject({
       outreach_item: { status: "skipped" },
     });

@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
+import { TendStore, isRecord } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
   demoAuth,
@@ -47,11 +47,11 @@ export class OutreachService {
     this.book = book;
     this.load = load;
   }
-  async list(): Promise<{ items: OutreachItem[] }> {
+  async list(): Promise<ReturnType<OutreachBook["list"]>> {
     return this.book.list(await this.load());
   }
-  async approve(id: string): Promise<OutreachItem> {
-    return this.book.approve(id, await this.load());
+  async approve(id: string, seen: string): Promise<OutreachItem> {
+    return this.book.approve(id, seen, await this.load());
   }
   async edit(id: string, text: string): Promise<OutreachItem> {
     return this.book.edit(id, text, await this.load());
@@ -96,12 +96,6 @@ export function createFixtureOutreachService(
   book.plan(load());
   return { service: new OutreachService(book, load), book, store };
 }
-export function outreachTelegramExtension(
-  book: () => OutreachBook,
-  load: () => OutreachSnapshot,
-): (auth: AuthCommand) => ReturnType<OutreachBook["telegram"]> {
-  return (auth) => book().telegram(auth.text, load());
-}
 type RouteResult = { status: number; body: unknown } | null;
 // Fixture API routes for workflows 22-23 and the integration check.
 export function fixtureOutreachRoute(
@@ -133,7 +127,13 @@ export function fixtureOutreachRoute(
   if (path === "/api/outreach/draft")
     return ok(book.modelDraft(id, body.text, load()));
   if (path === "/api/outreach/approve")
-    return ok({ item: book.approve(id, load()) });
+    return ok({
+      item: book.approve(
+        id,
+        typeof body.text_code === "string" ? body.text_code : "",
+        load(),
+      ),
+    });
   if (path === "/api/outreach/edit")
     return ok({ item: book.edit(id, String(body.text ?? ""), load()) });
   if (path === "/api/outreach/skip") return ok({ item: book.skip(id, load()) });
