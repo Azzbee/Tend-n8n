@@ -40,55 +40,12 @@
         </p>
       </section>
       <div id="workspace" hidden>
-        <section class="workspace-intro">
-          <div>
-            <div class="eyebrow">RELATIONSHIP WORKSPACE</div>
-            <h1>Stay close.</h1>
-            <p id="freshness">Your imported context, with its sources.</p>
-          </div>
-          <div class="pixel-scene">
-            <canvas
-              id="pixel-art"
-              role="img"
-              aria-label="Two pixel silhouettes linked by a shared thread"
-            ></canvas
-            ><button id="pixel-motion" class="motion quiet" hidden>
-              Pause motion
-            </button>
-          </div>
-        </section>
-        <details class="import-progress">
-          <summary>History imports and daily briefing</summary>
-          <p id="daily-progress">Checking your daily briefing schedule…</p>
-          <div id="history-progress">Checking imported history…</div>
-          <button type="button" id="refresh-progress" class="quiet">
-            Refresh saved progress
-          </button>
-          <p class="small">
-            This laptop and its local services must be running. Coverage stays
-            partial until each import finishes.
-          </p>
-        </details>
-        <form id="search-form" class="searchbar" role="search">
-          <label class="sr-only" for="search-query"
-            >Search imported conversations</label
-          >
-          <input
-            id="search-query"
-            type="search"
-            maxlength="500"
-            placeholder="Find the conversation behind a thought…"
-            required
-          />
-          <label class="sr-only" for="search-mode">Search mode</label>
-          <select id="search-mode">
-            <option value="semantic">Semantic</option>
-            <option value="keyword">Keyword</option>
-          </select>
-          <button class="primary" type="submit">
-            Search <span aria-hidden="true">↗</span>
-          </button>
-        </form>
+        <nav class="views-nav" aria-label="Workspace views">
+          <a href="#desk" data-view="desk">Desk</a>
+          <a href="#review" data-view="review">Review one by one</a>
+          <a href="#people" data-view="people">People</a>
+          <a href="#runs" data-view="runs">How it runs</a>
+        </nav>
         <p
           id="notice"
           class="notice"
@@ -96,121 +53,287 @@
           aria-live="polite"
           hidden
         ></p>
-        <div class="workspace-grid">
-          <aside class="contacts-panel" aria-label="Contacts">
-            <div class="panel-heading">
-              <h2>People</h2>
-              <span id="contact-count" class="count"></span>
-            </div>
-            <form id="contact-form">
-              <label class="sr-only" for="contact-query">Find a contact</label
-              ><input
-                id="contact-query"
-                type="search"
-                maxlength="200"
-                placeholder="Name or email"
-              /><button class="quiet" type="submit">Find</button>
-            </form>
-            <p class="small identity-note">
-              Names stay separate unless a verified link connects them.
+        <div id="desk-view" class="desk" hidden>
+          <section class="desk-intro">
+            <div id="desk-date" class="eyebrow">YOUR DESK</div>
+            <h1 id="desk-headline" tabindex="-1">Your promises, quoted.</h1>
+            <p>
+              Every line on this desk quotes the message it came from. Nothing
+              here is sent to your contacts.
             </p>
-            <div id="contacts" class="contact-list"></div>
-            <button id="more-contacts" class="quiet load-more" hidden>
-              More people
-            </button>
-          </aside>
-          <section class="history-panel" aria-labelledby="history-title">
-            <div class="panel-heading">
-              <div>
-                <div id="contact-kicker" class="eyebrow">SELECT A PERSON</div>
-                <h2 id="history-title">A thread of context.</h2>
-              </div>
-              <button id="back-history" class="quiet" hidden>
-                Back to history
-              </button>
-            </div>
-            <p id="contact-identities" class="small"></p>
-            <form id="filters" class="filters" hidden>
-              <label
-                >Source<select id="filter-source">
-                  <option value="">All sources</option>
-                  <option value="gmail">Email</option>
-                  <option value="calendar">Calendar</option>
-                  <option value="whatsapp_personal">WhatsApp personal</option>
-                  <option value="whatsapp_business">WhatsApp business</option>
-                  <option value="linkedin">LinkedIn</option>
-                </select></label
-              >
-              <label
-                >Direction<select id="filter-direction">
-                  <option value="">All directions</option>
-                  <option value="received">Received</option>
-                  <option value="sent">Sent</option>
-                  <option value="event">Meeting</option>
-                </select></label
-              >
-              <label>From<input id="filter-from" type="date" /></label
-              ><label>Before<input id="filter-to" type="date" /></label>
-              <button class="quiet" type="submit">Apply</button>
-            </form>
-            <p id="history-count" class="small">
-              Choose a contact to see their imported history and source
-              coverage.
-            </p>
-            <div
-              id="timeline"
-              class="timeline"
-              tabindex="0"
-              role="region"
-              aria-label="Imported conversation timeline"
-            ></div>
-            <button id="more-history" class="quiet load-more" hidden>
-              Load earlier context
-            </button>
           </section>
-          <aside class="evidence-panel" aria-label="Evidence and preparation">
-            <div class="panel-heading"><h2>Before you reach out.</h2></div>
+          <ol
+            id="desk-pipeline"
+            class="pipeline"
+            aria-label="Pipeline status"
+          ></ol>
+          <div class="desk-grid">
+            <div class="desk-columns">
+              <section class="desk-column" aria-labelledby="owe-title">
+                <h2 id="owe-title" class="column-title">YOU OWE</h2>
+                <div id="desk-owe" class="card-stack"></div>
+              </section>
+              <section class="desk-column" aria-labelledby="owed-title">
+                <h2 id="owed-title" class="column-title">OWED TO YOU</h2>
+                <div id="desk-owed" class="card-stack"></div>
+              </section>
+              <section class="desk-column" aria-labelledby="yes-title">
+                <h2 id="yes-title" class="column-title waiting">
+                  WAITING FOR YOUR YES
+                </h2>
+                <div id="desk-yes" class="card-stack"></div>
+                <section class="quiet-box" aria-labelledby="not-title">
+                  <h3 id="not-title" class="column-title">NOT PROMISES</h3>
+                  <div id="desk-not"></div>
+                </section>
+                <section class="quiet-box" aria-labelledby="held-title">
+                  <h3 id="held-title" class="column-title">HELD BACK</h3>
+                  <div id="desk-held"></div>
+                </section>
+              </section>
+            </div>
+            <aside class="desk-side" aria-label="Before you meet and outreach">
+              <section id="desk-meeting" class="meeting-card"></section>
+              <section
+                id="outreach"
+                class="quiet-box"
+                aria-labelledby="outreach-title"
+              >
+                <h2 id="outreach-title" class="column-title">OUTREACH QUEUE</h2>
+                <p class="small">
+                  Each draft waits for your yes. Approving an email creates a
+                  Gmail draft you send yourself.
+                </p>
+                <div id="desk-outreach"></div>
+              </section>
+              <section class="quiet-box" aria-labelledby="coverage-title">
+                <h2 id="coverage-title" class="column-title">
+                  SOURCE COVERAGE
+                </h2>
+                <div id="desk-coverage"></div>
+              </section>
+            </aside>
+          </div>
+        </div>
+        <section
+          id="review-view"
+          class="review"
+          aria-labelledby="review-title"
+          hidden
+        >
+          <div class="review-top">
+            <a href="#desk">Desk</a>
+            <span id="review-progress" class="eyebrow"></span>
+          </div>
+          <div id="review-kicker" class="eyebrow waiting">
+            WAITING FOR YOUR YES
+          </div>
+          <h1 id="review-title" tabindex="-1">Is this a promise?</h1>
+          <div id="review-card"></div>
+        </section>
+        <section
+          id="runs-view"
+          class="runs"
+          aria-labelledby="runs-title"
+          hidden
+        >
+          <div class="eyebrow">HOW IT RUNS</div>
+          <h1 id="runs-title" tabindex="-1">
+            Two lanes, one rule: nothing leaves without your yes.
+          </h1>
+          <p class="runs-lede">
+            The classroom lane runs on fictional data. The private lane reads
+            only the accounts you approved and saves no execution data.
+          </p>
+          <section class="lane" aria-labelledby="lane-classroom">
+            <h2 id="lane-classroom" class="column-title">
+              CLASSROOM LANE · FICTIONAL · RUN ON DEMAND
+            </h2>
+            <ul id="runs-classroom" class="lane-list"></ul>
+          </section>
+          <section class="lane" aria-labelledby="lane-private">
+            <h2 id="lane-private" class="column-title">
+              PRIVATE LANE · YOUR ACCOUNTS · NO EXECUTION DATA SAVED
+            </h2>
+            <ul id="runs-private" class="lane-list"></ul>
+          </section>
+          <section class="lane" aria-labelledby="failure-title">
+            <h2 id="failure-title" class="column-title">
+              FAILURE LOG · WHAT 21 KEPT
+            </h2>
+            <div id="runs-failures"></div>
             <p class="small">
-              Prepare with current evidence. Every draft stays here for your
-              review.
+              Kept: workflow and node names and a message cut to 200 characters.
+              Dropped: stack traces, URLs and all message data.
             </p>
-            <div class="ai-actions">
-              <button id="briefing" class="primary" disabled>
-                Prepare briefing</button
-              ><button id="draft" class="quiet" disabled>
-                Write held draft
+          </section>
+        </section>
+        <div id="people-view" hidden>
+          <section class="workspace-intro">
+            <div>
+              <div class="eyebrow">RELATIONSHIP WORKSPACE</div>
+              <h1>Stay close.</h1>
+              <p id="freshness">Your imported context, with its sources.</p>
+            </div>
+            <div class="pixel-scene">
+              <canvas
+                id="pixel-art"
+                role="img"
+                aria-label="Two pixel silhouettes linked by a shared thread"
+              ></canvas
+              ><button id="pixel-motion" class="motion quiet" hidden>
+                Pause motion
               </button>
             </div>
-            <section id="prepared" class="prepared" hidden>
-              <div class="eyebrow" id="prepared-label">FOR YOUR REVIEW</div>
-              <p id="prepared-status" class="small"></p>
-              <div id="prepared-message"></div>
-              <pre id="draft-text" hidden></pre>
-              <button id="copy-draft" class="quiet" hidden>
-                Check freshness &amp; copy
-              </button>
-              <div id="prepared-evidence"></div>
-            </section>
-            <section class="side-section">
-              <h3>Meetings</h3>
-              <div id="meetings"><p class="small">Select a contact.</p></div>
-            </section>
-            <section class="side-section">
-              <h3>Commitments</h3>
-              <div id="commitments">
-                <p class="small">No contact selected.</p>
-              </div>
-            </section>
-            <details class="side-section" open>
-              <summary>Source coverage</summary>
-              <div id="coverage">
-                <p class="small">Coverage appears with contact history.</p>
-              </div>
-            </details>
-            <p class="small boundary">
-              Private on this device. No contact sends. No task changes.
+          </section>
+          <details class="import-progress">
+            <summary>History imports and daily briefing</summary>
+            <p id="daily-progress">Checking your daily briefing schedule…</p>
+            <div id="history-progress">Checking imported history…</div>
+            <button type="button" id="refresh-progress" class="quiet">
+              Refresh saved progress
+            </button>
+            <p class="small">
+              This laptop and its local services must be running. Coverage stays
+              partial until each import finishes.
             </p>
-          </aside>
+          </details>
+          <form id="search-form" class="searchbar" role="search">
+            <label class="sr-only" for="search-query"
+              >Search imported conversations</label
+            >
+            <input
+              id="search-query"
+              type="search"
+              maxlength="500"
+              placeholder="Find the conversation behind a thought…"
+              required
+            />
+            <label class="sr-only" for="search-mode">Search mode</label>
+            <select id="search-mode">
+              <option value="semantic">Semantic</option>
+              <option value="keyword">Keyword</option>
+            </select>
+            <button class="primary" type="submit">
+              Search <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+          <div class="workspace-grid">
+            <aside class="contacts-panel" aria-label="Contacts">
+              <div class="panel-heading">
+                <h2>People</h2>
+                <span id="contact-count" class="count"></span>
+              </div>
+              <form id="contact-form">
+                <label class="sr-only" for="contact-query">Find a contact</label
+                ><input
+                  id="contact-query"
+                  type="search"
+                  maxlength="200"
+                  placeholder="Name or email"
+                /><button class="quiet" type="submit">Find</button>
+              </form>
+              <p class="small identity-note">
+                Names stay separate unless a verified link connects them.
+              </p>
+              <div id="contacts" class="contact-list"></div>
+              <button id="more-contacts" class="quiet load-more" hidden>
+                More people
+              </button>
+            </aside>
+            <section class="history-panel" aria-labelledby="history-title">
+              <div class="panel-heading">
+                <div>
+                  <div id="contact-kicker" class="eyebrow">SELECT A PERSON</div>
+                  <h2 id="history-title">A thread of context.</h2>
+                </div>
+                <button id="back-history" class="quiet" hidden>
+                  Back to history
+                </button>
+              </div>
+              <p id="contact-identities" class="small"></p>
+              <form id="filters" class="filters" hidden>
+                <label
+                  >Source<select id="filter-source">
+                    <option value="">All sources</option>
+                    <option value="gmail">Email</option>
+                    <option value="calendar">Calendar</option>
+                    <option value="whatsapp_personal">WhatsApp personal</option>
+                    <option value="whatsapp_business">WhatsApp business</option>
+                    <option value="linkedin">LinkedIn</option>
+                  </select></label
+                >
+                <label
+                  >Direction<select id="filter-direction">
+                    <option value="">All directions</option>
+                    <option value="received">Received</option>
+                    <option value="sent">Sent</option>
+                    <option value="event">Meeting</option>
+                  </select></label
+                >
+                <label>From<input id="filter-from" type="date" /></label
+                ><label>Before<input id="filter-to" type="date" /></label>
+                <button class="quiet" type="submit">Apply</button>
+              </form>
+              <p id="history-count" class="small">
+                Choose a contact to see their imported history and source
+                coverage.
+              </p>
+              <div
+                id="timeline"
+                class="timeline"
+                tabindex="0"
+                role="region"
+                aria-label="Imported conversation timeline"
+              ></div>
+              <button id="more-history" class="quiet load-more" hidden>
+                Load earlier context
+              </button>
+            </section>
+            <aside class="evidence-panel" aria-label="Evidence and preparation">
+              <div class="panel-heading"><h2>Before you reach out.</h2></div>
+              <p class="small">
+                Prepare with current evidence. Every draft stays here for your
+                review.
+              </p>
+              <div class="ai-actions">
+                <button id="briefing" class="primary" disabled>
+                  Prepare briefing</button
+                ><button id="draft" class="quiet" disabled>
+                  Write held draft
+                </button>
+              </div>
+              <section id="prepared" class="prepared" hidden>
+                <div class="eyebrow" id="prepared-label">FOR YOUR REVIEW</div>
+                <p id="prepared-status" class="small"></p>
+                <div id="prepared-message"></div>
+                <pre id="draft-text" hidden></pre>
+                <button id="copy-draft" class="quiet" hidden>
+                  Check freshness &amp; copy
+                </button>
+                <div id="prepared-evidence"></div>
+              </section>
+              <section class="side-section">
+                <h3>Meetings</h3>
+                <div id="meetings"><p class="small">Select a contact.</p></div>
+              </section>
+              <section class="side-section">
+                <h3>Commitments</h3>
+                <div id="commitments">
+                  <p class="small">No contact selected.</p>
+                </div>
+              </section>
+              <details class="side-section" open>
+                <summary>Source coverage</summary>
+                <div id="coverage">
+                  <p class="small">Coverage appears with contact history.</p>
+                </div>
+              </details>
+              <p class="small boundary">
+                Private on this device. No contact sends. No task changes.
+              </p>
+            </aside>
+          </div>
         </div>
       </div>
     </main>

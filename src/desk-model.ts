@@ -436,3 +436,37 @@ export function reviewPosition(
     next: i < total - 1,
   };
 }
+const numberWords = [
+  "No",
+  "One",
+  "Two",
+  "Three",
+  "Four",
+  "Five",
+  "Six",
+  "Seven",
+  "Eight",
+  "Nine",
+  "Ten",
+];
+const count = (n: number): string => numberWords[n] ?? String(n);
+export function deskHeadline(
+  desk: Pick<DeskSnapshot, "you_owe" | "owed_to_you" | "pending">,
+): string {
+  const open = desk.you_owe.length + desk.owed_to_you.length,
+    waiting = desk.pending.length;
+  return (
+    `${count(open)} ${open === 1 ? "promise" : "promises"} in motion. ` +
+    (waiting
+      ? `${count(waiting)} ${waiting === 1 ? "waits" : "wait"} for your yes.`
+      : "Your review is clear.")
+  );
+}
+export function deskItemTitle(
+  item: Pick<DeskItem, "direction" | "contact_name" | "action">,
+): string {
+  const action = item.action.charAt(0).toUpperCase() + item.action.slice(1);
+  return item.direction === "owed_by_me"
+    ? `You: ${action}`
+    : `${item.contact_name}: ${action}`;
+}

@@ -229,8 +229,12 @@ function browserFixture(
     hidden: false,
     getElementById: element,
     createElement: (): BrowserElement => new BrowserElement(),
+    querySelectorAll: (): BrowserElement[] => [],
   });
-  const window = new EventTarget();
+  // These checks cover the People view; the Desk views have their own tests.
+  const window = Object.assign(new EventTarget(), {
+    location: { hash: "#people" },
+  });
   const expires = new Date(Date.now() + 30 * 60000).toISOString();
   let checks = 0;
   const reply = {

@@ -1,4 +1,5 @@
 import { mountPixelArt } from "./pixel-art.ts";
+import { deskViews, mountDesk, viewFromHash } from "./desk-client.ts";
 import type {
   NormalizedRecord,
   Reply,
@@ -253,6 +254,32 @@ export function mountPrivateWorkspace(): void {
     notice.hidden = message === null;
   };
   let session: PrivateSessionResponse | null = null;
+  const desk = mountDesk({
+    csrf: () => session?.csrf ?? null,
+    expired: () => {
+      if (session) lock("Session expired · locked");
+    },
+    notify: status,
+    openContact: (contactId, name) => void openContact(contactId, name),
+  });
+  function showView(): void {
+    if (!session) return;
+    const view = viewFromHash(window.location.hash);
+    for (const name of deskViews) visible(`${name}-view`, name === view);
+    for (const link of document.querySelectorAll<HTMLAnchorElement>(
+      ".views-nav a",
+    ))
+      if (link.dataset.view === view) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    desk.route(view);
+  }
+  async function openContact(contactId: string, name: string): Promise<void> {
+    window.location.hash = "#people";
+    get<HTMLInputElement>("contact-query").value = name;
+    await loadContacts();
+    const match = contacts.find((c) => c.contact_id === contactId);
+    if (match && session) await selectContact(match);
+  }
   let selected: Contact | null = null;
   let contactCursor: string | null = null;
   let historyCursor: string | null = null;
@@ -298,6 +325,9 @@ export function mountPrivateWorkspace(): void {
     window.removeEventListener("pageshow", checkOnReturn);
     workspace.hidden = true;
     locked.hidden = false;
+    window.removeEventListener("hashchange", showView);
+    desk.clear();
+    for (const name of deskViews) visible(`${name}-view`, false);
     visible("lock", false);
     for (const id of [
       "contacts",
@@ -1222,6 +1252,8 @@ export function mountPrivateWorkspace(): void {
           // Session polling remains available if tab messaging is unsupported.
         }
       }
+      window.addEventListener("hashchange", showView);
+      showView();
       polling = setInterval(checkOnReturn, 15_000);
       document.addEventListener("visibilitychange", checkOnReturn);
       window.addEventListener("focus", checkOnReturn);
