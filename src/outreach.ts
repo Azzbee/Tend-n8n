@@ -55,6 +55,20 @@ const REPLY_MIN_AGE_MS = 3600000;
 const MEETING_FOLLOWUP_MS = 48 * 3600000;
 const MEETING_DEFAULT_MS = 3600000;
 const OWE_SOON_DAYS = 2;
+// Live history holds hundreds of received emails; the queue stays readable.
+export const MAX_PROPOSALS_PER_RUN = 5;
+const automatedSender =
+  /^(?:no-?reply|do-?not-?reply|donotreply|notifications?|newsletters?|news|mailer-daemon|postmaster|bounces?|digest|alerts?|updates|marketing|info)(?:[+._-][^@]*)?@/i;
+// Bulk mail: an automated sender address or an unsubscribe footer (the
+// List-Unsubscribe header is not kept on normalized records).
+export function isBulkMail(
+  record: Pick<NormalizedRecord, "actor_identity" | "body_text">,
+): boolean {
+  return (
+    automatedSender.test(record.actor_identity) ||
+    /\bunsubscribe\b/i.test(record.body_text)
+  );
+}
 
 export function parisParts(now: Date): { date: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -204,6 +218,8 @@ export function planOutreach(
       held_back.push(record.evidence_reference);
       return;
     }
+    if (record.direction === "received" && isBulkMail(record)) return;
+    if (proposals.length >= MAX_PROPOSALS_PER_RUN) return;
     const channel = channelOf(record.source);
     const contact = contactOf(record.contact_id);
     if (!channel || !contact) return;
@@ -257,6 +273,14 @@ export function planOutreach(
     const key = `${r.source}:${r.account_id}:${r.source_thread_id}`;
     threads.set(key, [...(threads.get(key) ?? []), r]);
   }
+  // Only people the owner has written to before: one sent message to the
+  // contact on any source.
+  const wroteTo = new Set(
+    snapshot.interactions
+      .filter((r) => r.direction === "sent" && !r.cancelled)
+      .map((r) => r.contact_id),
+  );
+  const waiting: NormalizedRecord[] = [];
   for (const records of threads.values()) {
     const last = records.sort(
       (a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at),
@@ -265,12 +289,16 @@ export function planOutreach(
     if (
       last.direction === "received" &&
       (last.attribution ?? "direct") === "direct" &&
+      wroteTo.has(last.contact_id) &&
       age >= REPLY_MIN_AGE_MS &&
       age <= REPLY_WINDOW_MS &&
       !snapshot.commitments.some((c) => c.record_key === last.record_key)
     )
-      add("reply_waiting", last.record_key, last, last.body_text.slice(0, 120));
+      waiting.push(last);
   }
+  waiting.sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at));
+  for (const last of waiting)
+    add("reply_waiting", last.record_key, last, last.body_text.slice(0, 120));
   return { quiet_hours: false, proposals, held_back };
 }
 // Local-model request: evidence and style samples travel as JSON data, the
