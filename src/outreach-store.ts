@@ -210,6 +210,12 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     }
     return items;
   }
+  // Records the expiry check reads: evidence behind pending and approved items.
+  openEvidenceKeys(): string[] {
+    return this.rows(
+      " AND json_extract(data,'$.status') IN ('pending','approved')",
+    ).flatMap((i) => i.evidence_keys);
+  }
   private view(item: StoredItem): OutreachItem {
     return {
       id: item.id,

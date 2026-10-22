@@ -12,6 +12,7 @@ import { exampleLivePolicy } from "../src/live-policy.ts";
 import { migrateLiveStore } from "../src/migrate-live-store.ts";
 import { postgresTestRuntime } from "./postgres-test-runtime.ts";
 import { createPrivateOutreach } from "../src/outreach-service.ts";
+import { outreachWindow } from "../src/outreach.ts";
 import { normalizeUnipileMessage } from "../src/messaging-records.ts";
 const principal = {
     owner_id: "parity-owner",
@@ -317,6 +318,90 @@ describe("canonical PostgreSQL live parity", () => {
     } finally {
       await ecPg.close();
       ecSqlite.close();
+    }
+  });
+  it("reads the same outreach window in SQL as outreachWindow", async () => {
+    const own = {
+      owner_id: "ow-owner",
+      user_id: "ow-user",
+      chat_id: "ow-chat",
+    };
+    const remap = <T>(value: T): T =>
+      JSON.parse(
+        JSON.stringify(value).replaceAll(principal.owner_id, own.owner_id),
+      ) as T;
+    const owPg = await PostgresStore.open({
+      connectionString: runtime.connectionString,
+      principal: own,
+      clock,
+    });
+    try {
+      await owPg.seed(
+        [],
+        [
+          {
+            owner_id: own.owner_id,
+            identity: "owner@example.com",
+            contact_id: "OWNER",
+          },
+        ],
+        [remap(state)],
+      );
+      const at = (day: number) =>
+        new Date(Date.parse("2026-09-15T10:00:00Z") + day * 86400000)
+          .toISOString()
+          .replace(".000Z", "+00:00");
+      const plain = (id: string, day: number, sent: boolean): LiveRecord => ({
+        ...record,
+        source_record_id: id,
+        source_thread_id: "t-" + id,
+        occurred_at: at(day),
+        body_text: "Fictional note " + id,
+        authored_text: "Fictional note " + id,
+        authored_spans: [],
+        eligible_for_extraction: false,
+        ...(sent
+          ? {}
+          : {
+              direction: "received" as const,
+              actor_identity: "friend@example.com",
+              participant_identities: ["owner@example.com"],
+            }),
+      });
+      // 12 sent messages over four weeks (more than the 10 kept per
+      // contact), an old and a recent received one.
+      const rows = [
+        ...Array.from({ length: 12 }, (_, i) => plain("s" + i, i * 2, true)),
+        plain("old-in", 3, false),
+        plain("new-in", 27, false),
+      ];
+      await owPg.commitLiveBatch({
+        ...remap(batch(rows)),
+        operation_hash: "f".repeat(64),
+      });
+      const all = await owPg.interactions(own.owner_id);
+      expect(all).toHaveLength(rows.length);
+      const keyOf = (id: string) =>
+        all.find((r) => r.source_record_id === id)!.record_key;
+      const keys = [keyOf("old-in")];
+      const sorted = (list: { record_key: string }[]) =>
+        list.map((r) => r.record_key).sort();
+      const fromSql = await owPg.outreachInteractions(
+        own.owner_id,
+        clock(),
+        keys,
+      );
+      expect(sorted(fromSql)).toEqual(
+        sorted(outreachWindow(all, clock(), keys)),
+      );
+      expect(fromSql.length).toBeLessThan(all.length);
+      expect(sorted(fromSql)).toContain(keyOf("old-in"));
+      expect(sorted(fromSql)).not.toContain(keyOf("s0"));
+      expect(fromSql).toEqual(
+        all.filter((r) => fromSql.some((x) => x.record_key === r.record_key)),
+      );
+    } finally {
+      await owPg.close();
     }
   });
   it("serializes concurrent duplicate commands across independent connections", async () => {

@@ -49,6 +49,12 @@ import type {
 } from "./live-store.ts";
 import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { eligiblePromiseSpans } from "./authored-promises.ts";
+import {
+  MEETING_DEFAULT_MS,
+  MEETING_FOLLOWUP_MS,
+  REPLY_WINDOW_MS,
+  STYLE_SOURCE_PER_CONTACT,
+} from "./outreach.ts";
 import type { LiveStore, Principal } from "./live-store.ts";
 export interface PostgresOptions extends PoolConfig {
   principal: Principal;
@@ -345,6 +351,33 @@ export class PostgresStore implements LiveStore {
           [owner],
         )
       ).map((x) => s.record(x)),
+    );
+  }
+  // SQL twin of outreachWindow in outreach.ts; timestamps are validated
+  // exact ISO strings on ingest, so the casts cannot fail.
+  async outreachInteractions(
+    owner: string,
+    now: Date,
+    keys: string[],
+  ): Promise<NormalizedRecord[]> {
+    this.owner(owner);
+    return this.run(async (s) =>
+      (
+        await s.q(
+          `WITH ranked AS (SELECT r.*, CASE WHEN r.direction='sent' AND NOT r.cancelled AND r.source<>'calendar' THEN row_number() OVER (PARTITION BY r.contact_id, r.direction='sent' AND NOT r.cancelled AND r.source<>'calendar' ORDER BY r.occurred_at::timestamptz DESC, r.record_key) END AS outreach_sent_rank FROM live_records r WHERE r.owner_id=$1)
+SELECT * FROM ranked WHERE outreach_sent_rank<=$5 OR record_key=ANY($4::text[]) OR occurred_at::timestamptz>=$2::timestamptz OR (source='calendar' AND COALESCE(end_at::timestamptz, occurred_at::timestamptz + interval '${MEETING_DEFAULT_MS} milliseconds')>=$3::timestamptz) ORDER BY source,source_record_id`,
+          [
+            owner,
+            new Date(now.getTime() - REPLY_WINDOW_MS).toISOString(),
+            new Date(now.getTime() - MEETING_FOLLOWUP_MS).toISOString(),
+            keys,
+            STYLE_SOURCE_PER_CONTACT,
+          ],
+        )
+      ).map((x) => {
+        delete x.outreach_sent_rank;
+        return s.record(x);
+      }),
     );
   }
   private record(row: QueryResultRow): NormalizedRecord {

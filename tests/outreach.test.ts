@@ -16,6 +16,7 @@ import {
   draftProblem,
   isInstructionLike,
   isQuietHours,
+  outreachWindow,
   planOutreach,
   styleOnly,
   verifiedRecipient,
@@ -80,6 +81,66 @@ function world(clock: () => Date = at(FIXTURE_OUTREACH_CLOCK)) {
 }
 const byReason = (book: OutreachBook, snapshot: OutreachSnapshot) =>
   Object.fromEntries(book.list(snapshot).items.map((i) => [i.reason, i]));
+
+describe("outreach snapshot window", () => {
+  it("gives the planner and the book the same results as the full history", () => {
+    const { load, book } = world();
+    const full = load();
+    // Old history the window must drop: 60-day-old copies of every record,
+    // and 15 extra old sent messages to the first contact the owner wrote to.
+    const day = 86400000;
+    const old = (r: (typeof full.interactions)[number], n: number) => ({
+      ...r,
+      record_key: `${r.record_key}-old-${n}`,
+      source_record_id: `${r.source_record_id}-old-${n}`,
+      occurred_at: new Date(
+        Date.parse(r.occurred_at) - (60 + n) * day,
+      ).toISOString(),
+      ...(r.end_at
+        ? {
+            end_at: new Date(
+              Date.parse(r.end_at) - (60 + n) * day,
+            ).toISOString(),
+          }
+        : {}),
+    });
+    const sent = full.interactions.find((r) => r.direction === "sent")!;
+    const padded: OutreachSnapshot = {
+      ...full,
+      interactions: [
+        ...full.interactions,
+        ...full.interactions.map((r) => old(r, 0)),
+        ...Array.from({ length: 15 }, (_, i) => old(sent, i + 1)),
+      ],
+    };
+    for (const days of [0, 1, 3]) {
+      const now = new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + days * day);
+      const keys = padded.commitments.map((c) => c.record_key);
+      const windowed = {
+        ...padded,
+        interactions: outreachWindow(padded.interactions, now, keys),
+      };
+      expect(windowed.interactions.length).toBeLessThan(
+        padded.interactions.length,
+      );
+      expect(planOutreach(windowed, now, [])).toEqual(
+        planOutreach(padded, now, []),
+      );
+    }
+    // Evidence behind open drafts stays readable even once it is old.
+    book.plan(padded);
+    const late = new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + 20 * day);
+    const keys = [
+      ...padded.commitments.map((c) => c.record_key),
+      ...book.openEvidenceKeys(),
+    ];
+    const kept = new Set(
+      outreachWindow(padded.interactions, late, keys).map((r) => r.record_key),
+    );
+    expect(book.openEvidenceKeys().length).toBeGreaterThan(0);
+    expect(book.openEvidenceKeys().every((k) => kept.has(k))).toBe(true);
+  });
+});
 
 describe("outreach planner ids", () => {
   it("plans again after a withdrawal re-keyed earlier rows under another owner", () => {

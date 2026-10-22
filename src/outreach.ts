@@ -50,10 +50,13 @@ export const QUIET_END_HOUR = 8;
 export const RATE_LIMIT_MS = 3 * 86400000;
 export const APPROVAL_TTL_MS = 86400000;
 export const MAX_DRAFT_CHARS = 1200;
-const REPLY_WINDOW_MS = 14 * 86400000;
+export const REPLY_WINDOW_MS = 14 * 86400000;
 const REPLY_MIN_AGE_MS = 3600000;
-const MEETING_FOLLOWUP_MS = 48 * 3600000;
-const MEETING_DEFAULT_MS = 3600000;
+export const MEETING_FOLLOWUP_MS = 48 * 3600000;
+export const MEETING_DEFAULT_MS = 3600000;
+// Sent messages kept per contact for style examples; the planner uses three
+// after dropping instruction-like ones.
+export const STYLE_SOURCE_PER_CONTACT = 10;
 const OWE_SOON_DAYS = 2;
 // Live history holds hundreds of received emails; the queue stays readable.
 export const MAX_PROPOSALS_PER_RUN = 5;
@@ -464,3 +467,40 @@ export function approvalProblem(
 }
 export const textHash = (text: string): string =>
   createHash("sha256").update(text).digest("hex");
+
+// The records planOutreach and the book's expiry check can act on, so the
+// live store reads these instead of the owner's whole history (PostgresStore
+// .outreachInteractions is the SQL twin): anything from the reply window,
+// calendar events whose follow-up window is open, the latest sent messages
+// per contact (style examples, "wrote to before"), and the records behind
+// commitments and open drafts.
+export function outreachWindow(
+  records: NormalizedRecord[],
+  now: Date,
+  keys: Iterable<string>,
+): NormalizedRecord[] {
+  const wanted = new Set(keys);
+  const since = now.getTime() - REPLY_WINDOW_MS;
+  const meetingSince = now.getTime() - MEETING_FOLLOWUP_MS;
+  const styleSource = (r: NormalizedRecord) =>
+    r.direction === "sent" && !r.cancelled && r.source !== "calendar";
+  const latestSent = new Set<NormalizedRecord>();
+  const byContact = new Map<string, NormalizedRecord[]>();
+  for (const r of records.filter(styleSource))
+    byContact.set(r.contact_id, [...(byContact.get(r.contact_id) ?? []), r]);
+  for (const list of byContact.values())
+    list
+      .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at))
+      .slice(0, STYLE_SOURCE_PER_CONTACT)
+      .forEach((r) => latestSent.add(r));
+  return records.filter(
+    (r) =>
+      latestSent.has(r) ||
+      wanted.has(r.record_key) ||
+      Date.parse(r.occurred_at) >= since ||
+      (r.source === "calendar" &&
+        (r.end_at
+          ? Date.parse(r.end_at)
+          : Date.parse(r.occurred_at) + MEETING_DEFAULT_MS) >= meetingSince),
+  );
+}

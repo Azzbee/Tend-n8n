@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_DRAFT_MODEL,
   FALLBACK_DRAFT_MODEL,
+  outreachWindow,
   type OutreachSnapshot,
 } from "./outreach.ts";
 import { OutreachBook, type OutreachItem } from "./outreach-store.ts";
@@ -29,15 +30,29 @@ export function snapshotOf(store: TendStore, owner: string): OutreachSnapshot {
     interactions: store.interactions(owner),
   };
 }
+// Reads only the records the planner and the book can act on (see
+// outreachWindow): the full history load under the principal lock is what
+// timed out workflow 25's first hourly run.
 export async function liveSnapshotOf(
   store: LiveStore,
   owner: string,
+  book: OutreachBook,
+  now: Date,
 ): Promise<OutreachSnapshot> {
-  const [contacts, commitments, interactions] = await Promise.all([
+  const [contacts, commitments] = await Promise.all([
     store.contacts(owner),
     store.commitments(owner),
-    store.interactions(owner),
   ]);
+  const keys = [
+    ...new Set([
+      ...commitments.map((c) => c.record_key),
+      ...book.openEvidenceKeys(),
+    ]),
+  ];
+  const interactions =
+    store instanceof PostgresStore
+      ? await store.outreachInteractions(owner, now, keys)
+      : outreachWindow(await store.interactions(owner), now, keys);
   return { contacts, commitments, interactions };
 }
 // Async backend the Desk's /private/api/outreach routes call
@@ -207,13 +222,17 @@ export function createPrivateOutreach(
     sendingEnabled: env.OUTREACH_ENABLED === "true",
     ...(clock ? { clock } : {}),
   });
-  const load = () => liveSnapshotOf(store, owner);
+  const now = clock ?? (() => new Date());
+  const load = () => liveSnapshotOf(store, owner, book, now());
   const draftModel = createDraftModelResolver(env.TEND_OUTREACH_MODEL, fetchFn);
   // The private bot routes /outreach /approve /edit /skip through the book;
   // every other command falls through to the store's own handler.
   if (store instanceof PostgresStore)
     store.setCommandExtension(async (auth, scoped) =>
-      book.telegram(auth.text, await liveSnapshotOf(scoped, owner)),
+      book.telegram(
+        auth.text,
+        await liveSnapshotOf(scoped, owner, book, now()),
+      ),
     );
   return {
     service: new OutreachService(book, load),
