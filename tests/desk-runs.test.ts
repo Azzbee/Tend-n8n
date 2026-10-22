@@ -100,6 +100,8 @@ describe("workflow run reader", () => {
     expect(view.workflows.find((w) => w.id === "12")!.last_status).toBe(
       "unknown",
     );
+    expect(view.runs_connected).toBe(true);
+    expect(buildDeskRuns(null, []).runs_connected).toBe(false);
   });
   it("caches for 60 seconds, shares one read, and fails closed to no run data", async () => {
     let now = 0;

@@ -790,7 +790,9 @@ export function mountDesk(ctx: DeskContext): DeskController {
               el("span", w.name, "run-name"),
               el(
                 "span",
-                runLabels[w.last_status] +
+                (w.last_status === "unknown" && runs.runs_connected
+                  ? "No runs recorded in n8n"
+                  : runLabels[w.last_status]) +
                   (w.last_run_at ? ` · ${parisMoment(w.last_run_at)}` : ""),
                 "run-status",
               ),

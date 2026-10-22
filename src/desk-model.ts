@@ -76,6 +76,7 @@ export interface DeskRuns {
   workflows: DeskWorkflowRun[];
   failures: DeskFailure[];
   failure_log_connected: boolean;
+  runs_connected: boolean;
 }
 export const outreachChannels = [
   "email",
@@ -387,6 +388,7 @@ export function buildDeskRuns(
       execution_id: String(f.execution_id).slice(0, 40),
     })),
     failure_log_connected: failures !== null,
+    runs_connected: runs !== null,
   };
 }
 
