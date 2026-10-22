@@ -41,13 +41,22 @@ Error phrases: `safeOutreachError` in `src/desk-api.ts` (improve/desk-ui, c2c898
 
 To wire the Desk: `createPrivateOutreach()` returns `{ service, route }`; widen `LiveServerOptions.outreach` to that type and pass `options.outreach?.service` as `outreach` to `createPrivateWebHandler` in `live-api.ts`.
 
-Integration (section 7, lead's): import 26 workflows after merge; run 23 then 24 with the fixture API; the path is already proven node by node in `tests/outreach-api.test.ts`. Set `TEND_OUTREACH_CLOCK` to pin the fixture outreach clock (default `2026-10-17T07:00:00Z`, 09:00 Paris) and `TEND_OUTREACH_DB` for an isolated ledger.
+Integration: `src/integration.ts` now has an outreach step after the owner-command checks. It confirms the open fictional promises, runs workflow 23 in the isolated n8n, then sends `/outreach`, `/edit` and `/approve` through the native Telegram trigger. Workflow 24 then creates the mock Gmail draft, `/skip` follows, and a rerun of 23 must propose nothing new. It asserts that the injection fixture never appears. The CLI runs of 23 and 24 use `N8N_RUNNERS_BROKER_PORT=5681`, because the webhook server started for the Telegram check already holds 5679. The fixture server gets its own `TEND_OUTREACH_DB`, and the n8n start wait is 60 s instead of 18 s, because other agents' containers slowed it past the old limit.
 
-## Checks run (22 Oct, about 10:00)
+Demo: `node --experimental-strip-types src/outreach-demo.ts serve` (fictional only, ports 18831 and 18832, refuses the live ports). It starts the real fixture API with a fresh ledger and a Desk preview whose Outreach queue calls that same API. `plan`, `telegram "<command>"`, `gmail` and `status` drive it with the exact code-node source of workflows 23 and 24 and the real Telegram reply formatter. Chrome note: the extension's navigation arrives as `Sec-Fetch-Site: cross-site`, which the private workspace rejects. Open any same-origin URL first (for example `/api/none`), then go to `/private` from that page.
 
-- `bun run typecheck`, `bun run lint`, `bun run build` (25 exports on this branch: 01-21 and 23-26), `bun run format:check`: pass.
-- `bun run test`: 1,261 passed, 16 skipped; 2 files fail at `initdb` inside the sandbox (`private-postgres`, `semantic-postgres`), the same environment failure as the recorded baseline. Outreach tests: 29 across three files, including a spawned fixture server on a local port.
-- Not run: `bun run integration` (Docker n8n) and anything against the running n8n or private API, per the demo guard.
+## Checks run (22 Oct, 10:30 to 11:20)
+
+- `VERIFY_FULL=1 .agents/verify.sh` on fe1bbd4: typecheck, lint, exports, format, n8n runtime (18 checks), native cited AI, native generated draft and SQL schema all pass. Unit tests: 1,262 passed. The only failures are `private-postgres` and `semantic-postgres`, where `initdb` reports "could not create shared memory segment: Operation not permitted" inside the sandbox; this is the same as the baseline.
+- After the fast-forward to improve/lead and the fixes: the fast gate gives 1,310 unit tests passing, with the same two sandbox failures; typecheck, lint, exports (26) and format pass. Outreach tests: 34 in `tests/outreach.test.ts`, plus the workflow and HTTP files.
+- Real model, fictional data: qwen3:0.6b echoed Mira's quote back as a draft (also seen by tend-verify as F1). Fixed in 3e2f0b0. In the rerun, the echo was rejected live ("model repeated the cited message") and three invented dates were rejected, so all four templates were kept.
+- Chrome walk-through on the demo Desk, fictional only. Approving a draft that still had a placeholder was refused ("Not changed: fill in the bracketed placeholder first."). Edited and approved it in the Desk. Through the Telegram path: `/edit` with a URL refused with its reason, `/edit` then `/approve`, workflow-24 step, `/skip`, and `/approve` on the skipped item refused. The Desk then showed both emails as "Gmail draft created" with the exact approved text, LinkedIn as Skipped, and WhatsApp approved with Copy text and an "Open WhatsApp business" link. The replan created 0 drafts; `g-injection` stayed in held_back throughout. The mock Gmail held exactly 2 drafts, both to mira@example.invalid. Screenshot: `.scratch/screens/outreach/desk-outreach-queue-after-flow.jpg`.
+- `bun run integration` with the outreach step: pass, 22 checks (`evidence/runtime-checks.json`, "Outreach planner, Telegram approval and mock Gmail draft"); workflows 23 and 24 ended with n8n status `success`. Two earlier attempts failed before or at the outreach step, for harness reasons fixed in this commit: the 18 s n8n start wait under host load, and the task-broker port clash.
+- Verifier findings F1, F2, F6 and F10 are fixed (3e2f0b0, aef8216); tend-verify re-verified them on the merged stack. F11 (copied style-example dates) is mitigated in bb70be4 and bf2e826, and tend-verify confirmed 8 of 8 rejections with no uncited-date cases.
+
+## Model-size limit (decision for Adam)
+
+With qwen3:0.6b, almost every model draft is rejected: it echoes the cited message, the style example or the purpose instruction, or it invents a date. The owner therefore sees the safe templates or their own edits, never an unchecked model draft. To get real "in your style" drafts, use a larger local model for workflow 23 (for example a 3-4B instruct model in Ollama). That is a resource and setup choice, so it is left to you. The checks stay as they are.
 
 ## Pending, and what Adam must do
 
