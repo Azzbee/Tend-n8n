@@ -5,6 +5,7 @@ import type {
   Source,
   SourceState,
 } from "./engine.ts";
+import { isInstructionLike } from "./instruction-like.ts";
 
 export interface DeskItem {
   commitment_id: string;
@@ -119,16 +120,8 @@ export interface DeskOutreachBackend {
 const LIST_LIMIT = 10;
 const TEXT_LIMIT = 280;
 const closed = new Set(["done", "cancelled", "dismissed", "invalidated"]);
-// Display-only: flags messages that try to instruct Tend. It never feeds the AI or changes stored data.
-const instructionPatterns = [
-  /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(rules?|instructions?|prompts?|guidelines)\b/i,
-  /\b(system prompt|you are now|new instructions?)\b/i,
-  /\b(send|forward|export|share)\b[^.\n]{0,30}\ball\b[^.\n]{0,20}\b(contacts?|emails?|messages|data|files)\b/i,
-  /\bmark (every|all)\b[^.\n]{0,25}\b(tasks?|promises?|commitments?)\b[^.\n]{0,15}\b(done|complete)\b/i,
-];
-export function instructionLike(text: string): boolean {
-  return instructionPatterns.some((pattern) => pattern.test(text));
-}
+// Display-only here: the same filter the planner uses to hold messages back.
+export const instructionLike = isInstructionLike;
 const clip = (text: string): string =>
   text.length > TEXT_LIMIT ? text.slice(0, TEXT_LIMIT - 1) + "…" : text;
 const isDate = (value: unknown): value is string =>
