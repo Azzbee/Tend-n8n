@@ -320,7 +320,8 @@
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
     "timezone": "Europe/Paris",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "errorWorkflow": "TendPrivate22"
   },
   "tags": [],
   "pinData": {},

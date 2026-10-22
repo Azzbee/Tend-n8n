@@ -326,7 +326,8 @@
     "executionTimeout": 180,
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
-    "saveManualExecutions": false
+    "saveManualExecutions": false,
+    "errorWorkflow": "TendPrivate22"
   },
   "pinData": {},
   "tags": []

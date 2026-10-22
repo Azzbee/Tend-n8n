@@ -3,6 +3,11 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
 import { buildDailyBriefingWorkflow } from "./daily-workflow.ts";
 import {
+  guardMessages,
+  redactorCode,
+  workflowCodeSources,
+} from "./failure-redaction.ts";
+import {
   telegramGuardCode,
   telegramReplyCode,
   telegramLiveGuardCode,
@@ -1633,6 +1638,39 @@ errorHandler.nodes[0]!.notes =
 for (const w of workflows)
   if (/^TendReview0[1-9]$/.test(w.id))
     w.settings.errorWorkflow = "TendReview21";
+// Error workflow for the private lane: same shape as 21, but it saves no
+// execution data and keeps a message only when it is a literal guard string
+// from the private workflow code, otherwise just an HTTP status or nothing.
+const dailyWorkflow = buildDailyBriefingWorkflow();
+const privateWorkflows = [
+  ...workflows.filter((w) => /^Tend(Live|Google|Social)/.test(w.id)),
+  dailyWorkflow,
+];
+const privateErrorHandler = workflow(
+  "TendPrivate22",
+  "Tend 22: Error handler (private lane)",
+  [
+    node("Error Trigger", "errorTrigger", {}, 0, 0, 1),
+    code(
+      "Keep names and allowlisted guard text only",
+      redactorCode(
+        guardMessages(privateWorkflows.flatMap((w) => workflowCodeSources(w))),
+      ),
+      260,
+    ),
+    liveHttp(
+      "Record failure on private API",
+      "/api/live/failure-log",
+      520,
+      "={{ JSON.stringify($json) }}",
+    ),
+  ],
+);
+privateErrorHandler.settings.saveDataSuccessExecution = "none";
+privateErrorHandler.settings.saveDataErrorExecution = "none";
+privateErrorHandler.settings.saveManualExecutions = false;
+for (const w of privateWorkflows)
+  (w.settings as { errorWorkflow?: string }).errorWorkflow = "TendPrivate22";
 
 // One sticky note per canvas so each workflow explains itself in the editor.
 const NO_SAVE =
@@ -1748,6 +1786,13 @@ const canvasNotes: Record<
     outputs: "One Telegram message to the owner and its acknowledgement.",
     privacy: `Sent only to the exact configured owner chat. ${NO_SAVE}`,
   },
+  TendPrivate22: {
+    purpose: "Error workflow for private workflows 10-20.",
+    inputs:
+      "n8n Error Trigger (production runs only; publish 22 after import).",
+    outputs: "POST /api/live/failure-log on the private API.",
+    privacy: `Keeps workflow and node names, plus a literal guard message or HTTP status; any other error text is withheld. ${NO_SAVE}`,
+  },
   TendReview21: {
     purpose: "Error workflow for fictional workflows 01-09.",
     inputs:
@@ -1795,7 +1840,11 @@ for (let i = 0; i < workflows.length; i++)
   );
 await writeJson(
   "workflows/20-daily-owner-briefing.json",
-  withCanvasNote(buildDailyBriefingWorkflow()),
+  withCanvasNote(dailyWorkflow),
+);
+await writeJson(
+  "workflows/22-private-error-handler.json",
+  withCanvasNote(privateErrorHandler),
 );
 await mkdir("fixtures", { recursive: true });
 await writeJson("fixtures/local-ollama.json", [
@@ -1816,5 +1865,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length + 2} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 3} inactive workflow exports and fictional fixture data.`,
 );

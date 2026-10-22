@@ -611,7 +611,8 @@
     "saveDataErrorExecution": "none",
     "timezone": "Europe/Paris",
     "saveManualExecutions": false,
-    "executionTimeout": 120
+    "executionTimeout": 120,
+    "errorWorkflow": "TendPrivate22"
   },
   "tags": [],
   "pinData": {},

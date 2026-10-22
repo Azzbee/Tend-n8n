@@ -1,0 +1,103 @@
+{
+  "id": "TendPrivate22",
+  "name": "Tend 22: Error handler (private lane)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "parameters": {}
+    },
+    {
+      "id": "keep-names-and-allowlisted-guard-text-only",
+      "name": "Keep names and allowlisted guard text only",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0],
+      "parameters": {
+        "jsCode": "const allowed=new Set([\"Configure an explicit contact ID and briefing or draft purpose before retrieval\",\"Configure the approved provider account before retrieval\",\"Configure the same enrolled private owner user and chat\",\"Exact configured owner required\",\"Exact private owner transport required\",\"History page size exceeded\",\"History storage deadline exhausted; provider cursor unchanged\",\"Incomplete owner transport envelope; inspect delivery before any manual retry\",\"Invalid WhatsApp membership origin\",\"Invalid WhatsApp membership page\",\"Invalid WhatsApp membership path\",\"Invalid WhatsApp projection budget\",\"Invalid WhatsApp projection message\",\"Invalid WhatsApp projection page\",\"Invalid connections preview\",\"Invalid or oversized private AI request\",\"Invalid owner transport envelope; inspect delivery before any manual retry\",\"Invalid preview page index\",\"Invalid server response budget\",\"Missing history record ID\",\"Only validated pending review output may reach the enrolled owner\",\"Owner delivery must be an explicit boolean\",\"Owner review exceeds Telegram reply limit; use local review\",\"Owner transport acknowledgement unavailable or mismatched; inspect delivery before any manual retry\",\"Private AI result must remain review only\",\"Private AI review exceeded its deadline\",\"Unapproved provider request\",\"Unbound WhatsApp message\",\"Unknown provider receipt\",\"WhatsApp page exceeds budget\",\"detail budget exhausted; checkpoint unchanged\",\"event page shape\",\"event references\",\"incomplete provider page remains resumable\",\"invalid approved provider envelope\",\"invalid approved storage body\",\"invalid approved sync state\",\"invalid expected provider record ids\",\"invalid provider retry time\",\"invalid storage attempt budget\",\"invalid sync clock\",\"message page shape\",\"message references\",\"missing approved calendar\",\"missing authorized reply destination\",\"missing provider id\",\"page acknowledgement budget exhausted; checkpoint unchanged\",\"page budget exceeded\",\"profile shape\",\"record storage failed\",\"storage budget exhausted; checkpoint unchanged\",\"storage envelope exceeds run budget; checkpoint unchanged\",\"unsupported or invented authored promise\"]);const e=$input.first().json;const ex=e.execution||{};const er=ex.error||{};const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const node=ex.lastNodeExecuted||(er.node&&er.node.name)||'unknown node';const raw=typeof er.message==='string'?er.message:'';const http=/^[1-5]\\d\\d$/.test(String(er.httpCode??''))?String(er.httpCode):(raw.match(/status code ([1-5]\\d\\d)\\b/)||[])[1];const message=allowed.has(raw)?raw:http?'HTTP '+http:\"unlisted error (text withheld)\";return [{json:{workflow:String(wf).slice(0,120),node:String(node).slice(0,120),message,execution_id:String(ex.id??'').slice(0,40)}}];"
+      }
+    },
+    {
+      "id": "record-failure-on-private-api",
+      "name": "Record failure on private API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/failure-log",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 5000 },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "retryOnFail": false,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
+      "notesInFlow": true
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendPrivate22\n**Purpose:** Error workflow for private workflows 10-20.\n\n**Inputs:** n8n Error Trigger (production runs only; publish 22 after import).\n\n**Outputs:** POST /api/live/failure-log on the private API.\n\n**Privacy:** Keeps workflow and node names, plus a literal guard message or HTTP status; any other error text is withheld. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Keep names and allowlisted guard text only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep names and allowlisted guard text only": {
+      "main": [
+        [
+          {
+            "node": "Record failure on private API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "timezone": "Europe/Paris",
+    "saveManualExecutions": false
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "00000000-0000-4000-8000-000000000022",
+  "meta": { "templateCredsSetupCompleted": false }
+}

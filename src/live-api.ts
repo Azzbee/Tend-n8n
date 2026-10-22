@@ -1,4 +1,8 @@
 import { createDailyAPI } from "./daily-api.ts";
+import {
+  createFailureLog,
+  loadPrivateGuardMessages,
+} from "./failure-redaction.ts";
 import { createHistoryAPI } from "./history-api.ts";
 import { createPrivateWebHandler } from "./private-web.ts";
 import type { PrivateSemanticSearch } from "./private-web-types.ts";
@@ -63,6 +67,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
       user_id: "live-owner",
       chat_id: "live-private",
     };
+  const failureLog = createFailureLog(loadPrivateGuardMessages());
   const mail = gmailWindow(policy, clock()),
     cal = calendarWindow(policy, clock());
   const ready = Promise.resolve(
@@ -408,6 +413,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
         respond(200, dailyAPI ? await dailyAPI.status() : { enabled: false });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/live/failure-log") {
+        respond(200, { failure_log: failureLog.list() });
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/live/status") {
         respond(200, {
           mode: "PRIVATE LIVE GOOGLE",
@@ -720,6 +729,10 @@ export function createLiveServer(options: LiveServerOptions): Server {
       }
       const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (!isRecord(value)) throw new Error("invalid body");
+      if (url.pathname === "/api/live/failure-log") {
+        respond(200, { recorded: failureLog.add(value, clock()) });
+        return;
+      }
       if (url.pathname.startsWith("/api/live/daily/")) {
         if (!dailyAPI) {
           respond(409, { error: "Daily briefing is not configured" });

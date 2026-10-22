@@ -13,6 +13,67 @@ async function listen(server: Server): Promise<number> {
   return a.port;
 }
 describe("private live API", () => {
+  it("records only redacted private failures behind owner authentication", async () => {
+    const policy = exampleLivePolicy,
+      clock = () => new Date("2026-10-22T08:00:00Z");
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: policy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+      clock,
+    });
+    const server = createLiveServer({
+      policy,
+      store,
+      auth: new InternalAuth(undefined, verificationHash(key)),
+      clock,
+    });
+    const base = `http://127.0.0.1:${await listen(server)}/api/live/failure-log`,
+      headers = {
+        Authorization: "Bearer " + key,
+        "Content-Type": "application/json",
+      };
+    const entry = {
+      workflow: "Tend 11: Read-only Gmail approved-window sync",
+      node: "Read Gmail profile",
+      message: "HTTP 429",
+      execution_id: "4821",
+    };
+    try {
+      expect(
+        (await fetch(base, { method: "POST", body: JSON.stringify(entry) }))
+          .status,
+      ).toBe(401);
+      expect((await fetch(base)).status).toBe(401);
+      const leaked = await fetch(base, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...entry, message: "Mira Tan: F17 contract" }),
+      });
+      expect(leaked.status).toBe(400);
+      expect(
+        (
+          await fetch(base, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(entry),
+          })
+        ).status,
+      ).toBe(200);
+      const listed = (await (await fetch(base, { headers })).json()) as {
+        failure_log: Record<string, string>[];
+      };
+      expect(listed.failure_log).toEqual([
+        { ...entry, at: "2026-10-22T08:00:00.000Z" },
+      ]);
+      expect(JSON.stringify(listed)).not.toContain("Mira");
+    } finally {
+      server.close();
+    }
+  });
   it("refreshes both calendars when Gmail polls between every calendar run", async () => {
     const policy = exampleLivePolicy,
       clock = () => new Date("2026-10-14T12:00:00Z");

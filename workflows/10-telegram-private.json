@@ -194,7 +194,8 @@
     "executionOrder": "v1",
     "saveDataSuccessExecution": "none",
     "saveDataErrorExecution": "none",
-    "timezone": "Europe/Paris"
+    "timezone": "Europe/Paris",
+    "errorWorkflow": "TendPrivate22"
   },
   "tags": [],
   "pinData": {},

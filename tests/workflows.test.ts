@@ -69,9 +69,10 @@ describe("import and node boundaries", () => {
     expect(() => run({ recovered: true, attempt: 1 })).toThrow();
     expect(() => run({ recovered: true, attempt: 3 })).not.toThrow();
   });
-  it("ships twenty-one inactive exports without private account credentials or external recipients", () => {
+  it("ships twenty-two inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(21);
+    expect(files).toHaveLength(22);
+    expect(files).toContain("22-private-error-handler.json");
     expect(files).toContain("21-error-handler.json");
     expect(files).toContain("20-daily-owner-briefing.json");
     for (const f of files) {
@@ -103,10 +104,14 @@ describe("import and node boundaries", () => {
     expect(handler.nodes[0]?.type).toBe("n8n-nodes-base.errorTrigger");
     for (const f of readdirSync("workflows").filter((f) =>
       /^(1[0-9]|20)-/.test(f),
-    ))
-      expect(readFileSync(`workflows/${f}`, "utf8")).not.toContain(
-        "errorWorkflow",
-      );
+    )) {
+      const w = JSON.parse(readFileSync(`workflows/${f}`, "utf8")) as {
+        settings: Record<string, unknown>;
+      };
+      expect(w.settings.errorWorkflow, f).toBe("TendPrivate22");
+      expect(w.settings.saveDataErrorExecution, f).toBe("none");
+      expect(w.settings.saveDataSuccessExecution, f).toBe("none");
+    }
   });
   it("error workflow keeps only names and a short message, never item data", () => {
     const n = load("21-error-handler.json").nodes.find(
