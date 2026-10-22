@@ -354,6 +354,16 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   approve(id: string, seen: string, snapshot: OutreachSnapshot): OutreachItem {
     this.refresh(snapshot);
     const item = this.get(id);
+    // The book is SQLite, outside the private bot's PostgreSQL transaction: if
+    // the reply is rolled back after an approval, resending the same
+    // /approve ID CODE returns that approval instead of an error. It never
+    // extends the 24-hour window.
+    if (
+      item.status === "approved" &&
+      seen === textCode(item.draft_text) &&
+      item.approved_text_hash === textHash(item.draft_text)
+    )
+      return this.view(item);
     if (item.status !== "pending")
       throw new Error(`cannot approve a ${item.status} item`);
     if (seen !== textCode(item.draft_text))
