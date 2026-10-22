@@ -17,10 +17,16 @@ const run = (code: string, payload: unknown) =>
   vm.runInNewContext(`(()=>{${code}})()`, {
     $input: { first: () => ({ json: payload }) },
   }) as { json: Record<string, string> }[];
-const payload = (message: string, extra: Record<string, unknown> = {}) => ({
+const url = "http://localhost:5678/workflow/TendGoogle11/executions/4821";
+const payload = (
+  message: string,
+  extra: Record<string, unknown> = {},
+  executionUrl: unknown = url,
+) => ({
   workflow: { id: "TendGoogle11", name: "Tend 11: Read-only Gmail sync" },
   execution: {
     id: "4821",
+    url: executionUrl,
     lastNodeExecuted: "Check Gmail profile",
     error: { message, stack: `Error: ${secret}\n at x`, ...extra },
   },
@@ -48,7 +54,24 @@ describe("private-lane failure redaction", () => {
       node: "Check Gmail profile",
       message: "Exact configured owner required",
       execution_id: "4821",
+      execution_url: url,
     });
+  });
+
+  it("keeps the n8n execution link only when it is a bare execution URL", () => {
+    for (const bad of [
+      `${url}?text=${encodeURIComponent(secret)}`,
+      `${url}#F17`,
+      "javascript:alert(1)",
+      `http://localhost:5678/workflow/TendGoogle11/executions/4821/${secret}`,
+      42,
+    ])
+      expect(
+        run(code, payload("Exact configured owner required", {}, bad))[0]!.json
+          .execution_url,
+        String(bad),
+      ).toBe("");
+    expect(run(code, payload("x", {}, null))[0]!.json.execution_url).toBe("");
   });
 
   it("reduces provider errors to an HTTP status and withholds any other text", () => {
@@ -68,6 +91,7 @@ describe("private-lane failure redaction", () => {
       expect(text).not.toContain("example.test");
       expect(Object.keys(out[0]!.json).sort()).toEqual([
         "execution_id",
+        "execution_url",
         "message",
         "node",
         "workflow",
@@ -82,7 +106,12 @@ describe("private-lane failure redaction", () => {
       message: "HTTP 429",
       execution_id: "4821",
     };
-    expect(acceptFailure(ok, allowed)).toEqual(ok);
+    expect(acceptFailure(ok, allowed)).toEqual({ ...ok, execution_url: "" });
+    const linked = { ...ok, execution_url: url };
+    expect(acceptFailure(linked, allowed)).toEqual(linked);
+    expect(() =>
+      acceptFailure({ ...ok, execution_url: `${url}?q=${secret}` }, allowed),
+    ).toThrow();
     expect(() => acceptFailure({ ...ok, message: secret }, allowed)).toThrow(
       "not redacted",
     );

@@ -195,6 +195,7 @@ export const deskFixtureFailures: DeskFailure[] = [
     node: "Prepare local AI request",
     message: "Bad request - please check your parameters",
     execution_id: "4",
+    execution_url: "http://localhost:5678/workflow/TendReview07/executions/4",
   },
 ];
 export function deskFixtureOutreach(now: Date): OutreachItem[] {

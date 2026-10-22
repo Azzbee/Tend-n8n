@@ -2,11 +2,13 @@ import {
   confirmDefaultDate,
   deskHeadline,
   deskItemTitle,
+  executionUrlOf,
   outreachActionable,
   outreachReasonLabels,
   outreachSending,
   parseOutreachList,
   reviewPosition,
+  type DeskFailure,
   type DeskItem,
   type DeskRecordLine,
   type DeskRuns,
@@ -822,11 +824,26 @@ export function mountDesk(ctx: DeskContext): DeskController {
               el("dt", "message"),
               el("dd", f.message),
               el("dt", "execution"),
-              el("dd", f.execution_id),
+              execution(f),
             );
             return entry;
           }),
       );
+  }
+  // Links to n8n's own execution view when the error workflow sent one.
+  function execution(f: DeskFailure): HTMLElement {
+    const cell = el("dd");
+    const href = executionUrlOf(f.execution_url);
+    if (!href) {
+      cell.textContent = f.execution_id;
+      return cell;
+    }
+    const link = el("a", f.execution_id || "open in n8n");
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    cell.append(link);
+    return cell;
   }
   function heading(view: string): HTMLElement {
     return get(

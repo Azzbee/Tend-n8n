@@ -46,11 +46,18 @@ export interface DeskStage {
   detail: string;
   state: "ok" | "waiting" | "attention" | "unknown";
 }
+// An n8n execution link and nothing else: no query string or fragment that
+// could carry item data.
+export const EXECUTION_URL =
+  /^https?:\/\/[A-Za-z0-9.-]{1,100}(:\d{1,5})?\/workflow\/[A-Za-z0-9]{1,40}\/executions\/\d{1,20}$/;
+export const executionUrlOf = (v: unknown): string =>
+  typeof v === "string" && EXECUTION_URL.test(v) ? v : "";
 export interface DeskFailure {
   workflow: string;
   node: string;
   message: string;
   execution_id: string;
+  execution_url?: string;
 }
 export interface DeskWorkflowRun {
   id: string;
@@ -387,6 +394,7 @@ export function buildDeskRuns(
       node: String(f.node).slice(0, 120),
       message: String(f.message).slice(0, 200),
       execution_id: String(f.execution_id).slice(0, 40),
+      execution_url: executionUrlOf(f.execution_url),
     })),
     failure_log_connected: failures !== null,
     runs_connected: runs !== null,

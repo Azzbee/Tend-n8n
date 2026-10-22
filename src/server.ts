@@ -1,3 +1,4 @@
+import { executionUrlOf } from "./desk-model.ts";
 import { createPrivateServices } from "./private-services.ts";
 import { PostgresStore } from "./postgres-store.ts";
 import { createServer } from "node:http";
@@ -66,6 +67,7 @@ function startFixtureServer(): void {
     node: string;
     message: string;
     execution_id: string;
+    execution_url: string;
   }[] = [];
   let mockWebhookUrl = "";
   const server = createServer(async (req, res) => {
@@ -312,6 +314,7 @@ function startFixtureServer(): void {
           node: text(input.node, 120),
           message: text(input.message, 200),
           execution_id: text(input.execution_id, 40),
+          execution_url: executionUrlOf(input.execution_url),
         });
         if (failureLog.length > 50) failureLog.shift();
         respond(200, { fictional: true, recorded: failureLog.length });

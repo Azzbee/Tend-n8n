@@ -407,5 +407,12 @@ describe("mounted desk", () => {
     expect(text(runs.elements.get("runs-failures")!)).toContain(
       "Prepare local AI request",
     );
+    const links = all(
+      runs.elements.get("runs-failures")!,
+      (e) => "href" in e,
+    ) as (FakeElement & { href: string; rel: string })[];
+    expect(links.map((l) => [l.href, l.rel, l.textContent])).toEqual([
+      [deskFixtureFailures[0]!.execution_url, "noreferrer", "4"],
+    ]);
   });
 });

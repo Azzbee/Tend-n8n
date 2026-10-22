@@ -143,6 +143,7 @@ describe("import and node boundaries", () => {
     const j = out[0]!.json;
     expect(Object.keys(j).sort()).toEqual([
       "execution_id",
+      "execution_url",
       "message",
       "node",
       "workflow",
@@ -151,6 +152,7 @@ describe("import and node boundaries", () => {
     for (const leak of ["PRIVATE BODY TEXT", "mira@", "leak.example", "BODY:"])
       expect(JSON.stringify(j)).not.toContain(leak);
     expect(j.execution_id).toBe("4242");
+    expect(j.execution_url).toBe("");
   });
   it("adapters embed a callable unpublished subworkflow", () => {
     for (const f of readdirSync("workflows").filter((f) =>

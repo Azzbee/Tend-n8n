@@ -274,6 +274,25 @@ describe("desk model", () => {
       "unknown",
     );
     expect(runs.failures[0]!.message).toHaveLength(200);
+    expect(runs.failures[0]!.execution_url).toBe("");
+    expect(
+      buildDeskRuns(null, [
+        {
+          workflow: "w",
+          node: "n",
+          message: "m",
+          execution_id: "1",
+          execution_url: "http://localhost:5678/workflow/W1/executions/1?x=F17",
+        },
+        {
+          workflow: "w",
+          node: "n",
+          message: "m",
+          execution_id: "2",
+          execution_url: "http://localhost:5678/workflow/W1/executions/2",
+        },
+      ]).failures.map((f) => f.execution_url),
+    ).toEqual(["", "http://localhost:5678/workflow/W1/executions/2"]);
     expect(runs.failures[0]!.workflow).toHaveLength(120);
     expect(buildDeskRuns(null, null).failure_log_connected).toBe(false);
     const odd = buildDeskRuns(

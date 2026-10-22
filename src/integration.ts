@@ -1,3 +1,4 @@
+import { EXECUTION_URL } from "./desk-model.ts";
 import { spawn, spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -1088,7 +1089,9 @@ try {
           Object.keys(failureEntry)
             .filter((k) => k !== "at" && k !== "recorded_at")
             .sort()
-            .join(",") === "execution_id,message,node,workflow",
+            .join(",") === "execution_id,execution_url,message,node,workflow" &&
+          (failureEntry.execution_url === "" ||
+            EXECUTION_URL.test(String(failureEntry.execution_url))),
         "failure log entry is not redacted to names and a short message",
       );
       checks.push({

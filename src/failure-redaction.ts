@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { EXECUTION_URL, executionUrlOf } from "./desk-model.ts";
 
 // Private-lane failures keep only design-time text: workflow and node names,
 // a guard message that is a literal string in the workflow code, or an HTTP
@@ -10,6 +11,7 @@ export type FailureEntry = {
   node: string;
   message: string;
   execution_id: string;
+  execution_url: string;
 };
 const literalError = /new Error\((['"])([^'"\\\n]{1,200})\1\)/g;
 
@@ -54,16 +56,21 @@ export function loadPrivateGuardMessages(dir = exportsDir): string[] {
 
 // Code for the n8n Error Trigger handler; mirrors acceptFailure below.
 export function redactorCode(allowed: string[]): string {
-  return `const allowed=new Set(${JSON.stringify(allowed)});const e=$input.first().json;const ex=e.execution||{};const er=ex.error||{};const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const node=ex.lastNodeExecuted||(er.node&&er.node.name)||'unknown node';const raw=typeof er.message==='string'?er.message:'';const http=/^[1-5]\\d\\d$/.test(String(er.httpCode??''))?String(er.httpCode):(raw.match(/status code ([1-5]\\d\\d)\\b/)||[])[1];const message=allowed.has(raw)?raw:http?'HTTP '+http:${JSON.stringify(WITHHELD)};return [{json:{workflow:String(wf).slice(0,120),node:String(node).slice(0,120),message,execution_id:String(ex.id??'').slice(0,40)}}];`;
+  return `const allowed=new Set(${JSON.stringify(allowed)});const e=$input.first().json;const ex=e.execution||{};const er=ex.error||{};const wf=e.workflow&&typeof e.workflow.name==='string'?e.workflow.name:'unknown workflow';const node=ex.lastNodeExecuted||(er.node&&er.node.name)||'unknown node';const raw=typeof er.message==='string'?er.message:'';const http=/^[1-5]\\d\\d$/.test(String(er.httpCode??''))?String(er.httpCode):(raw.match(/status code ([1-5]\\d\\d)\\b/)||[])[1];const message=allowed.has(raw)?raw:http?'HTTP '+http:${JSON.stringify(WITHHELD)};return [{json:{workflow:String(wf).slice(0,120),node:String(node).slice(0,120),message,execution_id:String(ex.id??'').slice(0,40),execution_url:typeof ex.url==='string'&&${String(EXECUTION_URL)}.test(ex.url)?ex.url:''}}];`;
 }
 
 export function acceptFailure(value: unknown, allowed: string[]): FailureEntry {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("invalid failure entry");
   const v = value as Record<string, unknown>;
-  if (Object.keys(v).sort().join(",") !== "execution_id,message,node,workflow")
+  // Four keys is the shape a 21 or 22 published before execution_url posts.
+  const keys = Object.keys(v).sort().join(",");
+  if (
+    keys !== "execution_id,message,node,workflow" &&
+    keys !== "execution_id,execution_url,message,node,workflow"
+  )
     throw new Error("invalid failure entry");
-  const { workflow, node, message, execution_id } = v;
+  const { workflow, node, message, execution_id, execution_url = "" } = v;
   if (
     typeof workflow !== "string" ||
     typeof node !== "string" ||
@@ -73,7 +80,8 @@ export function acceptFailure(value: unknown, allowed: string[]): FailureEntry {
     workflow.length > 120 ||
     !node ||
     node.length > 120 ||
-    !/^[A-Za-z0-9-]{0,40}$/.test(execution_id)
+    !/^[A-Za-z0-9-]{0,40}$/.test(execution_id) ||
+    (execution_url !== "" && executionUrlOf(execution_url) === "")
   )
     throw new Error("invalid failure entry");
   if (
@@ -82,7 +90,13 @@ export function acceptFailure(value: unknown, allowed: string[]): FailureEntry {
     !allowed.includes(message)
   )
     throw new Error("failure message is not redacted");
-  return { workflow, node, message, execution_id };
+  return {
+    workflow,
+    node,
+    message,
+    execution_id,
+    execution_url: String(execution_url),
+  };
 }
 
 export function createFailureLog(allowed: string[], keep = 50) {

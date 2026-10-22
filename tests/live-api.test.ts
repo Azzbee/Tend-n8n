@@ -122,7 +122,7 @@ describe("private live API", () => {
         failure_log: Record<string, string>[];
       };
       expect(listed.failure_log).toEqual([
-        { ...entry, at: "2026-10-22T08:00:00.000Z" },
+        { ...entry, execution_url: "", at: "2026-10-22T08:00:00.000Z" },
       ]);
       expect(JSON.stringify(listed)).not.toContain("Mira");
     } finally {
