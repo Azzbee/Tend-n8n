@@ -16,7 +16,7 @@ Tend now plans follow-ups, drafts them from cited evidence and holds every one f
 
 New files: `src/outreach.ts` (pure rules), `src/outreach-store.ts` (`OutreachBook`: items and send ledger in its own SQLite file), `src/outreach-gmail.ts` (compose scope, drafts.create URL, MIME builder, `MockGmail`), `src/outreach-service.ts` (Desk backend, fixture factory, fixture and private routes), `src/outreach-workflows.ts`, `tests/outreach.test.ts`, `tests/outreach-workflows.test.ts`, `tests/outreach-api.test.ts`.
 
-Workflows: 22 planner (fictional, hourly, Paris), 23 approved email to mock Gmail drafts (fictional), 24 planner (private template), 25 approved email to Gmail drafts.create (private template, `gmail.compose` credential placeholder). 22 and 23 use error workflow 21. 24 and 25 save no execution data. n8n can plan, save drafts and record receipts; it has no route to approve, edit or skip.
+Workflows: 22 planner (fictional, hourly, Paris), 23 approved email to mock Gmail drafts (fictional), 24 planner (private template), 25 approved email to Gmail drafts.create (private template, `gmail.compose` credential placeholder). 22 and 23 use error workflow 21. 24 and 25 save no execution data. n8n can plan, save drafts and record receipts; it has no route to approve, edit or skip. That applies to the private API (18768). The fictional fixture API (18767) does expose `/api/outreach/approve|edit|skip` without auth so the demo and integration can approve; its only Gmail is the mock, which accepts `@example.invalid` recipients only.
 
 ## Rules as built
 
@@ -56,4 +56,5 @@ Integration (section 7, lead's): import 25 workflows; run 22 then 23 with the fi
    3. Import workflow 25, bind that credential to "Create Gmail draft (drafts.create only)" and the Header Auth credential to the three private API nodes. Leave it inactive.
    4. Only after approving the exact draft in chat: set `OUTREACH_ENABLED=true` for the private API, restart it, run workflow 25 once manually, confirm the draft in Gmail, then set it back to `false`.
 3. The brief's "show one real draft for one real contact" step needs the running private API and real data, so it waits for the lead after 14:00.
-4. Postgres storage for outreach: items and the ledger live in `.scratch/live-private/outreach.sqlite` (gitignored), not the canonical PostgreSQL store.
+4. `liveSnapshotOf` loads every contact, promise and interaction on each Desk `list()`/`approve()`. Fine for the prepared lane; give it a bounded query before setting `OUTREACH_ENABLED=true` on real history.
+5. Postgres storage for outreach: items and the ledger live in `.scratch/live-private/outreach.sqlite` (gitignored), not the canonical PostgreSQL store.

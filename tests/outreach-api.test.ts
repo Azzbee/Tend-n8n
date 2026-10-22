@@ -36,16 +36,19 @@ describe("fictional outreach lane over HTTP", () => {
   it("walks workflows 22 and 23 against the fixture API with zero real sends", async () => {
     const dir = mkdtempSync(join(tmpdir(), "tend-outreach-"));
     const port = await freePort();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      TEND_DEMO_PORT: String(port),
+      TEND_DEMO_DB: join(dir, "demo.sqlite"),
+      TEND_OUTREACH_DB: join(dir, "outreach.sqlite"),
+    };
+    delete env.TEND_SERVER_MODE;
+    delete env.TEND_OUTREACH_CLOCK;
     const child = spawn(
       process.execPath,
       ["--experimental-strip-types", "src/server.ts"],
       {
-        env: {
-          ...process.env,
-          TEND_DEMO_PORT: String(port),
-          TEND_DEMO_DB: join(dir, "demo.sqlite"),
-          TEND_OUTREACH_DB: join(dir, "outreach.sqlite"),
-        },
+        env,
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -209,10 +212,11 @@ describe("private outreach routes", () => {
       clock,
     });
     const key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";
+    const dbDir = mkdtempSync(join(tmpdir(), "tend-private-outreach-"));
     const outreach = createPrivateOutreach(
       store as unknown as LiveStore,
       policy.principal_id,
-      { TEND_OUTREACH_DB: ":memory:" },
+      { TEND_OUTREACH_DB: join(dbDir, "nested", "outreach.sqlite") },
     );
     const server = createLiveServer({
       policy,
@@ -267,6 +271,7 @@ describe("private outreach routes", () => {
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       outreach.service.book.close();
+      rmSync(dbDir, { recursive: true, force: true });
     }
   });
 });

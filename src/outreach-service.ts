@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
@@ -158,14 +160,14 @@ export function createPrivateOutreach(
   service: OutreachService;
   route: (method: string, path: string, input: unknown) => Promise<RouteResult>;
 } {
-  const book = new OutreachBook(
-    env.TEND_OUTREACH_DB ?? ".scratch/live-private/outreach.sqlite",
-    {
-      owner_id: owner,
-      lane: "private",
-      sendingEnabled: env.OUTREACH_ENABLED === "true",
-    },
-  );
+  const path = env.TEND_OUTREACH_DB ?? ".scratch/live-private/outreach.sqlite";
+  if (path !== ":memory:")
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const book = new OutreachBook(path, {
+    owner_id: owner,
+    lane: "private",
+    sendingEnabled: env.OUTREACH_ENABLED === "true",
+  });
   const load = () => liveSnapshotOf(store, owner);
   return {
     service: new OutreachService(book, load),
