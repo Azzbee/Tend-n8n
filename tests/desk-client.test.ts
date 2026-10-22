@@ -78,7 +78,7 @@ function snapshot(): DeskSnapshot {
     store.close();
   }
 }
-function browser(hash: string, outreach: "off" | "on" = "off") {
+function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
   const elements = new Map<string, FakeElement>();
   const element = (id: string): FakeElement => {
     let value = elements.get(id);
@@ -110,7 +110,17 @@ function browser(hash: string, outreach: "off" | "on" = "off") {
       if (path === "/private/api/outreach")
         return outreach === "on"
           ? Response.json({ items: deskFixtureOutreach(deskFixtureClock()) })
-          : Response.json({ error: "Unknown private route" }, { status: 404 });
+          : outreach === "approved"
+            ? Response.json({
+                items: deskFixtureOutreach(deskFixtureClock()).map((i) => ({
+                  ...i,
+                  status: "approved",
+                })),
+              })
+            : Response.json(
+                { error: "Unknown private route" },
+                { status: 404 },
+              );
       if (path === "/private/api/desk/confirm" && init?.method === "POST")
         return Response.json({ commitment: {} });
       return Response.json({});
@@ -232,6 +242,18 @@ describe("mounted desk", () => {
     expect(
       all(queue, (e) => e.textContent === "Approve this message"),
     ).toHaveLength(2);
+    vi.unstubAllGlobals();
+    const approved = browser("#desk", "approved");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const done = approved.elements.get("desk-outreach")!;
+    expect(
+      all(done, (e) => e.textContent === "Approve this message"),
+    ).toHaveLength(0);
+    expect(
+      all(done, (e) => e.textContent === "Withdraw approval"),
+    ).toHaveLength(2);
+    expect(all(done, (e) => e.textContent === "Copy text")).toHaveLength(1);
   });
   it("reviews pending promises one at a time and shows the failure log on How it runs", async () => {
     vi.useFakeTimers();

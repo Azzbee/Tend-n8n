@@ -548,18 +548,34 @@ export function mountDesk(ctx: DeskContext): DeskController {
                 ),
             ),
           );
-        } else if (item.status === "approved" && item.channel !== "email") {
-          row.append(
-            button("Copy text", "quiet", () => void copy(item.draft_text)),
-          );
-          const link = safeLink(item.deep_link);
-          if (link) {
-            const open = el("a", `Open ${sourceName(item.channel)}`, "link");
-            open.href = link;
-            open.target = "_blank";
-            open.rel = "noopener noreferrer";
-            row.append(open);
+        } else if (item.status === "approved") {
+          if (item.channel !== "email") {
+            row.append(
+              button("Copy text", "quiet", () => void copy(item.draft_text)),
+            );
+            const link = safeLink(item.deep_link);
+            if (link) {
+              const open = el("a", `Open ${sourceName(item.channel)}`, "link");
+              open.href = link;
+              open.target = "_blank";
+              open.rel = "noopener noreferrer";
+              row.append(open);
+            }
           }
+          // The outreach service accepts edit and skip on approved items, which withdraws the approval.
+          row.append(
+            button("Edit", "quiet", () => startEdit(item, row)),
+            button(
+              "Withdraw approval",
+              "quiet",
+              () =>
+                void act(
+                  "outreach/skip",
+                  { id: item.id },
+                  "Approval withdrawn. Nothing was sent.",
+                ),
+            ),
+          );
         }
         node.append(row);
         return node;
