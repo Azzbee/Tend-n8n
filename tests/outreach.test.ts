@@ -551,6 +551,57 @@ describe("approval, expiry and recipient checks", () => {
   });
 });
 
+describe("n8n Retry On Fail re-posts every item", () => {
+  it("answers an exact repeat of a Gmail receipt with the item, so a retried batch keeps every receipt", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const emails = book
+      .list(load())
+      .items.filter((i) => i.channel === "email" && i.status === "pending");
+    expect(emails.length).toBeGreaterThanOrEqual(2);
+    for (const i of emails) {
+      book.edit(i.id, "Hi Mira, a quick note. Thanks.", load());
+      book.approve(i.id, codeOf(book, i.id), load());
+    }
+    const batch = book.approvedEmail(load()).items;
+    const [first, second] = batch;
+    // Run 1: item 1 recorded, item 2's call hits a 5xx.
+    book.recordGmailDraft(first!.id, first!.approval_hash, "r-1", load());
+    // The retry re-posts both items.
+    expect(
+      book.recordGmailDraft(first!.id, first!.approval_hash, "r-1", load())
+        .status,
+    ).toBe("gmail_draft_created");
+    expect(
+      book.recordGmailDraft(second!.id, second!.approval_hash, "r-2", load())
+        .status,
+    ).toBe("gmail_draft_created");
+    expect(
+      book.ledger().filter((l) => l.action === "gmail_draft_created"),
+    ).toHaveLength(2);
+    // A different receipt for a recorded item is still refused.
+    expect(() =>
+      book.recordGmailDraft(first!.id, first!.approval_hash, "r-other", load()),
+    ).toThrow(/no current approval/);
+  });
+  it("answers a retried /draft with the same text as accepted", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const item = byReason(book, load()).overdue_owed_to_you!;
+    const text =
+      "Hi Mira, how is the demo you planned for 2026-10-15 coming along?";
+    expect(book.modelDraft(item.id, text, load()).accepted).toBe(true);
+    expect(book.modelDraft(item.id, text, load())).toMatchObject({
+      accepted: true,
+      problem: null,
+      item: { draft_text: text },
+    });
+    expect(
+      book.ledger().filter((l) => l.action === "model_draft"),
+    ).toHaveLength(1);
+  });
+});
+
 describe("drafts never send without an exact approval", () => {
   it("hands nothing to Gmail before approval and only the exact approved text after", () => {
     const { book, load } = world();
@@ -705,13 +756,9 @@ describe("drafts never send without an exact approval", () => {
       load(),
     );
     expect(good.accepted).toBe(true);
-    // n8n retries /draft: a repeat leaves the saved draft and does not throw.
+    // A different model text after a saved one is refused and leaves it.
     expect(
-      book.modelDraft(
-        item.id,
-        "Hi Mira, how is the demo you planned for 2026-10-15 coming along?",
-        load(),
-      ),
+      book.modelDraft(item.id, "Hi Mira, any update on the demo?", load()),
     ).toMatchObject({
       accepted: false,
       problem: "draft is no longer replaceable",

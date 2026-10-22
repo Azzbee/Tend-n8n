@@ -493,7 +493,12 @@ export function outreachWindow(
     byContact.set(r.contact_id, [...(byContact.get(r.contact_id) ?? []), r]);
   for (const list of byContact.values())
     list
-      .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at))
+      // Same order as the SQL twin: newest first, then record_key.
+      .sort(
+        (a, b) =>
+          Date.parse(b.occurred_at) - Date.parse(a.occurred_at) ||
+          a.record_key.localeCompare(b.record_key),
+      )
       .slice(0, STYLE_SOURCE_PER_CONTACT)
       .forEach((r) => latestSent.add(r));
   return records.filter(

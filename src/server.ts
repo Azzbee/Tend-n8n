@@ -473,8 +473,16 @@ async function startLiveServer(): Promise<void> {
   const rejections = ".scratch/live-private/api-rejections.log";
   // Slow requests and slow owner-lock calls: route and milliseconds only.
   const timing = ".scratch/live-private/api-timing.log";
-  const timingLog = (entry: object): void =>
-    appendFileSync(timing, JSON.stringify(entry) + "\n", { mode: 0o600 });
+  // Logging never fails a request: a full disk or a removed .scratch only
+  // loses log lines.
+  const appendLine = (path: string, entry: object): void => {
+    try {
+      appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 0o600 });
+    } catch {
+      /* dropped */
+    }
+  };
+  const timingLog = (entry: object): void => appendLine(timing, entry);
   if (store instanceof PostgresStore)
     store.setLockTiming((t) => timingLog({ kind: "lock", ...t }));
   const server = createLiveServer({
@@ -482,8 +490,7 @@ async function startLiveServer(): Promise<void> {
     store,
     auth,
     outreach,
-    rejectionLog: (entry) =>
-      appendFileSync(rejections, JSON.stringify(entry) + "\n", { mode: 0o600 }),
+    rejectionLog: (entry) => appendLine(rejections, entry),
     slowLog: (entry) => timingLog({ kind: "request", ...entry }),
     // Last-run status for How it runs: read-only insights from the n8n container; off with TEND_N8N_CONTAINER=off.
     ...(process.env.TEND_N8N_CONTAINER === "off"

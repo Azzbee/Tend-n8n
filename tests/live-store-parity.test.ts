@@ -414,12 +414,7 @@ describe("canonical PostgreSQL live parity", () => {
     const store = pg as unknown as Bounded;
     const started = Date.now();
     await expect(
-      store.run((s) =>
-        s.boundedRecords(
-          "SELECT * FROM live_records WHERE pg_sleep(4) IS NOT NULL",
-          [],
-        ),
-      ),
+      store.run((s) => s.boundedRecords("SELECT pg_sleep(4)", [])),
     ).rejects.toThrow(/statement timeout/);
     expect(Date.now() - started).toBeLessThan(3500);
     // The lock is free again and the budget does not leak into the rest of
@@ -430,6 +425,23 @@ describe("canonical PostgreSQL live parity", () => {
     });
     expect(after).toBe("0");
     expect(Date.now() - started).toBeLessThan(4000);
+    // Inside a caller's own transaction (the Telegram command), a timed-out
+    // read rolls back alone: the transaction stays usable and keeps the
+    // caller's own statement_timeout.
+    const outer = await store.run(async (s) => {
+      await s.q("SET LOCAL statement_timeout = 7000");
+      const failed = await s.boundedRecords("SELECT pg_sleep(3)", []).then(
+        () => "completed",
+        (e: Error) => e.message,
+      );
+      await s.boundedRecords("SELECT * FROM live_records WHERE false", []);
+      return {
+        failed,
+        timeout: (await s.q("SHOW statement_timeout"))[0]!.statement_timeout,
+      };
+    });
+    expect(outer.failed).toMatch(/statement timeout/);
+    expect(outer.timeout).toBe("7s");
   });
   it("reports slow owner-lock calls with the API route, wait and hold only", async () => {
     type Store = {
@@ -466,6 +478,13 @@ describe("canonical PostgreSQL live parity", () => {
           "path",
           "wait_ms",
         ]);
+      // A failing reporter never turns a committed call into an error.
+      pg.setLockTiming(() => {
+        throw new Error("disk full");
+      });
+      await expect(
+        store.run((s) => s.q("SELECT pg_sleep(0.6)")),
+      ).resolves.toBeDefined();
     } finally {
       pg.setLockTiming(() => {});
     }

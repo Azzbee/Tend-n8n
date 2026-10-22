@@ -338,6 +338,14 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   ): { accepted: boolean; problem: string | null; item: OutreachItem } {
     this.refresh(snapshot);
     const item = this.get(id);
+    // A retried /draft with the text already saved is the same success.
+    if (
+      item.status === "pending" &&
+      item.draft_source === "model" &&
+      typeof text === "string" &&
+      item.draft_text === text.trim()
+    )
+      return { accepted: true, problem: null, item: this.view(item) };
     if (item.status !== "pending" || item.draft_source !== "template")
       return {
         accepted: false,
@@ -508,6 +516,15 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   ): OutreachItem {
     this.refresh(snapshot);
     const item = this.get(id);
+    // n8n's Retry On Fail re-posts every item of the node: the same receipt
+    // again is answered with the item as it is, not an error that would fail
+    // the retry and lose the receipts after it.
+    if (
+      item.status === "gmail_draft_created" &&
+      item.gmail_draft_id === draftId &&
+      approvalHash === item.approved_text_hash
+    )
+      return this.view(item);
     if (
       !this.sendable(item, snapshot) ||
       approvalHash !== item.approved_text_hash

@@ -246,13 +246,18 @@ export class PostgresStore implements LiveStore {
       const done = Date.now(),
         wait_ms = (locked || done) - queued,
         hold_ms = locked ? done - locked : 0;
+      // A failing reporter must not turn a committed call into an error.
       if (wait_ms + hold_ms >= SLOW_LOCK_MS)
-        this.lockTiming?.({
-          at: new Date(done).toISOString(),
-          path: requestPath.getStore() ?? "background",
-          wait_ms,
-          hold_ms,
-        });
+        try {
+          this.lockTiming?.({
+            at: new Date(done).toISOString(),
+            path: requestPath.getStore() ?? "background",
+            wait_ms,
+            hold_ms,
+          });
+        } catch {
+          /* dropped */
+        }
     }
   }
   async seed(
@@ -382,17 +387,31 @@ export class PostgresStore implements LiveStore {
     );
   }
   // Outreach reads hold the owner lock like every call here; this bounds how
-  // long one can hold it, so a slow read fails alone instead of making the
-  // per-minute workflows time out behind it.
+  // long one can hold it. It runs in a savepoint, so a timeout inside a larger
+  // transaction (the Telegram command's) rolls back only this read, and it
+  // puts back whatever statement_timeout the caller had.
   private async boundedRecords(
     sql: string,
     values: unknown[],
   ): Promise<NormalizedRecord[]> {
-    await this.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+    await this.q("SAVEPOINT bounded_read");
+    const previous = (
+      await this.q<{ t: string }>(
+        "SELECT current_setting('statement_timeout') AS t",
+      )
+    )[0]!.t;
     try {
-      return (await this.q(sql, values)).map((x) => this.record(x));
-    } finally {
-      await this.q("SET LOCAL statement_timeout TO DEFAULT").catch(() => {});
+      await this.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+      const rows = (await this.q(sql, values)).map((x) => this.record(x));
+      await this.q("SELECT set_config('statement_timeout', $1, true)", [
+        previous,
+      ]);
+      await this.q("RELEASE SAVEPOINT bounded_read");
+      return rows;
+    } catch (error) {
+      // Undoes the read and the SET LOCAL; the outer transaction stays usable.
+      await this.q("ROLLBACK TO SAVEPOINT bounded_read").catch(() => {});
+      throw error;
     }
   }
   // SQL twin of outreachWindow in outreach.ts; timestamps are validated

@@ -190,11 +190,13 @@ export function createLiveServer(options: LiveServerOptions): Server {
   // every record plus a contact prune, written under the owner lock, so the
   // per-minute workflows queued behind each other's retention. It now runs at
   // most once a minute, one run shared by concurrent requests; a record that
-  // crosses a window boundary is removed within that minute.
+  // crosses a window boundary is removed within that minute. Paths that must
+  // not serve anything outside the window (after a sync batch, before a Live
+  // AI answer) force a fresh run.
   let retention: { at: number; run: Promise<void> } | null = null;
-  const enforceRetention = (): Promise<void> => {
+  const enforceRetention = (force = false): Promise<void> => {
     const now = clock().getTime();
-    if (retention && now - retention.at < RETENTION_INTERVAL_MS)
+    if (!force && retention && now - retention.at < RETENTION_INTERVAL_MS)
       return retention.run;
     const m = gmailWindow(policy, clock()),
       c = calendarHistoryWindow(policy, clock());
@@ -1177,7 +1179,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
           removed_record_ids: removed,
           quarantines: review,
         });
-        await enforceRetention();
+        await enforceRetention(true);
         respond(200, {
           accepted: stored.length,
           record_keys: stored.map((x) => x.record_key),
@@ -1308,7 +1310,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
               }
             }
             if (disconnected.signal.aborted || res.destroyed) return;
-            await enforceRetention();
+            await enforceRetention(true);
             if (prepared.ai_guard?.prepared.contact_group)
               prepared.ai_guard.current_group =
                 (await resolveGroup(prepared.ai_guard.prepared.contact_id)) ??
@@ -1373,7 +1375,11 @@ export function createLiveServer(options: LiveServerOptions): Server {
     res.once("close", () => {
       const ms = Date.now() - started;
       if (ms >= SLOW_REQUEST_MS)
-        options.slowLog?.({ at: new Date().toISOString(), path, ms });
+        try {
+          options.slowLog?.({ at: new Date().toISOString(), path, ms });
+        } catch {
+          /* a close listener must never throw */
+        }
     });
     void requestPath.run(path, () => handle(req, res));
   });

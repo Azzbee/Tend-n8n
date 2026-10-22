@@ -190,8 +190,24 @@ describe("fictional outreach lane over HTTP", () => {
         id: target.id,
         status: "gmail_draft_created",
       });
+      // A retried node re-posts the same receipt: same item back, no second
+      // draft (the ledger below still holds exactly one).
+      const repeated = await call(
+        "/api/outreach/gmail-draft",
+        receipts[0]!.json,
+      );
+      expect(repeated.status).toBe(200);
+      expect(repeated.json.item).toMatchObject({
+        id: target.id,
+        status: "gmail_draft_created",
+      });
       expect(
-        (await call("/api/outreach/gmail-draft", receipts[0]!.json)).status,
+        (
+          await call("/api/outreach/gmail-draft", {
+            ...receipts[0]!.json,
+            draft_id: "r-mock-other",
+          })
+        ).status,
       ).toBe(400);
       expect(
         (
