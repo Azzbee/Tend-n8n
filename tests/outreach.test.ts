@@ -416,21 +416,20 @@ describe("Desk backend and Telegram commands", () => {
     expect(service).toBeInstanceOf(OutreachService);
   });
   it("handles /outreach, /approve, /edit and /skip through the fixture Telegram path", () => {
-    let book: OutreachBook | undefined;
-    const store: TendStore = new TendStore(":memory:", {
-      clock: at(FIXTURE_OUTREACH_CLOCK),
-      commandExtension: (auth) =>
-        book?.telegram(auth.text, snapshotOf(store, "demo-owner")) ?? null,
-    });
-    store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
-    store.ingestBatch(fixtureRecords, "fixture");
-    confirmFixturePromises(store);
-    book = new OutreachBook(":memory:", {
+    const book = new OutreachBook(":memory:", {
       owner_id: "demo-owner",
       lane: "fictional",
       clock: at(FIXTURE_OUTREACH_CLOCK),
       sendingEnabled: true,
     });
+    const store: TendStore = new TendStore(":memory:", {
+      clock: at(FIXTURE_OUTREACH_CLOCK),
+      commandExtension: (auth) =>
+        book.telegram(auth.text, snapshotOf(store, "demo-owner")),
+    });
+    store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
+    store.ingestBatch(fixtureRecords, "fixture");
+    confirmFixturePromises(store);
     book.plan(snapshotOf(store, "demo-owner"));
     let update = 100;
     const send = (text: string) =>
