@@ -138,6 +138,22 @@ describe("fictional outreach lane over HTTP", () => {
       expect((await call("/api/outreach/approved-email")).json.items).toEqual(
         [],
       );
+      // A web page can POST text/plain cross-origin without a preflight; the
+      // fixture API must not treat that as an approval.
+      const simple = await fetch(base + "/api/outreach/approve", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ id: target.id, text_code: target.text_code }),
+      });
+      expect(simple.status).toBe(400);
+      expect(
+        (
+          (await call("/api/outreach")).json.items as {
+            id: string;
+            status: string;
+          }[]
+        ).find((i) => i.id === target.id)!.status,
+      ).toBe("pending");
       expect(
         (
           await call("/api/outreach/approve", {
