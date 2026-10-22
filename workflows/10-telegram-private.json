@@ -118,6 +118,20 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1000
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendLiveTelegram\n**Purpose:** Owner control over Telegram (/status, /today, /confirm ...).\n\n**Inputs:** Telegram private message from the configured owner.\n\n**Outputs:** One reply to the authorized owner and a send acknowledgement.\n\n**Privacy:** Every other sender or chat is refused. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

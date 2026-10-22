@@ -39,6 +39,20 @@
         "mode": "once",
         "options": { "waitForSubWorkflow": true }
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview03\n**Purpose:** Fictional personal WhatsApp adapter for the demo lane.\n\n**Inputs:** Manual run; GET /api/fixtures on the local fixture API.\n\n**Outputs:** Records handed to sub-workflow 06 (normalize and store).\n\n**Privacy:** Fictional fixtures only (Mira Tan, F17). No account or credential. Failures go to error workflow 21.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

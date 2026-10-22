@@ -118,6 +118,20 @@
       "parameters": {
         "jsCode": "const saved=$input.first().json;const x=$('Validate approved raw input').item.json;if(saved.error)throw new Error('record storage failed');return [{json:{context:x.context,source_record_id:x.record.id,committed:true}}];"
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendGoogle13\n**Purpose:** Sub-workflow: normalize and store approved Google records.\n\n**Inputs:** Called by 11 and 12 with raw approved records.\n\n**Outputs:** Committed records in the canonical store and page context.\n\n**Privacy:** Validates the approved scope before any write. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

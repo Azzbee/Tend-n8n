@@ -15,6 +15,29 @@ interface Workflow {
 const load = (n: string): Workflow =>
   JSON.parse(readFileSync(`workflows/${n}`, "utf8")) as Workflow;
 describe("import and node boundaries", () => {
+  it("explains every canvas with one sticky note naming purpose, inputs, outputs and privacy", () => {
+    for (const f of readdirSync("workflows").filter((f) =>
+      f.endsWith(".json"),
+    )) {
+      const w = JSON.parse(
+        readFileSync(`workflows/${f}`, "utf8"),
+      ) as Workflow & {
+        id: string;
+        connections: Record<string, unknown>;
+      };
+      const notes = w.nodes.filter(
+        (n) => n.type === "n8n-nodes-base.stickyNote",
+      );
+      expect(notes, f).toHaveLength(1);
+      const text = String(notes[0]!.parameters.content);
+      for (const heading of ["Purpose", "Inputs", "Outputs", "Privacy"])
+        expect(text, `${f} ${heading}`).toContain(`**${heading}:**`);
+      expect(text.length, f).toBeLessThan(900);
+      expect(notes[0]).not.toHaveProperty("credentials");
+      expect(Object.keys(w.connections)).not.toContain(notes[0]!.name);
+      if (/^(1\d|20)-/.test(f)) expect(text, f).toContain("no execution data");
+    }
+  });
   it("connects native LLM Chain to a local keyless Ollama model", () => {
     const w = load("07-extract-commitments.json");
     expect(

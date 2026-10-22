@@ -802,6 +802,20 @@
       },
       "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
       "notesInFlow": true
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendGoogle11\n**Purpose:** Read-only Gmail sync inside the approved time window.\n\n**Inputs:** Schedule or manual run; Gmail API with read-only scope.\n\n**Outputs:** Raw records handed to sub-workflow 13; a saved sync cursor.\n\n**Privacy:** Read-only scope, approved window and request budget. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

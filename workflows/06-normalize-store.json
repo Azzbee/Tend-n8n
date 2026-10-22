@@ -39,6 +39,20 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 1000
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendReview06\n**Purpose:** Sub-workflow: validate scope, normalize and store one record.\n\n**Inputs:** Called by adapters 01-05 with fictional source records.\n\n**Outputs:** One committed record in the local fixture store.\n\n**Privacy:** Rejects anything outside the fictional scope. Failures go to error workflow 21.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

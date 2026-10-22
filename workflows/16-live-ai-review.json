@@ -330,6 +330,20 @@
       "parameters": {
         "jsCode": "const raw=$input.first().json;const wrapped=Object.hasOwn(raw,'result');if(!wrapped&&Object.hasOwn(raw,'ok'))throw new Error('Incomplete owner transport envelope; inspect delivery before any manual retry');if(wrapped&&(raw.ok!==true||!raw.result||typeof raw.result!=='object'||Array.isArray(raw.result)))throw new Error('Invalid owner transport envelope; inspect delivery before any manual retry');const x=wrapped?raw.result:raw;const c=$('Validate explicit private AI selection').first().json;if(!Number.isSafeInteger(x.message_id)||x.message_id<=0||!x.chat||x.chat.type!=='private'||String(x.chat.id)!==c.owner_chat_id)throw new Error('Owner transport acknowledgement unavailable or mismatched; inspect delivery before any manual retry');return [{json:{...$('Return review only without delivery').first().json,owner_delivery:{status:'sent',message_id:x.message_id}}}];"
       }
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendLive16\n**Purpose:** Local AI cited briefing or review draft for one chosen contact.\n\n**Inputs:** Manual run with an explicit contact and review purpose.\n\n**Outputs:** A cited briefing or draft for owner review. Nothing is sent.\n\n**Privacy:** Local Ollama only; every claim must cite stored evidence. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {

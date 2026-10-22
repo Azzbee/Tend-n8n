@@ -943,6 +943,20 @@
       },
       "notes": "Bind a newly entered private Header Auth credential. No secret or real principal is included in this inactive export.",
       "notesInFlow": true
+    },
+    {
+      "id": "canvas-note",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -340],
+      "parameters": {
+        "content": "## TendGoogle12\n**Purpose:** Read-only sync of the chosen Google Calendars.\n\n**Inputs:** Schedule or manual run; Calendar API with read-only scope.\n\n**Outputs:** Events handed to sub-workflow 13; a saved sync cursor.\n\n**Privacy:** Read-only scope, chosen calendars only. Private lane: no execution data is saved (success and error), so provider text never lands in n8n history.",
+        "width": 520,
+        "height": 300,
+        "color": 7
+      },
+      "retryOnFail": false
     }
   ],
   "connections": {
