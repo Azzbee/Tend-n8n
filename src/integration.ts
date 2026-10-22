@@ -1176,6 +1176,10 @@ try {
         forgedStatus === 403,
         `native Telegram secret-header check returned ${forgedStatus}, expected 403; inspect isolated webhook log`,
       );
+      // Earlier steps (planner 23's owner notice) may already have used the mock.
+      const repliesBefore = (
+        (await request("/api/status")).mock_telegram_replies as unknown[]
+      ).length;
       for (const message of [
         { ...fixtureUpdate.message, from: { id: 999, is_bot: false } },
         { ...fixtureUpdate.message, chat: { id: 424242, type: "group" } },
@@ -1192,7 +1196,7 @@ try {
       );
       assert(
         ((await request("/api/status")).mock_telegram_replies as unknown[])
-          .length === 0,
+          .length === repliesBefore,
         "unauthorized Telegram update reached a reply",
       );
       for (const text of [
@@ -1219,11 +1223,11 @@ try {
         replyCount = Array.isArray(state.mock_telegram_replies)
           ? state.mock_telegram_replies.length
           : 0;
-        if (replyCount === 5) break;
+        if (replyCount === repliesBefore + 5) break;
         await new Promise((r) => setTimeout(r, 200));
       }
       assert(
-        replyCount === 5,
+        replyCount === repliesBefore + 5,
         "native Telegram owner commands did not produce all five replies",
       );
       const repeated = {
@@ -1238,7 +1242,8 @@ try {
       await new Promise((r) => setTimeout(r, 800));
       assert(
         ((await request("/api/status")).mock_telegram_replies as unknown[])
-          .length === 5,
+          .length ===
+          repliesBefore + 5,
         "duplicate authenticated update sent another reply",
       );
       let acknowledgements = 0;
