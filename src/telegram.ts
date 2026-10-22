@@ -12,7 +12,7 @@ if (!validId(message.from.id) || !validId(message.chat.id) || String(message.fro
 if (typeof message.text !== 'string' || message.text.length > 500) return [];
 const text = message.text.trim();
 if (!text.startsWith('/')) return [];
-const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel|outreach|approve|edit|skip)(?:\\s|$)/.test(text);
+const help = text === '/start' || text === '/help' || !/^\\/(?:status|today|prep|draft|confirm|done|cancel|dismiss|outreach|approve|edit|skip)(?:\\s|$)/.test(text);
 return [{json:{reply_chat_id:allowedChatId,help,telegram_update_id:update.update_id,telegram_channel_id:'tend-course-control',command:{owner_id:'demo-owner',user_id:'demo-user',chat_id:'demo-private',chat_type:'private',text:help?'/status':text}}}];
 `;
 export const telegramLiveGuardCode = telegramGuardCode
@@ -39,7 +39,7 @@ const reply = $input.first().json;
 const record = value => typeof value === 'object' && value !== null && !Array.isArray(value);
 const string = value => typeof value === 'string' ? value : '';
 const lines = ['Course demo • fictional data'];
-if(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID, /outreach, /approve ID CODE, /edit ID text, /skip ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');
+if(authorized.help) lines.push('Commands: /status, /today, /prep F17, /confirm ID YYYY-MM-DD, /draft ID, /done ID, /cancel ID, /dismiss ID, /outreach, /approve ID CODE, /edit ID text, /skip ID.','Your private control chat uses fictional evidence only. No personal inbox history is imported.');
 else if(!record(reply) || reply.error) lines.push('Command failed. Check the command and local service. Use /help for examples.');
 else {
  if(record(reply.counts)) lines.push('Source records: ' + reply.counts.interactions + '. Promise candidates: ' + reply.counts.commitments + '.');
