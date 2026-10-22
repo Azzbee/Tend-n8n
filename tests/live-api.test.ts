@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createLiveServer } from "../src/live-api.ts";
+import { createLiveServer, rejectionReason } from "../src/live-api.ts";
 import { InternalAuth, verificationHash } from "../src/internal-auth.ts";
 import { TendStore } from "../src/engine.ts";
 import type { LiveRecord } from "../src/google-records.ts";
@@ -13,6 +13,22 @@ async function listen(server: Server): Promise<number> {
   return a.port;
 }
 describe("private live API", () => {
+  it("logs only the fixed guard text of a rejection, never data", () => {
+    expect(rejectionReason(new Error("account mismatch"))).toBe(
+      "account mismatch",
+    );
+    expect(rejectionReason(new Error("history checkpoint unavailable"))).toBe(
+      "history checkpoint unavailable",
+    );
+    for (const leak of [
+      "duplicate key mira@example.invalid",
+      'Mira wrote 2026-10-15 "send the demo"',
+      "x".repeat(200),
+      "",
+    ])
+      expect(rejectionReason(new Error(leak))).toBe("unlisted");
+    expect(rejectionReason("not an error")).toBe("unlisted");
+  });
   it("records only redacted private failures behind owner authentication", async () => {
     const policy = exampleLivePolicy,
       clock = () => new Date("2026-10-22T08:00:00Z");

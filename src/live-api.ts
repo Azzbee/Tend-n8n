@@ -56,6 +56,9 @@ export interface LiveServerOptions {
   dailyOwner?: { owner_id: string; user_id: string; chat_id: string };
   dailyEnabledAt?: string;
   workflowRuns?: () => Promise<DeskWorkflowRun[]>;
+  // Receives why a private request was rejected: the path and the guard's own
+  // message when it is plain fixed text, otherwise "unlisted".
+  rejectionLog?: (entry: { at: string; path: string; reason: string }) => void;
   outreach?: {
     service?: DeskOutreachBackend;
     route: (
@@ -64,6 +67,12 @@ export interface LiveServerOptions {
       input: unknown,
     ) => Promise<{ status: number; body: unknown } | null>;
   };
+}
+export function rejectionReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  return /^[A-Za-z][A-Za-z _:,.()'/-]{0,119}$/.test(message)
+    ? message
+    : "unlisted";
 }
 const setupPage = (nonce: string) =>
   `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tend private connection setup</title><style>body{font:18px system-ui;max-width:680px;margin:60px auto;padding:24px;background:#f6f8f7;color:#15362c}input,button{font:inherit;padding:12px;margin:12px 0}input{width:90%}button{cursor:pointer}</style><h1>Set the private connection key</h1><p>This local page saves only a verification hash. Your key is not returned or logged. Save the same key yourself in the n8n Header Auth credential as <strong>Authorization: Bearer YOUR_KEY</strong>.</p><form method="post" action="/setup"><input type="hidden" name="nonce" value="${nonce}"><label for="secret">New random connection key (43 or more characters)</label><input id="secret" name="secret" type="password" autocomplete="new-password" minlength="43" maxlength="128" required><button type="button" id="generate">Generate a random key</button><button type="button" id="copy">Copy my key for n8n</button><button type="submit">Save verification hash</button></form><p>No Google reads happen during setup. This form closes after the key is saved.</p><script>document.getElementById('generate').onclick=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));document.getElementById('secret').value=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};document.getElementById('copy').onclick=()=>navigator.clipboard.writeText('Bearer '+document.getElementById('secret').value);</script></html>`;
@@ -1298,7 +1307,12 @@ export function createLiveServer(options: LiveServerOptions): Server {
         return;
       }
       respond(404, { error: "Unknown route" });
-    } catch {
+    } catch (error) {
+      options.rejectionLog?.({
+        at: clock().toISOString(),
+        path: url.pathname,
+        reason: rejectionReason(error),
+      });
       respond(400, {
         error:
           "Private request rejected; inspect policy, account, cursor and input shape.",

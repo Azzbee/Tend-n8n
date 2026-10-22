@@ -1,7 +1,7 @@
 import { createPrivateServices } from "./private-services.ts";
 import { PostgresStore } from "./postgres-store.ts";
 import { createServer } from "node:http";
-import { readFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, readFileSync, mkdirSync } from "node:fs";
 import {
   TendStore,
   parseRaw,
@@ -467,11 +467,14 @@ async function startLiveServer(): Promise<void> {
       "Daily briefing requires its persisted owner and activation timestamp together",
     );
   const outreach = createPrivateOutreach(store, policy.principal_id);
+  const rejections = ".scratch/live-private/api-rejections.log";
   const server = createLiveServer({
     policy,
     store,
     auth,
     outreach,
+    rejectionLog: (entry) =>
+      appendFileSync(rejections, JSON.stringify(entry) + "\n", { mode: 0o600 }),
     // Last-run status for How it runs: read-only insights from the n8n container; off with TEND_N8N_CONTAINER=off.
     ...(process.env.TEND_N8N_CONTAINER === "off"
       ? {}
