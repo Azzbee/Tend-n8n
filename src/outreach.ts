@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Commitment, Contact, NormalizedRecord } from "./engine.ts";
 import { isInstructionLike } from "./instruction-like.ts";
+import type { ThreadedCommitment } from "./promise-threads.ts";
 
 // Pure outreach rules: no I/O, so the planner, quiet hours, rate limit,
 // recipient check and draft validation are testable on plain data.
@@ -252,10 +253,14 @@ export function planOutreach(
       fallback_text: fallbackDraft(reason, contact.name, quote),
     });
   };
+  const threadLead = threadRepresentatives(snapshot.commitments, byKey);
   for (const c of snapshot.commitments) {
     if (c.status !== "confirmed" || !c.evidence_valid || !c.due_date) continue;
     const record = byKey.get(c.record_key);
     if (!record || record.cancelled) continue;
+    // One follow-up per promise thread, keyed by its earliest confirmed sighting.
+    const thread = (c as ThreadedCommitment).thread_id;
+    if (thread && threadLead.get(thread) !== c.commitment_id) continue;
     if (c.direction === "owed_to_me" && c.due_date < today)
       add("overdue_owed_to_you", c.commitment_id, record, c.quote);
     if (
@@ -506,4 +511,28 @@ export function outreachWindow(
           ? Date.parse(r.end_at)
           : Date.parse(r.occurred_at) + MEETING_DEFAULT_MS) >= meetingSince),
   );
+}
+
+/** Earliest confirmed, valid sighting per promise thread; it alone keys the thread's follow-up. */
+function threadRepresentatives(
+  commitments: readonly Commitment[],
+  byKey: ReadonlyMap<string, NormalizedRecord>,
+): Map<string, string> {
+  const lead = new Map<string, { id: string; at: string }>();
+  for (const c of commitments as readonly ThreadedCommitment[]) {
+    const record = byKey.get(c.record_key);
+    if (
+      !c.thread_id ||
+      c.status !== "confirmed" ||
+      !c.evidence_valid ||
+      !record ||
+      record.cancelled
+    )
+      continue;
+    const at = `${record.occurred_at}|${c.commitment_id}`;
+    const current = lead.get(c.thread_id);
+    if (!current || at < current.at)
+      lead.set(c.thread_id, { id: c.commitment_id, at });
+  }
+  return new Map([...lead].map(([thread, v]) => [thread, v.id]));
 }
