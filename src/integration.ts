@@ -652,6 +652,7 @@ try {
         ...process.env,
         TEND_DEMO_DB: `${dir}/demo.sqlite`,
         TEND_DEMO_PORT: String(fixturePort),
+        TEND_OUTREACH_DB: `${dir}/outreach.sqlite`,
       },
       stdio: ["ignore", log, log],
     },
@@ -867,6 +868,57 @@ try {
         "replay duplicated records/candidates",
       );
       checks.push({ name: "Replay", pass: true, detail: fixtureReplay.counts });
+      // Outreach: plan with 23, approve one fictional email, draft it with 24.
+      for (const [id, action, due] of [
+        ["g1", "send the demo", "2026-10-15"],
+        ["g2", "review your demo", "2026-10-16"],
+      ] as const) {
+        const record = fixtureRecords.find((r) => r.source_record_id === id)!;
+        const added = await request("/api/candidates", {
+          record,
+          candidate: { quote: record.body_text, action, suggested_due: due },
+        });
+        const cid = (added.candidate as { commitment_id: string })
+          .commitment_id;
+        await request("/api/command", {
+          ...demoAuth,
+          text: `/confirm ${cid} ${due}`,
+        });
+      }
+      execution("TendReview23");
+      const queue = (await request("/api/outreach")).items as {
+        id: string;
+        channel: string;
+        status: string;
+      }[];
+      const email = queue.find(
+        (i) => i.channel === "email" && i.status === "pending",
+      );
+      assert(email, "planner 23 proposed no pending fictional email");
+      const untouched = await request("/api/outreach/ledger");
+      assert(
+        Array.isArray(untouched.mock_gmail_drafts) &&
+          untouched.mock_gmail_drafts.length === 0,
+        "mock Gmail draft created before approval",
+      );
+      execution("TendReview24");
+      assert(
+        ((await request("/api/outreach/ledger")).mock_gmail_drafts as unknown[])
+          .length === 0,
+        "workflow 24 drafted an unapproved item",
+      );
+      await request("/api/outreach/approve", { id: email.id });
+      execution("TendReview24");
+      const ledger = await request("/api/outreach/ledger");
+      assert(
+        (ledger.mock_gmail_drafts as unknown[]).length === 1,
+        "approved fictional email did not reach mock Gmail drafts",
+      );
+      checks.push({
+        name: "Fictional outreach 23 and 24",
+        pass: true,
+        detail: `${queue.length} proposals; no draft before approval; one approved email reached mock Gmail drafts.create only`,
+      });
       // Exercise the actual native Telegram Trigger and Send node against a local
       // mock Bot API. This never connects to Telegram or a human recipient.
       const telegram = JSON.parse(
@@ -940,6 +992,67 @@ try {
         ["exec", name, "n8n", "publish:workflow", "--id", telegram.id],
         "telegram-fixture-publish",
       );
+      // A fictional production failure must reach error workflow 21 redacted.
+      const forcedFailure = {
+        id: "TendForcedFailureCheck",
+        name: "Tend forced failure check (fictional)",
+        active: false,
+        nodes: [
+          {
+            id: "forced-webhook",
+            name: "Fictional failure webhook",
+            type: "n8n-nodes-base.webhook",
+            typeVersion: 2,
+            position: [0, 0],
+            webhookId: "tend-forced-failure",
+            parameters: {
+              httpMethod: "GET",
+              path: "tend-forced-failure",
+              responseMode: "onReceived",
+            },
+          },
+          {
+            id: "forced-throw",
+            name: "Throw fictional failure",
+            type: "n8n-nodes-base.code",
+            typeVersion: 2,
+            position: [260, 0],
+            parameters: {
+              jsCode:
+                "throw new Error('Forced fictional failure Mira Tan F17 '+'x'.repeat(300));",
+            },
+          },
+        ],
+        connections: {
+          "Fictional failure webhook": {
+            main: [
+              [{ node: "Throw fictional failure", type: "main", index: 0 }],
+            ],
+          },
+        },
+        settings: { executionOrder: "v1", errorWorkflow: "TendReview21" },
+        pinData: {},
+        tags: [],
+        versionId: randomUUID(),
+      };
+      writeFileSync(
+        `${dir}/forced-failure.json`,
+        JSON.stringify(forcedFailure),
+      );
+      command(
+        [
+          "exec",
+          name,
+          "n8n",
+          "import:workflow",
+          "--input=/scratch/forced-failure.json",
+        ],
+        "forced-failure-import",
+      );
+      command(
+        ["exec", name, "n8n", "publish:workflow", "--id", forcedFailure.id],
+        "forced-failure-publish",
+      );
       command(
         [
           "exec",
@@ -972,6 +1085,50 @@ try {
         await new Promise((r) => setTimeout(r, 300));
       }
       assert(webhookReady, "native Telegram fixture server did not start");
+      const failuresBefore = (
+        (await request("/api/status")).failure_log as unknown[]
+      ).length;
+      const forcedResponse = await fetch(`${base}/webhook/tend-forced-failure`);
+      let failureEntry: Record<string, unknown> | undefined;
+      for (let i = 0; i < 40 && !failureEntry; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const log = (await request("/api/status")).failure_log as Record<
+          string,
+          unknown
+        >[];
+        if (log.length > failuresBefore) failureEntry = log.at(-1);
+      }
+      if (!failureEntry) {
+        const runs = command(
+          [
+            "exec",
+            name,
+            "node",
+            "-e",
+            "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/scratch/.n8n/database.sqlite',{readOnly:true});console.log(JSON.stringify(d.prepare('select workflowId,mode,status,count(*) n from execution_entity group by 1,2,3').all()))",
+          ],
+          "forced-failure-executions",
+        );
+        throw new Error(
+          `error workflow 21 recorded no production failure (webhook HTTP ${forcedResponse.status}; executions ${runs.trim().slice(0, 600)})`,
+        );
+      }
+      assert(
+        failureEntry.workflow === forcedFailure.name &&
+          failureEntry.node === "Throw fictional failure" &&
+          failureEntry.message === "unlisted error (text withheld)" &&
+          Object.keys(failureEntry)
+            .filter((k) => k !== "at" && k !== "recorded_at")
+            .sort()
+            .join(",") === "execution_id,message,node,workflow",
+        "failure log entry is not redacted to names and a short message",
+      );
+      checks.push({
+        name: "Published error workflow 21",
+        pass: true,
+        detail:
+          "A fictional production failure posted only workflow, node and execution ID; its message text (fictional name, F17) was withheld",
+      });
       await new Promise((r) => setTimeout(r, 800));
       const webhook = `${base}/webhook/${trigger.webhookId}/webhook`;
       const fixtureUpdate = {
