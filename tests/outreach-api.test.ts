@@ -297,3 +297,37 @@ describe("private outreach routes", () => {
     }
   });
 });
+
+describe("private outreach kill switch", () => {
+  it("opens the send path only for OUTREACH_ENABLED=true exactly", () => {
+    const store = new TendStore(":memory:", {
+      mode: "live",
+      principal: {
+        owner_id: exampleLivePolicy.principal_id,
+        user_id: "live-owner",
+        chat_id: "live-private",
+      },
+    });
+    const enabled = (value: string | undefined): boolean => {
+      const env: Record<string, string | undefined> = {
+        TEND_OUTREACH_DB: ":memory:",
+      };
+      if (value !== undefined) env.OUTREACH_ENABLED = value;
+      const { service } = createPrivateOutreach(
+        store as unknown as LiveStore,
+        exampleLivePolicy.principal_id,
+        env,
+      );
+      try {
+        return service.book.options.sendingEnabled;
+      } finally {
+        service.book.close();
+      }
+    };
+    expect(enabled(undefined)).toBe(false);
+    for (const off of ["false", "", "1", "yes", "TRUE", " true"])
+      expect(enabled(off)).toBe(false);
+    expect(enabled("true")).toBe(true);
+    store.close();
+  });
+});
