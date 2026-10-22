@@ -94,6 +94,7 @@ export type LiveStoreMethod =
   | "commitments"
   | "threadRows"
   | "linkPromiseThreads"
+  | "setThreadGroups"
   | "revokeSource"
   | "command"
   | "telegramCommand"

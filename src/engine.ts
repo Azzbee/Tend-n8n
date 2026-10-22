@@ -25,7 +25,6 @@ import {
   annotateThreads,
   linkThreads,
   onePerThread,
-  rememberThreadGroups,
   separateFromThread,
   threadMembers,
   withoutThread,
@@ -1005,7 +1004,7 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS sources(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(owner_id,source));
  CREATE TABLE IF NOT EXISTS interactions(record_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,source_record_id TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,source,account_id,source_record_id));
  CREATE TABLE IF NOT EXISTS commitments(commitment_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,record_key TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,record_key));
- CREATE TABLE IF NOT EXISTS commitment_threads(owner_id TEXT NOT NULL,thread_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,thread_id));
+ CREATE TABLE IF NOT EXISTS commitment_threads(owner_id TEXT NOT NULL,thread_id TEXT NOT NULL CHECK(thread_id LIKE 'T%' AND length(thread_id) BETWEEN 2 AND 81),created_at TEXT NOT NULL,PRIMARY KEY(owner_id,thread_id));
  CREATE TABLE IF NOT EXISTS commitment_thread_members(owner_id TEXT NOT NULL,thread_id TEXT NOT NULL,commitment_id TEXT NOT NULL,linked_by TEXT NOT NULL CHECK(linked_by IN ('auto','owner')),similarity REAL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,commitment_id),FOREIGN KEY(owner_id,thread_id) REFERENCES commitment_threads(owner_id,thread_id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS commitment_thread_overrides(owner_id TEXT NOT NULL,commitment_id TEXT NOT NULL,other_commitment_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,commitment_id,other_commitment_id));
  CREATE TABLE IF NOT EXISTS quarantines(id INTEGER PRIMARY KEY,source TEXT,reason TEXT NOT NULL);
@@ -2732,6 +2731,11 @@ export class TendStore {
       ),
     );
   }
+  // The policy's verified groups, set once by the private web handler; candidates added later link through them.
+  private threadGroups: readonly VerifiedContactGroup[] = [];
+  setThreadGroups(groups: readonly VerifiedContactGroup[]): void {
+    this.threadGroups = groups;
+  }
   threadRows(owner: string): ThreadRow[] {
     this.assertOwner(owner);
     return this.db
@@ -2756,7 +2760,7 @@ export class TendStore {
     only?: readonly string[],
   ): ThreadRow[] {
     this.assertOwner(owner);
-    const remembered = rememberThreadGroups(owner, groups);
+    const remembered = groups ?? this.threadGroups;
     const commitments = this.db
       .prepare("SELECT data FROM commitments WHERE owner_id=?")
       .all(owner)
@@ -2773,14 +2777,13 @@ export class TendStore {
       ...(only ? { only } : {}),
       now: this.clock(),
     });
+    // Plain member inserts: a conflict would mean a double placement, which is a bug.
     for (const row of added) {
       this.db
         .prepare("INSERT OR IGNORE INTO commitment_threads VALUES(?,?,?)")
         .run(owner, row.thread_id, row.created_at);
       this.db
-        .prepare(
-          "INSERT OR IGNORE INTO commitment_thread_members VALUES(?,?,?,?,?,?)",
-        )
+        .prepare("INSERT INTO commitment_thread_members VALUES(?,?,?,?,?,?)")
         .run(
           owner,
           row.thread_id,
@@ -3279,7 +3282,10 @@ export class TendStore {
     if (c.status !== "confirmed") throw new Error("invalid transition");
     // The promise is closed once, on every channel it was seen on.
     for (const m of members.filter(
-      (m) => m.status === "confirmed" || m.status === "pending",
+      // Pending sightings close too, but never one whose evidence changed (same rule as /confirm).
+      (m) =>
+        m.status === "confirmed" ||
+        (m.status === "pending" && m.evidence_valid !== false),
     ))
       this.put({ ...m, status: target });
     return { outbound_sent: false, ...c, status: target };

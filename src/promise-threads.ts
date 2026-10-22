@@ -16,15 +16,6 @@ export interface ThreadOverride {
   commitment_id: string;
   other_commitment_id: string;
 }
-// Verified groups from the last policy-aware pass, per owner, so candidates added later link the same way.
-const threadGroups = new Map<string, readonly VerifiedContactGroup[]>();
-export function rememberThreadGroups(
-  owner: string,
-  groups?: readonly VerifiedContactGroup[],
-): readonly VerifiedContactGroup[] {
-  if (groups) threadGroups.set(owner, groups);
-  return threadGroups.get(owner) ?? [];
-}
 export type ThreadedCommitment = Commitment & { thread_id?: string };
 export interface PromiseThread {
   thread_id: string | null;
@@ -59,6 +50,8 @@ export function actionTokens(text: string): string[] {
         .toLowerCase()
         .replace(/\d{4}-\d{2}-\d{2}/g, " ")
         .split(/[^\p{L}\p{N}']+/u)
+        // Stopwords are dropped before and after stemming, so "the" never survives as "th".
+        .filter((t) => !stopwords.has(t))
         .map((t) =>
           t
             .replace(/'s$/, "")
@@ -148,6 +141,7 @@ export function linkThreads(input: {
   const byId = new Map(input.commitments.map((c) => [c.commitment_id, c]));
   const threads = new Map<string, Commitment[]>();
   const placed = new Set<string>();
+  const inUse = new Set(input.rows.map((r) => r.thread_id));
   for (const row of input.rows) {
     const c = byId.get(row.commitment_id);
     placed.add(row.commitment_id);
@@ -206,7 +200,10 @@ export function linkThreads(input: {
           partner.other.commitment_id < c.commitment_id)
           ? partner.other
           : c;
-      const id = `T${earlier.commitment_id}`;
+      // Never reuse a thread id still in use: a new pair must not rejoin a thread the owner split.
+      let id = `T${earlier.commitment_id}`;
+      for (let n = 2; inUse.has(id); n++) id = `T${earlier.commitment_id}-${n}`;
+      inUse.add(id);
       const later = earlier === c ? partner.other : c;
       added.push(
         {

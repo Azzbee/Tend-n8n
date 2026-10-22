@@ -17,7 +17,6 @@ export interface BackfillCounts {
   linked: number;
   skipped: number;
   timed_out: number;
-  failed: number;
 }
 export async function backfillPromiseThreads(
   store: Pick<PostgresStore, "unlinkedOpenIds" | "linkBatch" | "commitments">,
@@ -37,7 +36,6 @@ export async function backfillPromiseThreads(
     linked: 0,
     skipped: 0,
     timed_out: 0,
-    failed: 0,
   };
   if (!options.apply) return counts;
   const size = Math.min(Math.max(options.batchSize ?? 200, 1), 200);
@@ -56,8 +54,9 @@ export async function backfillPromiseThreads(
     if (i > 0) await new Promise((r) => setTimeout(r, options.pauseMs ?? 250));
     if (!batch.length) continue;
     const result = await store.linkBatch(owner, groups, cosine, batch);
-    if (result.outcome !== "ok") {
-      counts[result.outcome] += batch.length;
+    // A timed-out batch adds nothing; the next run retries it. Any other error stops the run.
+    if (result.outcome === "timed_out") {
+      counts.timed_out += batch.length;
       continue;
     }
     for (const row of result.rows) linked.add(row.commitment_id);

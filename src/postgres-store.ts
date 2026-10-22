@@ -48,7 +48,6 @@ import {
   annotateThreads,
   linkThreads,
   onePerThread,
-  rememberThreadGroups,
   separateFromThread,
   threadMembers,
   withoutThread,
@@ -1706,6 +1705,13 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     );
   }
   // Promise threads (schema/007): same contract as TendStore, see src/promise-threads.ts.
+  private threadGroups: readonly VerifiedContactGroup[] = [];
+  async setThreadGroups(
+    groups: readonly VerifiedContactGroup[],
+  ): Promise<void> {
+    this.threadGroups = groups;
+    return Promise.resolve();
+  }
   async threadRows(owner: string): Promise<ThreadRow[]> {
     this.owner(owner);
     return this.run(async (s) =>
@@ -1737,26 +1743,29 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     groups?: readonly VerifiedContactGroup[],
     cosine?: ActionCosine,
     only?: readonly string[],
-  ): Promise<{ rows: ThreadRow[]; outcome: "ok" | "timed_out" | "failed" }> {
+  ): Promise<{ rows: ThreadRow[]; outcome: "ok" | "timed_out" }> {
     this.owner(owner);
-    const remembered = rememberThreadGroups(owner, groups);
+    const remembered = groups ?? this.threadGroups;
     return this.run(async (s) => {
       await s.q("SAVEPOINT promise_link");
       try {
         await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
-        const rows = await s.linkWithin(owner, remembered, cosine, only);
+        const rows = await s.linkWithin(
+          owner,
+          remembered,
+          cosine,
+          only,
+          Date.now() + OUTREACH_READ_BUDGET_MS,
+        );
         await s.q("SET LOCAL statement_timeout TO DEFAULT");
         await s.q("RELEASE SAVEPOINT promise_link");
         return { rows, outcome: "ok" as const };
       } catch (error) {
         await s.q("ROLLBACK TO SAVEPOINT promise_link");
         await s.q("RELEASE SAVEPOINT promise_link");
-        const code = (error as { code?: unknown } | null)?.code;
-        return {
-          rows: [],
-          outcome:
-            code === "57014" ? ("timed_out" as const) : ("failed" as const),
-        };
+        // Only the time budget is absorbed (the backfill retries it); any other error is a bug and surfaces.
+        if ((error as { code?: unknown } | null)?.code !== "57014") throw error;
+        return { rows: [], outcome: "timed_out" as const };
       }
     });
   }
@@ -1782,7 +1791,15 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     remembered: readonly VerifiedContactGroup[],
     cosine: ActionCosine | undefined,
     only: readonly string[] | undefined,
+    deadline: number,
   ): Promise<ThreadRow[]> {
+    // statement_timeout bounds each statement; this bounds the whole link to the same budget.
+    const due = (): void => {
+      if (Date.now() > deadline)
+        throw Object.assign(new Error("promise link budget"), {
+          code: "57014",
+        });
+    };
     // Open obligations plus current thread members: closed ones never link, so they are not read.
     const commitments = await this.q<Commitment & QueryResultRow>(
         "SELECT o.* FROM live_obligations o WHERE o.owner_id=$1 AND (o.status IN ('pending','confirmed') OR EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id)) ORDER BY o.commitment_id",
@@ -1794,29 +1811,40 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
             "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
             [owner, keys],
           )
-        : [],
-      added = linkThreads({
-        commitments,
-        occurredAt: new Map(
-          times.map((r) => [r.record_key, String(r.occurred_at)]),
-        ),
-        rows: await this.threadRows(owner),
-        overrides: await this.q<ThreadOverride & QueryResultRow>(
-          "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=$1 ORDER BY commitment_id,other_commitment_id",
-          [owner],
-        ),
-        groups: remembered,
-        ...(cosine ? { cosine } : {}),
-        ...(only ? { only } : {}),
-        now: this.clock(),
-      });
+        : [];
+    due();
+    const added = linkThreads({
+      commitments,
+      occurredAt: new Map(
+        times.map((r) => [r.record_key, String(r.occurred_at)]),
+      ),
+      rows: await this.threadRows(owner),
+      overrides: await this.q<ThreadOverride & QueryResultRow>(
+        "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=$1 ORDER BY commitment_id,other_commitment_id",
+        [owner],
+      ),
+      groups: remembered,
+      ...(cosine ? { cosine } : {}),
+      ...(only ? { only } : {}),
+      now: this.clock(),
+    });
+    const created = new Set(
+      (await this.threadRows(owner)).map((r) => r.thread_id),
+    );
+    due();
+    // Plain inserts: a conflict would mean a reused thread id or a double placement, which is a bug.
     for (const row of added) {
+      due();
+      if (!created.has(row.thread_id)) {
+        await this.q("INSERT INTO commitment_threads VALUES($1,$2,$3)", [
+          owner,
+          row.thread_id,
+          row.created_at,
+        ]);
+        created.add(row.thread_id);
+      }
       await this.q(
-        "INSERT INTO commitment_threads VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-        [owner, row.thread_id, row.created_at],
-      );
-      await this.q(
-        "INSERT INTO commitment_thread_members VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+        "INSERT INTO commitment_thread_members VALUES($1,$2,$3,$4,$5,$6)",
         [
           owner,
           row.thread_id,
@@ -1857,6 +1885,8 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
   }
   async addCandidate(raw: RawRecord, input: unknown): Promise<Commitment> {
     this.owner(raw.owner_id);
+    // Transaction stores are fresh instances, so the groups are carried in from this one.
+    const groups = this.threadGroups;
     return this.run(async (s) => {
       const normalized = normalizeLiveRecord(
           raw,
@@ -1892,7 +1922,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
         evidence_valid: true,
       };
       await s.put(c);
-      await s.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
+      await s.linkPromiseThreads(raw.owner_id, groups, undefined, [id]);
       return c;
     });
   }
@@ -2345,7 +2375,10 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
       if (c.status !== "confirmed") throw new Error("invalid transition");
       // The promise is closed once, on every channel it was seen on.
       for (const m of members.filter(
-        (m) => m.status === "confirmed" || m.status === "pending",
+        // Pending sightings close too, but never one whose evidence changed (same rule as /confirm).
+        (m) =>
+          m.status === "confirmed" ||
+          (m.status === "pending" && m.evidence_valid !== false),
       ))
         await s.put(withoutThread({ ...m, status: target }));
       return { outbound_sent: false, ...c, status: target };

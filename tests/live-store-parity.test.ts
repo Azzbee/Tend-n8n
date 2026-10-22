@@ -1886,7 +1886,6 @@ describe("canonical PostgreSQL live parity", () => {
     const { backfillPromiseThreads } =
       await import("../src/promise-thread-backfill.ts");
     const { Pool } = await import("pg");
-    const { rememberThreadGroups } = await import("../src/promise-threads.ts");
     const owner = "backfill-owner",
       principalB = { owner_id: owner, user_id: "b-user", chat_id: "b-chat" },
       pgB = await PostgresStore.open({
@@ -1995,7 +1994,7 @@ describe("canonical PostgreSQL live parity", () => {
         });
       expect(await rows()).toEqual([0, 0, 0]);
       // As createPrivateWebHandler does at startup: the group is known, so a GET that linked would write.
-      rememberThreadGroups(owner, [group]);
+      await pgB.setThreadGroups([group]);
       const desk = await handleDeskRoute({
         path: "/private/api/desk",
         method: "GET",
@@ -2020,7 +2019,6 @@ describe("canonical PostgreSQL live parity", () => {
         linked: 0,
         skipped: 0,
         timed_out: 0,
-        failed: 0,
       });
       expect(await rows()).toEqual([0, 0, 0]);
       expect(
@@ -2035,7 +2033,6 @@ describe("canonical PostgreSQL live parity", () => {
         linked: 2,
         skipped: 0,
         timed_out: 0,
-        failed: 0,
       });
       expect(await rows()).toEqual([1, 2, 0]);
       expect(
@@ -2049,12 +2046,40 @@ describe("canonical PostgreSQL live parity", () => {
         linked: 0,
         skipped: 0,
         timed_out: 0,
-        failed: 0,
       });
       expect(await rows()).toEqual([1, 2, 0]);
     } finally {
       await pool.end();
       await pgB.close();
+    }
+  });
+  it("absorbs only the promise-link time budget and surfaces any other link error (review P4)", async () => {
+    const owner = "budget-owner",
+      principalC = { owner_id: owner, user_id: "c-user", chat_id: "c-chat" },
+      pgC = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: principalC,
+        clock,
+      });
+    const proto = PostgresStore.prototype as unknown as {
+      linkWithin: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = proto.linkWithin;
+    try {
+      proto.linkWithin = () =>
+        Promise.reject(Object.assign(new Error("slow"), { code: "57014" }));
+      expect(await pgC.linkBatch(owner)).toEqual({
+        rows: [],
+        outcome: "timed_out",
+      });
+      proto.linkWithin = () => Promise.reject(new TypeError("bug"));
+      await expect(pgC.linkBatch(owner)).rejects.toThrow("bug");
+      proto.linkWithin = original;
+      // The transaction is usable after both: the savepoint was rolled back each time.
+      expect(await pgC.linkBatch(owner)).toEqual({ rows: [], outcome: "ok" });
+    } finally {
+      proto.linkWithin = original;
+      await pgC.close();
     }
   });
   it("returns retryable failure when async storage initialization fails, without SQLite fallback", async () => {

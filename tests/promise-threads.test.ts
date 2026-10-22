@@ -73,6 +73,14 @@ describe("promise thread similarity", () => {
     expect(tokenSimilarity("send the demo", "book a call")).toBe(0);
     expect(tokenSimilarity("send the invoices", "sending the invoice")).toBe(1);
   });
+  it("never counts a stemmed stopword as a content word (review P1)", () => {
+    expect(
+      tokenSimilarity("send the signed contract", "review the signed contract"),
+    ).toBeLessThan(0.7);
+    expect(
+      tokenSimilarity("please send the notes", "are the notes ready"),
+    ).toBeLessThan(0.7);
+  });
   it("uses cosine only at 0.9 or more with a shared content word (granite scores measured 22 Oct)", () => {
     const measured: Record<string, number> = {
       "send the contract|send the demo": 0.835,
@@ -243,6 +251,37 @@ describe("linking promise threads", () => {
     // Splitting a two-member thread dissolves it.
     expect(separateFromThread(first, "B").remove).toEqual(["B", "A"]);
   });
+  it("starts a new thread instead of rejoining one the owner split (review P2)", () => {
+    const at = times([
+      ["A", "2026-10-10T08:00:00Z"],
+      ["B", "2026-10-11T08:00:00Z"],
+      ["C", "2026-10-12T08:00:00Z"],
+      ["D", "2026-10-13T08:00:00Z"],
+    ]);
+    const a = commitment("A", { action: "send the signed contract" }),
+      b = commitment("B", { action: "send the contract", source: "linkedin" }),
+      c = commitment("C", {
+        action: "send the contract",
+        source: "whatsapp_personal",
+      }),
+      d = commitment("D", {
+        action: "send the signed contract copy now",
+        source: "whatsapp_business",
+      });
+    const first = link([a, b, c], { at });
+    expect(new Set(first.map((r) => r.thread_id))).toEqual(new Set(["TA"]));
+    const split = separateFromThread(first, "A");
+    const kept = first.filter((r) => !split.remove.includes(r.commitment_id));
+    const next = link([a, b, c, d], {
+      at,
+      rows: kept,
+      overrides: split.overrides,
+    });
+    expect(next.map((r) => [r.thread_id, r.commitment_id])).toEqual([
+      ["TA-2", "A"],
+      ["TA-2", "D"],
+    ]);
+  });
   it("stays valid while one source is valid and counts a closed thread member on its own", () => {
     const a = commitment("A", {
         evidence_valid: false,
@@ -402,6 +441,45 @@ describe("promise threads in the store", async () => {
       s.close();
     }
   });
+  it("keeps verified groups per store, so one store's policy never links another's candidates (review P6)", () => {
+    const group = {
+      id: "riley",
+      name: "Riley Park",
+      verified_at: "2026-10-01T00:00:00Z",
+      proof_kind: "owner_confirmed" as const,
+      proof_reference: "fixture://proof",
+      members: [
+        {
+          contact_id: "F18",
+          source: "gmail" as const,
+          account_id: "x",
+          identity: "riley@example.invalid",
+        },
+        {
+          contact_id: "F19",
+          source: "gmail" as const,
+          account_id: "x",
+          identity: "riley.park@example.invalid",
+        },
+      ],
+    };
+    const a = store(),
+      b = store();
+    try {
+      a.setThreadGroups([group]);
+      for (const s of [a, b]) {
+        add(s, sighting("r1", "riley@example.invalid", "F18"));
+        add(s, sighting("r2", "riley.park@example.invalid", "F19"));
+      }
+      expect(byRecord(a, "r1").thread_id).toBeDefined();
+      expect(byRecord(a, "r2").thread_id).toBe(byRecord(a, "r1").thread_id);
+      expect(byRecord(b, "r1").thread_id).toBeUndefined();
+      expect(byRecord(b, "r2").thread_id).toBeUndefined();
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
   it("keeps the same person's different ask separate", () => {
     const s = store();
     try {
@@ -449,6 +527,29 @@ describe("promise threads in the store", async () => {
       s.close();
     }
   });
+  it("closes a thread without closing a pending sighting whose evidence changed (review P5)", () => {
+    const s = store();
+    try {
+      const li1 = byRecord(s, "li1");
+      // Not reachable through edits (they mark it invalidated); written directly to prove the guard.
+      const db = (
+        s as unknown as {
+          db: { prepare: (sql: string) => { run: (...a: unknown[]) => void } };
+        }
+      ).db;
+      db.prepare("UPDATE commitments SET data=? WHERE commitment_id=?").run(
+        JSON.stringify({ ...li1, thread_id: undefined, evidence_valid: false }),
+        li1.commitment_id,
+      );
+      s.command({ ...auth, text: `/done ${byRecord(s, "g1").commitment_id}` });
+      expect([byRecord(s, "g1").status, byRecord(s, "li1").status]).toEqual([
+        "done",
+        "pending",
+      ]);
+    } finally {
+      s.close();
+    }
+  });
   it("splits on Not the same ask, remembers the override and never re-links", () => {
     const s = store();
     try {
@@ -478,6 +579,41 @@ describe("outreach on promise threads", async () => {
   const { planOutreach } = await import("../src/outreach.ts");
   const { snapshotOf, FIXTURE_OUTREACH_CLOCK } =
     await import("../src/outreach-service.ts");
+  it("keeps the follow-up on the member that already has one when an older sighting is confirmed later (review P3)", () => {
+    const store = createDeskFixtureStore();
+    try {
+      const owner = exampleLivePolicy.principal_id;
+      const key = (id: string): string =>
+        store.interactions(owner).find((r) => r.source_record_id === id)!
+          .record_key;
+      const byRecord = (id: string) =>
+        store.commitments(owner).find((c) => c.record_key === key(id))!;
+      const li1 = byRecord("li1").commitment_id;
+      store.command({
+        owner_id: owner,
+        user_id: "live-owner",
+        chat_id: "live-private",
+        chat_type: "private",
+        text: `/confirm ${li1} 2026-10-15`,
+      });
+      const prior = [
+        {
+          item_key: `overdue_owed_to_you:${li1}`,
+          created_at: "2026-10-16T07:00:00.000Z",
+        },
+      ];
+      const keys = planOutreach(
+        snapshotOf(store, owner),
+        new Date(FIXTURE_OUTREACH_CLOCK),
+        prior,
+      ).proposals.map((p) => p.item_key);
+      expect(keys).not.toContain(
+        `overdue_owed_to_you:${byRecord("g1").commitment_id}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
   it("proposes one follow-up per thread, keyed by its earliest confirmed sighting", () => {
     const store = createDeskFixtureStore();
     try {
