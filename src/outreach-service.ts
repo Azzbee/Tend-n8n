@@ -30,29 +30,40 @@ export function snapshotOf(store: TendStore, owner: string): OutreachSnapshot {
     interactions: store.interactions(owner),
   };
 }
-// Reads only the records the planner and the book can act on (see
-// outreachWindow): the full history load under the principal lock is what
-// timed out workflow 25's first hourly run.
+// Reads only what the call needs, never the owner's whole history (that load
+// under the owner lock is what timed out workflow 25): the planner reads the
+// outreach window (see outreachWindow); every other book call (list,
+// approve, edit, skip, /draft, /gmail-draft) only re-checks the evidence
+// behind open drafts.
 export async function liveSnapshotOf(
   store: LiveStore,
   owner: string,
   book: OutreachBook,
   now: Date,
+  scope: "plan" | "open",
 ): Promise<OutreachSnapshot> {
   const [contacts, commitments] = await Promise.all([
     store.contacts(owner),
     store.commitments(owner),
   ]);
+  const open = book.openEvidenceKeys();
   const keys = [
-    ...new Set([
-      ...commitments.map((c) => c.record_key),
-      ...book.openEvidenceKeys(),
-    ]),
+    ...new Set(
+      scope === "plan"
+        ? [...commitments.map((c) => c.record_key), ...open]
+        : open,
+    ),
   ];
   const interactions =
     store instanceof PostgresStore
-      ? await store.outreachInteractions(owner, now, keys)
-      : outreachWindow(await store.interactions(owner), now, keys);
+      ? scope === "plan"
+        ? await store.outreachInteractions(owner, now, keys)
+        : await store.recordsByKeys(owner, keys)
+      : scope === "plan"
+        ? outreachWindow(await store.interactions(owner), now, keys)
+        : (await store.interactions(owner)).filter((r) =>
+            keys.includes(r.record_key),
+          );
   return { contacts, commitments, interactions };
 }
 // Async backend the Desk's /private/api/outreach routes call
@@ -223,7 +234,8 @@ export function createPrivateOutreach(
     ...(clock ? { clock } : {}),
   });
   const now = clock ?? (() => new Date());
-  const load = () => liveSnapshotOf(store, owner, book, now());
+  const load = () => liveSnapshotOf(store, owner, book, now(), "open");
+  const planLoad = () => liveSnapshotOf(store, owner, book, now(), "plan");
   const draftModel = createDraftModelResolver(env.TEND_OUTREACH_MODEL, fetchFn);
   // The private bot routes /outreach /approve /edit /skip through the book;
   // every other command falls through to the store's own handler.
@@ -231,7 +243,7 @@ export function createPrivateOutreach(
     store.setCommandExtension(async (auth, scoped) =>
       book.telegram(
         auth.text,
-        await liveSnapshotOf(scoped, owner, book, now()),
+        await liveSnapshotOf(scoped, owner, book, now(), "open"),
       ),
     );
   return {
@@ -247,7 +259,7 @@ export function createPrivateOutreach(
         if (Object.keys(body).length) throw new Error("Plan takes no input");
         return {
           status: 200,
-          body: book.plan(await load(), await draftModel()),
+          body: book.plan(await planLoad(), await draftModel()),
         };
       }
       if (path === "/api/live/outreach/draft")

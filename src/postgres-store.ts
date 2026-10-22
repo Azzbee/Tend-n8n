@@ -52,6 +52,7 @@ import { eligiblePromiseSpans } from "./authored-promises.ts";
 import {
   MEETING_DEFAULT_MS,
   MEETING_FOLLOWUP_MS,
+  OUTREACH_READ_BUDGET_MS,
   REPLY_WINDOW_MS,
   STYLE_SOURCE_PER_CONTACT,
 } from "./outreach.ts";
@@ -353,31 +354,56 @@ export class PostgresStore implements LiveStore {
       ).map((x) => s.record(x)),
     );
   }
+  // Outreach reads hold the owner lock like every call here; this bounds how
+  // long one can hold it, so a slow read fails alone instead of making the
+  // per-minute workflows time out behind it.
+  private async boundedRecords(
+    sql: string,
+    values: unknown[],
+  ): Promise<NormalizedRecord[]> {
+    await this.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+    try {
+      return (await this.q(sql, values)).map((x) => this.record(x));
+    } finally {
+      await this.q("SET LOCAL statement_timeout TO DEFAULT").catch(() => {});
+    }
+  }
   // SQL twin of outreachWindow in outreach.ts; timestamps are validated
-  // exact ISO strings on ingest, so the casts cannot fail.
+  // exact ISO strings on ingest, so the casts cannot fail. The per-contact
+  // ranking reads keys only, never message bodies.
   async outreachInteractions(
     owner: string,
     now: Date,
     keys: string[],
   ): Promise<NormalizedRecord[]> {
     this.owner(owner);
-    return this.run(async (s) =>
-      (
-        await s.q(
-          `WITH ranked AS (SELECT r.*, CASE WHEN r.direction='sent' AND NOT r.cancelled AND r.source<>'calendar' THEN row_number() OVER (PARTITION BY r.contact_id, r.direction='sent' AND NOT r.cancelled AND r.source<>'calendar' ORDER BY r.occurred_at::timestamptz DESC, r.record_key) END AS outreach_sent_rank FROM live_records r WHERE r.owner_id=$1)
-SELECT * FROM ranked WHERE outreach_sent_rank<=$5 OR record_key=ANY($4::text[]) OR occurred_at::timestamptz>=$2::timestamptz OR (source='calendar' AND COALESCE(end_at::timestamptz, occurred_at::timestamptz + interval '${MEETING_DEFAULT_MS} milliseconds')>=$3::timestamptz) ORDER BY source,source_record_id`,
-          [
-            owner,
-            new Date(now.getTime() - REPLY_WINDOW_MS).toISOString(),
-            new Date(now.getTime() - MEETING_FOLLOWUP_MS).toISOString(),
-            keys,
-            STYLE_SOURCE_PER_CONTACT,
-          ],
-        )
-      ).map((x) => {
-        delete x.outreach_sent_rank;
-        return s.record(x);
-      }),
+    return this.run((s) =>
+      s.boundedRecords(
+        `WITH sent AS (SELECT record_key FROM (SELECT record_key, row_number() OVER (PARTITION BY contact_id ORDER BY occurred_at::timestamptz DESC, record_key) AS rn FROM live_records WHERE owner_id=$1 AND direction='sent' AND NOT cancelled AND source<>'calendar') ranked WHERE rn<=$5)
+SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_key FROM sent) OR record_key=ANY($4::text[]) OR occurred_at::timestamptz>=$2::timestamptz OR (source='calendar' AND COALESCE(end_at::timestamptz, occurred_at::timestamptz + interval '${MEETING_DEFAULT_MS} milliseconds')>=$3::timestamptz)) ORDER BY source,source_record_id`,
+        [
+          owner,
+          new Date(now.getTime() - REPLY_WINDOW_MS).toISOString(),
+          new Date(now.getTime() - MEETING_FOLLOWUP_MS).toISOString(),
+          keys,
+          STYLE_SOURCE_PER_CONTACT,
+        ],
+      ),
+    );
+  }
+  // The records behind open outreach drafts: all that approve, edit, skip,
+  // /draft, /gmail-draft and the Desk outreach list need.
+  async recordsByKeys(
+    owner: string,
+    keys: string[],
+  ): Promise<NormalizedRecord[]> {
+    this.owner(owner);
+    if (!keys.length) return [];
+    return this.run((s) =>
+      s.boundedRecords(
+        "SELECT * FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[]) ORDER BY source,source_record_id",
+        [owner, keys],
+      ),
     );
   }
   private record(row: QueryResultRow): NormalizedRecord {

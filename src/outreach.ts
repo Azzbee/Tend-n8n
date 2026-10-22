@@ -57,6 +57,9 @@ export const MEETING_DEFAULT_MS = 3600000;
 // Sent messages kept per contact for style examples; the planner uses three
 // after dropping instruction-like ones.
 export const STYLE_SOURCE_PER_CONTACT = 10;
+// Longest an outreach read may hold the private store's owner lock; the
+// workflows calling the same API give up after 5 s.
+export const OUTREACH_READ_BUDGET_MS = 2000;
 const OWE_SOON_DAYS = 2;
 // Live history holds hundreds of received emails; the queue stays readable.
 export const MAX_PROPOSALS_PER_RUN = 5;

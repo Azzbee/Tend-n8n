@@ -404,6 +404,32 @@ describe("canonical PostgreSQL live parity", () => {
       await owPg.close();
     }
   });
+  it("cancels an outreach read that would hold the owner lock past its budget, and resets the timeout", async () => {
+    type Bounded = {
+      run<T>(op: (s: Bounded) => Promise<T>): Promise<T>;
+      boundedRecords(sql: string, values: unknown[]): Promise<unknown[]>;
+      q(sql: string): Promise<{ statement_timeout: string }[]>;
+    };
+    const store = pg as unknown as Bounded;
+    const started = Date.now();
+    await expect(
+      store.run((s) =>
+        s.boundedRecords(
+          "SELECT * FROM live_records WHERE pg_sleep(4) IS NOT NULL",
+          [],
+        ),
+      ),
+    ).rejects.toThrow(/statement timeout/);
+    expect(Date.now() - started).toBeLessThan(3500);
+    // The lock is free again and the budget does not leak into the rest of
+    // a caller's transaction.
+    const after = await store.run(async (s) => {
+      await s.boundedRecords("SELECT * FROM live_records WHERE false", []);
+      return (await s.q("SHOW statement_timeout"))[0]!.statement_timeout;
+    });
+    expect(after).toBe("0");
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
   it("serializes concurrent duplicate commands across independent connections", async () => {
     const second = await PostgresStore.open({
       connectionString: runtime.connectionString,

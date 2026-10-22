@@ -37,9 +37,12 @@ const codeOf = (book: OutreachBook, id: string): string => {
     return "";
   }
 };
+import { PostgresStore } from "../src/postgres-store.ts";
+import type { LiveStore } from "../src/live-store.ts";
 import {
   FIXTURE_OUTREACH_CLOCK,
   OutreachService,
+  createPrivateOutreach,
   confirmFixturePromises,
   createFixtureOutreachService,
   snapshotOf,
@@ -139,6 +142,45 @@ describe("outreach snapshot window", () => {
     );
     expect(book.openEvidenceKeys().length).toBeGreaterThan(0);
     expect(book.openEvidenceKeys().every((k) => kept.has(k))).toBe(true);
+  });
+});
+
+describe("private outreach store reads", () => {
+  it("reads the outreach window only for /plan and only open-draft evidence otherwise", async () => {
+    const { load } = world();
+    const snap = load();
+    const calls: string[] = [];
+    const fake = Object.assign(Object.create(PostgresStore.prototype), {
+      setCommandExtension: () => {},
+      contacts: async () => snap.contacts,
+      commitments: async () => snap.commitments,
+      interactions: async () => {
+        calls.push("interactions");
+        return snap.interactions;
+      },
+      outreachInteractions: async () => {
+        calls.push("window");
+        return snap.interactions;
+      },
+      recordsByKeys: async (_owner: string, keys: string[]) => {
+        calls.push(`keys:${keys.length}`);
+        return snap.interactions.filter((r) => keys.includes(r.record_key));
+      },
+    }) as LiveStore;
+    const { service, route } = createPrivateOutreach(
+      fake,
+      "demo-owner",
+      { TEND_OUTREACH_DB: ":memory:" },
+      at(FIXTURE_OUTREACH_CLOCK),
+      (async () => Response.json({ models: [] })) as unknown as typeof fetch,
+    );
+    await route("POST", "/api/live/outreach/plan", {});
+    expect(calls).toEqual(["window"]);
+    const listed = (await service.list()).items;
+    expect(listed.length).toBeGreaterThan(0);
+    await route("GET", "/api/live/outreach/approved-email", null);
+    expect(calls.slice(1).every((c) => /^keys:[1-9]/.test(c))).toBe(true);
+    expect(calls).not.toContain("interactions");
   });
 });
 
