@@ -265,3 +265,44 @@ Requested by tend-desk. Reviewed the five commits against the five focus points.
 - **Focus 5:** the new error strings are fixed phrases.
   - The Desk now shows each sighting's `evidence_reference`, which contains the account email and message ID. The page is owner-only, behind the session, CSRF and `default-src 'none'`, so this is acceptable. Keep it out of any export or log.
 - The Desk GET now writes thread rows. It is not exploitable cross-site (linking is automatic anyway), but it is a write on GET.
+
+## Re-review 8: tend-lead's commits on improve/lead, 3b05416..292e532 (22 Oct, 18:00 Paris)
+
+Scope is tend-lead's own commits only. The merged branches are skipped, and promise threads are covered in the section above. Reviewed from git objects: the merge into this worktree fails because the sandbox denies writes to `.env.*`, and improve/lead now adds `.env.example`. No tests were run for this pass.
+
+| ID | Severity | Commit | Location | Finding |
+|---|---|---|---|---|
+| R1 | Medium | a799757 | `src/outreach-workflows.ts` (`retrySafe`) | A retry repeats the whole node, and a repeat of an item that already succeeded is refused. |
+| R2 | Low | 292e532 | `src/live-api.ts:1180`, `src/live-api.ts:1311` | The shared retention run means a record past its window can be served for up to 60 s. |
+| R3 | Low | 292e532 | `src/server.ts` (`timingLog`) | A throwing log write can fail a committed call or crash the process. |
+| R4 | Low | 8f3ba89 | `src/postgres-store.ts` (`boundedRecords`) | A timeout does not fail alone inside the command extension. |
+| R5 | Info | 1221c8a | `src/postgres-store.ts` (`outreachInteractions`) | SQL and JS break ties differently for the 10th sent record. |
+
+- **R1 (Medium, a799757): retries cannot recover a partial failure.** The comment says a repeat "cannot act twice", but n8n's Retry On Fail re-runs the whole node over all its input items. `/draft` answers a repeat with "draft is no longer replaceable", and `recordGmailDraft` throws on a repeat.
+  - **Failing scenario:**
+    1. Workflow 26 hands off three approved emails, and drafts.create makes three Gmail drafts.
+    2. The `/gmail-draft` node records items 1 and 2, then item 3 hits a transient 5xx.
+    3. The retry re-posts items 1 and 2. Both are refused, so all three tries fail and item 3's receipt is never recorded.
+    4. After 15 minutes the Desk shows item 3 as "Gmail did not confirm". The owner edits and re-approves, and Gmail now holds two drafts.
+  - `/draft` in workflow 25 behaves the same way: one transient failure among five proposals leaves the remaining drafts as templates.
+  - **Fix:** make an exact repeat idempotent. The same id, approval hash and draft_id returns the current view, and `/draft` with the same text on the same item does the same. Test it with a two-item repeat.
+- **R2 (Low, 292e532): retention can lag by up to 60 s.** Two calls now get the cached run instead of a fresh one:
+  - After a sync batch (`src/live-api.ts:1180`). Ingest validates records against a window anchored to the client's `window_end` (Gmail) or `window_start`. Before this change, the post-ingest retention removed anything that window let in but the server clock does not. Now a record from a late or retried n8n execution stays readable, and citable by the Live AI path, until the next run.
+  - Right before a Live AI answer (`src/live-api.ts:1311`).
+  - **Answer to your question:** yes. At these two points, retention is the only guard, and the gap is up to 60 s.
+  - **Fix:** force a fresh run after a batch that stored records, or reject records outside the server-clock window at ingest. The Desk server has no retention of its own, so its exposure equals the 60 s.
+  - The cache key also uses `clock()`, so a fixed test clock runs retention once per server lifetime. Tests that expect a second expiry need an advancing clock.
+- **R3 (Low, 292e532): a log write can fail a request or crash the API.** `timingLog` calls `appendFileSync` with no guard, and `server.ts` has no `uncaughtException` handler.
+  - In `run()`'s `finally`, a throw replaces the result of an already committed transaction with an error, and n8n then retries.
+  - In the `res.once("close")` listener, a throw is uncaught and exits the private API.
+  - **Fix:** wrap `timingLog` in try/catch.
+- **R4 (Low, 8f3ba89): `boundedRecords` does not fail alone everywhere.** Inside the scoped command-extension transaction (Telegram `/outreach`, `/approve`, `/edit`, `/skip`), a 2 s timeout aborts the whole command transaction, not just the read. The "fails alone" comment is only true for the top-level `run()`.
+  - `SET LOCAL statement_timeout TO DEFAULT` would also clobber an outer `SET LOCAL` (promise threads add one, though not around this call today).
+  - **Fix:** use a savepoint, as promise threads do, or correct the comment.
+- **R5 (Info, 1221c8a): tie-break difference.** The SQL breaks ties on equal `occurred_at` by `record_key`, while `outreachWindow` keeps input order. The two can pick a different 10th sent record (style examples only). The parity test has no tie.
+
+**Checked with no finding:**
+- **The "open" snapshot (8f3ba89) is enough.** Outside `plan()`, the book reads interactions only in `refresh()`, and only by `evidence_keys` of pending and approved items, which is exactly `openEvidenceKeys()`. approve, edit, skip, `approvedEmail` and `recordGmailDraft` otherwise use contacts and commitments, which are still read in full.
+- **F13 (b2b71d3) is stricter, not weaker.** The old test's quote-as-data assertion moved to a benign record, and the "untrusted data" framing is still asserted. The withheld case is pinned in `tests/live-ai.test.ts` and against the Desk fixture's `g-injection` in `tests/desk-model.test.ts`.
+- **`execution_url` (70d64bf).** The regex is anchored and allows no userinfo, query or fragment. JS `$` without the `m` flag does not match before a trailing newline. The Desk re-validates and opens the link with `rel=noreferrer`. The host is not pinned to the n8n origin (info only). The four-key shape is still accepted, and the five-key shape is checked.
+- **`freshId` (a21e50b)** is correct. **The motion toggle (c1b19bc)** has no risk found.
