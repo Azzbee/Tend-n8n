@@ -2,7 +2,7 @@ DONE
 
 # Commitment Desk UI (section 5), branch improve/desk-ui
 
-Summary: the private workspace now has four views (Desk, Review one by one, People, How it runs) plus an Outreach queue on the Desk. Confirm, Not a promise and Mark done call the same store commands as Telegram (`/confirm <id> <date>`, `/dismiss <id>`, `/done <id>`). 31 new tests pass; the full unit suite passes except the two PostgreSQL files that cannot start `initdb` in the agent sandbox. Checked in Chrome with fictional data only, at 390 px and 1440 px.
+Summary: the private workspace now has four views (Desk, Review one by one, People, How it runs) plus an Outreach queue on the Desk. Confirm, Not a promise and Mark done call the same store commands as Telegram (`/confirm <id> <date>`, `/dismiss <id>`, `/done <id>`). 29 new tests pass (49 with the existing client tests); the full unit suite passes except the two PostgreSQL files that cannot start `initdb` in the agent sandbox. Checked in Chrome with fictional data only, at 390 px and 1440 px.
 
 ## Commits (on top of 6740a78)
 
@@ -39,6 +39,9 @@ No other wiring is needed: the Desk reads `store.commitments/interactions/contac
 - Error responses only echo fixed rule phrases from the engine and the outreach service; anything else is a generic retry message.
 - Lock and session expiry empty every Desk container; the API returns 401 afterwards (checked in Chrome).
 - The client loads Desk then Outreach sequentially and aborts superseded loads, so it stays under the handler's limit of 2 concurrent requests (checked in Chrome by switching views quickly).
+- Differs from the canvas: the design says confirming li1 links it to g1 as one promise. The engine has no linking, so confirming li1 creates a second confirmed entry with the same words ("Owed to you · 2"). The Desk shows that honestly; linking would be an engine change.
+- "Open <name>" and "Prepare for <name>" switch to People and select that contact (checked in Chrome: Mira Tan selected, history loaded, Prepare briefing enabled).
+- If a commitment's source record is hidden (revoked source), its card shows the 64-character record key instead of a short ID like g1.
 - A candidate extracted from instruction-like text never appears as a promise on the Desk, even if the extractor produced one.
 - Approved outreach drafts offer Edit (back to pending) and Withdraw approval (two clicks; final, and the planner waits 3 days). Expired drafts offer nothing.
 
@@ -49,6 +52,14 @@ No other wiring is needed: the Desk reads `store.commitments/interactions/contac
 - Chrome, fictional preview (`DESK_DEV_PORT=18796 node --experimental-strip-types src/desk-dev-server.ts`), never 18768: confirmed li1 (moved to Owed to you), dismissed it on the phone review, approved the email draft (mock "Gmail draft created") and the WhatsApp draft (Copy text), opened How it runs and the failure log, tabbed through the Desk (visible green focus), locked. Automated scan: no text below 4.5:1 contrast in the Desk view, no element wider than the viewport.
 - 1440 px: real 1440 px window. 390 px: Chrome would not shrink below 606 px and headless Chrome is blocked by the sandbox, so the body was constrained to 390 px inside the 606 px window. No CSS breakpoint lies between 390 and 606, so the same rules apply as on a phone.
 - Screenshots (fictional data only): `.scratch/screens/desk/` (`390-*`, `1440-desk`, `1710-*` from the first maximized window).
+
+## End to end on the merged stack (10:45)
+
+`088db62` merges improve/lead (which already contains improve/outreach) into this branch. `src/desk-dev-server.ts` now serves the Desk through the production `createLiveServer` with `createPrivateOutreach` on an in-memory ledger (`OUTREACH_ENABLED=false`) and the fictional Mira Tan store. `.scratch/desk-e2e.mjs 18797` drives it with its own cookie jar: 15 of 15 checks pass. Covered: desk groups and held back; error handler connected; outreach drafts from the real planner; a placeholder draft refused with its reason; edit, then approve, then withdraw (final); a dash refused; unknown draft refused; confirm, done and a refused dismiss; both lanes on How it runs (26 workflows); 401 after logout. Approvals expire when their evidence changes, as the outreach service intends, and the Desk shows them as Expired.
+
+`30e486a` adds workflows 22 to 26 to How it runs, with a test that fails if the catalog and `workflows/` drift apart.
+
+Chrome note for parallel testers: session cookies are scoped by host, not port, so two previews on 127.0.0.1 in one Chrome profile log each other out. Take turns.
 
 ## Open items
 

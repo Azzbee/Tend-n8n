@@ -299,7 +299,7 @@ export function buildDeskSnapshot(input: {
       },
       {
         id: "errors",
-        label: "21 · ERROR HANDLER",
+        label: "21 / 22 · ERROR HANDLERS",
         detail:
           failures === null
             ? "Failure log not connected"
@@ -311,7 +311,7 @@ export function buildDeskSnapshot(input: {
   };
 }
 
-const catalog: [string, string, DeskWorkflowRun["lane"]][] = [
+export const workflowCatalog: [string, string, DeskWorkflowRun["lane"]][] = [
   ["01", "Gmail adapter (fictional)", "classroom"],
   ["02", "Calendar adapter (fictional)", "classroom"],
   ["03", "WhatsApp personal adapter (fictional)", "classroom"],
@@ -322,6 +322,8 @@ const catalog: [string, string, DeskWorkflowRun["lane"]][] = [
   ["08", "Assistant router and briefing", "classroom"],
   ["09", "Bounded retry fixture (synthetic 429)", "classroom"],
   ["21", "Error handler, names only", "classroom"],
+  ["23", "Outreach planner (fictional)", "classroom"],
+  ["24", "Approved outreach to mock Gmail drafts", "classroom"],
   ["10", "Private Telegram control", "private"],
   ["11", "Read-only Gmail sync", "private"],
   ["12", "Read-only Calendar sync", "private"],
@@ -333,6 +335,9 @@ const catalog: [string, string, DeskWorkflowRun["lane"]][] = [
   ["18", "LinkedIn read page", "private"],
   ["19", "WhatsApp business read page", "private"],
   ["20", "Daily owner briefing, 09:00 Paris", "private"],
+  ["22", "Error handler, guard messages only", "private"],
+  ["25", "Outreach planner, inactive template", "private"],
+  ["26", "Approved outreach to Gmail drafts, inactive template", "private"],
 ];
 export function buildDeskRuns(
   runs: DeskWorkflowRun[] | null,
@@ -350,15 +355,17 @@ export function buildDeskRuns(
       },
     ]),
   );
-  const workflows: DeskWorkflowRun[] = catalog.map(([id, name, lane]) => ({
-    id,
-    name,
-    lane,
-    last_status: reported.get(id)?.last_status ?? "unknown",
-    last_run_at: reported.get(id)?.last_run_at ?? null,
-  }));
+  const workflows: DeskWorkflowRun[] = workflowCatalog.map(
+    ([id, name, lane]) => ({
+      id,
+      name,
+      lane,
+      last_status: reported.get(id)?.last_status ?? "unknown",
+      last_run_at: reported.get(id)?.last_run_at ?? null,
+    }),
+  );
   for (const run of reported.values())
-    if (!catalog.some(([id]) => id === run.id))
+    if (!workflowCatalog.some(([id]) => id === run.id))
       workflows.push({
         id: String(run.id).slice(0, 8),
         name: String(run.name).slice(0, 120),

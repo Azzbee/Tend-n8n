@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync } from "node:fs";
 import { isInstructionLike } from "../src/outreach.ts";
 import {
   buildDeskRuns,
+  workflowCatalog,
   buildDeskSnapshot,
   confirmDefaultDate,
   instructionLike,
@@ -245,7 +247,7 @@ describe("desk model", () => {
           last_run_at: "2026-10-22T08:00:00Z",
         },
         {
-          id: "22",
+          id: "27",
           name: "Outreach planner",
           lane: "private",
           last_status: "success",
@@ -262,9 +264,9 @@ describe("desk model", () => {
       ],
     );
     expect(runs.workflows.filter((w) => w.lane === "classroom")).toHaveLength(
-      10,
+      12,
     );
-    expect(runs.workflows.filter((w) => w.lane === "private")).toHaveLength(12);
+    expect(runs.workflows.filter((w) => w.lane === "private")).toHaveLength(15);
     expect(runs.workflows.find((w) => w.id === "07")?.last_status).toBe(
       "error",
     );
@@ -301,6 +303,16 @@ describe("desk model", () => {
       lane: "private",
     });
     expect(odd.workflows.find((w) => w.id === "99")!.name).toHaveLength(120);
+  });
+});
+
+describe("workflow catalog", () => {
+  it("lists exactly the exported workflows", () => {
+    const exported = readdirSync("workflows")
+      .filter((f) => /^\d\d-.*\.json$/.test(f))
+      .map((f) => f.slice(0, 2))
+      .sort();
+    expect(workflowCatalog.map(([id]) => id).sort()).toEqual(exported);
   });
 });
 
