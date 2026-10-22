@@ -1881,6 +1881,182 @@ describe("canonical PostgreSQL live parity", () => {
       sqliteThreads.close();
     }
   });
+  it("never writes thread rows on a Desk GET, and the operator backfill links once and is idempotent", async () => {
+    const { handleDeskRoute } = await import("../src/desk-api.ts");
+    const { backfillPromiseThreads } =
+      await import("../src/promise-thread-backfill.ts");
+    const { Pool } = await import("pg");
+    const { rememberThreadGroups } = await import("../src/promise-threads.ts");
+    const owner = "backfill-owner",
+      principalB = { owner_id: owner, user_id: "b-user", chat_id: "b-chat" },
+      pgB = await PostgresStore.open({
+        connectionString: runtime.connectionString,
+        principal: principalB,
+        clock,
+      }),
+      pool = new Pool({ connectionString: runtime.connectionString });
+    // Fictional: two identities of one person, joined only by a verified group, say the same thing.
+    const sighting = (
+      id: string,
+      actor: string,
+      contact: string,
+    ): LiveRecord => ({
+      ...record,
+      owner_id: owner,
+      source_record_id: id,
+      source_thread_id: `t-${id}`,
+      direction: "received",
+      actor_identity: actor,
+      participant_identities: [],
+      contact_ids: [contact],
+      evidence_reference: `https://mail.google.com/mail/u/0/#all/${id}`,
+    });
+    const records = [
+      sighting("g1", "pat@example.com", "pat-mail"),
+      sighting("g2", "pat.work@example.com", "pat-work"),
+    ];
+    const group = {
+      id: "pat",
+      name: "Pat",
+      verified_at: "2026-10-01T00:00:00Z",
+      proof_kind: "owner_confirmed" as const,
+      proof_reference: "fixture://proof",
+      members: [
+        {
+          contact_id: "pat-mail",
+          source: "gmail" as const,
+          account_id: state.account_id,
+          identity: "pat@example.com",
+        },
+        {
+          contact_id: "pat-work",
+          source: "gmail" as const,
+          account_id: state.account_id,
+          identity: "pat.work@example.com",
+        },
+      ],
+    };
+    const rows = async (): Promise<number[]> =>
+      Promise.all(
+        [
+          "commitment_threads",
+          "commitment_thread_members",
+          "commitment_thread_overrides",
+        ].map(async (table) =>
+          Number(
+            (
+              await pool.query<{ n: string }>(
+                `SELECT count(*) n FROM ${table} WHERE owner_id=$1`,
+                [owner],
+              )
+            ).rows[0]!.n,
+          ),
+        ),
+      );
+    try {
+      await pgB.seed(
+        [],
+        [
+          {
+            owner_id: owner,
+            identity: "owner@example.com",
+            contact_id: "OWNER",
+          },
+        ],
+        [{ ...state, owner_id: owner }],
+      );
+      await pgB.commitLiveBatch({
+        ...batch(records),
+        owner_id: owner,
+        seen_record_ids: records.map((r) => r.source_record_id),
+        contacts: [
+          { owner_id: owner, contact_id: "pat-mail", name: "Pat" },
+          { owner_id: owner, contact_id: "pat-work", name: "Pat" },
+        ],
+        identities: [
+          {
+            owner_id: owner,
+            identity: "pat@example.com",
+            contact_id: "pat-mail",
+          },
+          {
+            owner_id: owner,
+            identity: "pat.work@example.com",
+            contact_id: "pat-work",
+          },
+        ],
+        operation_hash: "d".repeat(64),
+      });
+      for (const r of records)
+        await pgB.addCandidate(r, {
+          quote: r.body_text,
+          action: "send the report",
+          suggested_due: "2026-10-15",
+        });
+      expect(await rows()).toEqual([0, 0, 0]);
+      // As createPrivateWebHandler does at startup: the group is known, so a GET that linked would write.
+      rememberThreadGroups(owner, [group]);
+      const desk = await handleDeskRoute({
+        path: "/private/api/desk",
+        method: "GET",
+        data: null,
+        store: pgB,
+        auth: {
+          owner_id: owner,
+          user_id: "b-user",
+          chat_id: "b-chat",
+          chat_type: "private",
+        },
+        now: clock(),
+        options: {},
+      });
+      expect(desk.status).toBe(200);
+      expect(await rows()).toEqual([0, 0, 0]);
+      expect(
+        await backfillPromiseThreads(pgB, owner, [group], { apply: false }),
+      ).toEqual({
+        mode: "status",
+        unlinked_open: 2,
+        linked: 0,
+        skipped: 0,
+        timed_out: 0,
+        failed: 0,
+      });
+      expect(await rows()).toEqual([0, 0, 0]);
+      expect(
+        await backfillPromiseThreads(pgB, owner, [group], {
+          apply: true,
+          batchSize: 1,
+          pauseMs: 0,
+        }),
+      ).toEqual({
+        mode: "apply",
+        unlinked_open: 2,
+        linked: 2,
+        skipped: 0,
+        timed_out: 0,
+        failed: 0,
+      });
+      expect(await rows()).toEqual([1, 2, 0]);
+      expect(
+        await backfillPromiseThreads(pgB, owner, [group], {
+          apply: true,
+          pauseMs: 0,
+        }),
+      ).toEqual({
+        mode: "apply",
+        unlinked_open: 0,
+        linked: 0,
+        skipped: 0,
+        timed_out: 0,
+        failed: 0,
+      });
+      expect(await rows()).toEqual([1, 2, 0]);
+    } finally {
+      await pool.end();
+      await pgB.close();
+    }
+  });
   it("returns retryable failure when async storage initialization fails, without SQLite fallback", async () => {
     const policy = { ...exampleLivePolicy, principal_id: "failed-http-owner" },
       key = "FICTIONAL_ONLY_0123456789_abcdefghijklmnopqrstuvwxyz_ABCD";

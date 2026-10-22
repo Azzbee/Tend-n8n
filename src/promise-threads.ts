@@ -1,5 +1,6 @@
 import type { Commitment } from "./engine.ts";
 import type { VerifiedContactGroup } from "./live-policy.ts";
+import type { EmbeddingClient } from "./semantic-search.ts";
 
 // Promise threads: the same ask from the same person, seen on several channels, counted once.
 // Membership is stored (auto or owner); this module decides links and collapses threads for every surface.
@@ -354,4 +355,40 @@ export function onePerThread(
   return collapseThreads(commitments, occurredAt).map((t) =>
     t.thread_id ? { ...t.primary, thread_id: t.thread_id } : t.primary,
   );
+}
+
+const EMBED_BUDGET_MS = 3000;
+const EMBED_LIMIT = 40;
+const vectors = new Map<string, number[]>();
+/** Embeds action texts before any store lock; undefined when the model is unavailable or slow, so tokens decide. */
+export async function actionCosine(
+  client: EmbeddingClient | undefined,
+  actions: readonly string[],
+): Promise<ActionCosine | undefined> {
+  if (!client) return undefined;
+  const texts = [...new Set(actions)].slice(0, EMBED_LIMIT);
+  const signal = AbortSignal.timeout(EMBED_BUDGET_MS);
+  try {
+    for (const text of texts)
+      if (!vectors.has(text)) {
+        if (vectors.size >= 500) vectors.clear();
+        vectors.set(text, await client.embed(text, signal));
+      }
+  } catch {
+    return undefined;
+  }
+  return (a, b) => {
+    const x = vectors.get(a),
+      y = vectors.get(b);
+    if (!x || !y || x.length !== y.length) return null;
+    let dot = 0,
+      nx = 0,
+      ny = 0;
+    for (let i = 0; i < x.length; i++) {
+      dot += x[i]! * y[i]!;
+      nx += x[i]! * x[i]!;
+      ny += y[i]! * y[i]!;
+    }
+    return nx && ny ? dot / Math.sqrt(nx * ny) : null;
+  };
 }

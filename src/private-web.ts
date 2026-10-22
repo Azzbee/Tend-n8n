@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
+import { rememberThreadGroups } from "./promise-threads.ts";
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -85,6 +86,11 @@ export function createPrivateWebHandler(
   const { store, policy } = options,
     clock = options.clock ?? (() => new Date()),
     sessions = new PrivateWebSessions(clock);
+  // In memory only: candidates added in this process link through the policy's verified groups.
+  rememberThreadGroups(
+    policy.principal_id,
+    policy.verified_contact_groups ?? [],
+  );
   const cursors = new Map<
     string,
     {
@@ -316,7 +322,6 @@ export function createPrivateWebHandler(
               },
               now: clock(),
               options,
-              groups: policy.verified_contact_groups ?? [],
             });
             send(result.status, result.body);
           } catch (error) {

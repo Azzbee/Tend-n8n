@@ -507,3 +507,26 @@ describe("outreach on promise threads", async () => {
     }
   });
 });
+
+describe("embedding similarity for promise threads", async () => {
+  const { actionCosine } = await import("../src/promise-threads.ts");
+  it("gives a cosine only when the local model answers, and lets tokens decide otherwise", async () => {
+    expect(await actionCosine(undefined, ["send the demo"])).toBeUndefined();
+    expect(
+      await actionCosine(
+        { embed: () => Promise.reject(new Error("offline")) },
+        ["offline only text"],
+      ),
+    ).toBeUndefined();
+    const cosine = await actionCosine(
+      {
+        embed: (text: string) =>
+          Promise.resolve(text.includes("demo") ? [1, 0] : [0, 1]),
+      },
+      ["send the demo", "review your demo", "share the pilot checklist"],
+    );
+    expect(cosine!("send the demo", "review your demo")).toBe(1);
+    expect(cosine!("send the demo", "share the pilot checklist")).toBe(0);
+    expect(cosine!("send the demo", "never embedded")).toBeNull();
+  });
+});

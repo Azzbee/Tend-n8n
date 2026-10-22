@@ -149,7 +149,7 @@ describe("desk routes", () => {
       store.close();
     }
   });
-  it("serve one card per promise thread, link with the policy's verified groups and split on Not the same ask", async () => {
+  it("serve one card per promise thread without writing on GET, and split on Not the same ask", async () => {
     const { get, post, store } = await unlocked();
     try {
       const link = vi.spyOn(store, "linkPromiseThreads");
@@ -163,11 +163,8 @@ describe("desk routes", () => {
         string,
         Item[]
       >;
-      expect(link).toHaveBeenCalledWith(
-        owner,
-        exampleLivePolicy.verified_contact_groups ?? [],
-        undefined,
-      );
+      // A page load never links or writes; that is addCandidate's and the operator backfill's job.
+      expect(link).not.toHaveBeenCalled();
       expect(desk.owed_to_you!).toHaveLength(1);
       expect(desk.owed_to_you![0]!.sources.map((s) => s.record_id)).toEqual([
         "g1",
@@ -192,33 +189,6 @@ describe("desk routes", () => {
       const again = await post("/private/api/desk/separate", { id: li1 });
       expect(again.status).toBe(409);
       expect(again.json().error).toBe("Not changed: invalid transition.");
-    } finally {
-      store.close();
-    }
-  });
-  it("pass embedding similarity to thread linking only when the local model answers", async () => {
-    const down = await unlocked({
-      actionEmbeddings: { embed: () => Promise.reject(new Error("offline")) },
-    });
-    try {
-      const link = vi.spyOn(down.store, "linkPromiseThreads");
-      expect((await down.get("/private/api/desk")).status).toBe(200);
-      expect(link.mock.calls[0]![2]).toBeUndefined();
-    } finally {
-      down.store.close();
-    }
-    const vector = (text: string): number[] =>
-      text.includes("demo") ? [1, 0] : [0, 1];
-    const { get, store } = await unlocked({
-      actionEmbeddings: { embed: (text) => Promise.resolve(vector(text)) },
-    });
-    try {
-      const link = vi.spyOn(store, "linkPromiseThreads");
-      await get("/private/api/desk");
-      const cosine = link.mock.calls[0]![2]!;
-      expect(cosine("send the demo", "review your demo")).toBe(1);
-      expect(cosine("send the demo", "share the pilot checklist")).toBe(0);
-      expect(cosine("send the demo", "never embedded")).toBeNull();
     } finally {
       store.close();
     }

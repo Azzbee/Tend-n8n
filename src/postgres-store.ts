@@ -1726,22 +1726,54 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     cosine?: ActionCosine,
     only?: readonly string[],
   ): Promise<ThreadRow[]> {
+    return (await this.linkBatch(owner, groups, cosine, only)).rows;
+  }
+  /**
+   * One bounded link pass under the owner lock: SQL scoped to open obligations, a 2 s budget, and a
+   * savepoint so a slow or failing link adds no thread without undoing the caller's work.
+   */
+  async linkBatch(
+    owner: string,
+    groups?: readonly VerifiedContactGroup[],
+    cosine?: ActionCosine,
+    only?: readonly string[],
+  ): Promise<{ rows: ThreadRow[]; outcome: "ok" | "timed_out" | "failed" }> {
     this.owner(owner);
     const remembered = rememberThreadGroups(owner, groups);
-    // Under the owner lock: SQL scoped to obligations, a 2 s budget, and a savepoint so a slow
-    // link fails on its own (no thread) without undoing the caller's work.
     return this.run(async (s) => {
       await s.q("SAVEPOINT promise_link");
       try {
         await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
-        const added = await s.linkWithin(owner, remembered, cosine, only);
+        const rows = await s.linkWithin(owner, remembered, cosine, only);
         await s.q("SET LOCAL statement_timeout TO DEFAULT");
         await s.q("RELEASE SAVEPOINT promise_link");
-        return added;
-      } catch {
+        return { rows, outcome: "ok" as const };
+      } catch (error) {
         await s.q("ROLLBACK TO SAVEPOINT promise_link");
         await s.q("RELEASE SAVEPOINT promise_link");
-        return [];
+        const code = (error as { code?: unknown } | null)?.code;
+        return {
+          rows: [],
+          outcome:
+            code === "57014" ? ("timed_out" as const) : ("failed" as const),
+        };
+      }
+    });
+  }
+  /** Read only: open, valid obligations in no thread yet, for the operator backfill. */
+  async unlinkedOpenIds(owner: string): Promise<string[]> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+      try {
+        return (
+          await s.q<{ commitment_id: string }>(
+            "SELECT o.commitment_id FROM live_obligations o WHERE o.owner_id=$1 AND o.status IN ('pending','confirmed') AND o.evidence_valid AND NOT EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id) ORDER BY o.commitment_id",
+            [owner],
+          )
+        ).map((r) => r.commitment_id);
+      } finally {
+        await s.q("SET LOCAL statement_timeout TO DEFAULT").catch(() => {});
       }
     });
   }
@@ -1751,7 +1783,11 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     cosine: ActionCosine | undefined,
     only: readonly string[] | undefined,
   ): Promise<ThreadRow[]> {
-    const commitments = await this.obligations(owner),
+    // Open obligations plus current thread members: closed ones never link, so they are not read.
+    const commitments = await this.q<Commitment & QueryResultRow>(
+        "SELECT o.* FROM live_obligations o WHERE o.owner_id=$1 AND (o.status IN ('pending','confirmed') OR EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id)) ORDER BY o.commitment_id",
+        [owner],
+      ),
       keys = commitments.map((c) => c.record_key),
       times = keys.length
         ? await this.q<{ record_key: string; occurred_at: string }>(
