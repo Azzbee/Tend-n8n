@@ -29,7 +29,14 @@ import type {
   PrivateSemanticSearch,
   PrivateContactsResponse,
 } from "./private-web-types.ts";
-interface Options {
+import {
+  DeskRequestError,
+  deskRoutes,
+  handleDeskRoute,
+  outreachRoutes,
+  type DeskOptions,
+} from "./desk-api.ts";
+interface Options extends DeskOptions {
   store: TendStore | LiveStore;
   policy: LivePolicy;
   clock?: () => Date;
@@ -49,13 +56,13 @@ const cookie = (req: IncomingMessage, name: string): string => {
 };
 const stamp = (v: unknown): string =>
   createHash("sha256").update(JSON.stringify(v)).digest("hex");
-async function body(req: IncomingMessage): Promise<string> {
+async function body(req: IncomingMessage, limit = 4096): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     const b = Buffer.from(chunk as Uint8Array);
     size += b.length;
-    if (size > 4096) throw new Error("Request too large");
+    if (size > limit) throw new Error("Request too large");
     chunks.push(b);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -260,6 +267,8 @@ export function createPrivateWebHandler(
         "/private/api/draft",
         "/private/api/revalidate",
         "/private/api/history-retry",
+        ...deskRoutes,
+        ...(options.outreach ? outreachRoutes : []),
       ];
       if (!allowed.includes(url.pathname)) {
         send(404, { error: "Unknown private route" });
@@ -276,6 +285,45 @@ export function createPrivateWebHandler(
           return true;
         }
         const owner = policy.principal_id;
+        if (
+          deskRoutes.includes(url.pathname) ||
+          outreachRoutes.includes(url.pathname)
+        ) {
+          if (url.search && req.method === "POST")
+            throw new Error("Unexpected query");
+          let data: Record<string, unknown> | null = null;
+          if (req.method === "POST") {
+            const parsed: unknown = JSON.parse(
+              await body(
+                req,
+                url.pathname === "/private/api/outreach/edit" ? 16384 : 4096,
+              ),
+            );
+            if (!isRecord(parsed)) throw new Error("Invalid request");
+            data = parsed;
+          }
+          try {
+            const result = await handleDeskRoute({
+              path: url.pathname,
+              method: req.method ?? "GET",
+              data,
+              store,
+              auth: {
+                owner_id: owner,
+                user_id: "live-owner",
+                chat_id: "live-private",
+                chat_type: "private",
+              },
+              now: clock(),
+              options,
+            });
+            send(result.status, result.body);
+          } catch (error) {
+            if (!(error instanceof DeskRequestError)) throw error;
+            send(error.status, { error: error.message });
+          }
+          return true;
+        }
         if (req.method === "GET" && url.pathname === "/private/api/contacts") {
           const q = url.searchParams.get("q") ?? "";
           if (q.length > 150) throw new Error("Invalid contact query");
