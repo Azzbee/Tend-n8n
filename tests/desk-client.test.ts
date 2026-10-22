@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountPrivateWorkspace } from "../src/private-web-client.ts";
-import { dueLabel, itemMeta, viewFromHash } from "../src/desk-client.ts";
+import {
+  dueLabel,
+  emailApproval,
+  itemMeta,
+  sendingLine,
+  viewFromHash,
+} from "../src/desk-client.ts";
 import {
   buildDeskRuns,
   buildDeskSnapshot,
@@ -78,7 +84,10 @@ function snapshot(): DeskSnapshot {
     store.close();
   }
 }
-function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
+function browser(
+  hash: string,
+  outreach: "off" | "on" | "approved" | "approved-off" = "off",
+) {
   const elements = new Map<string, FakeElement>();
   let releaseConfirm: () => void = () => {};
   const element = (id: string): FakeElement => {
@@ -111,17 +120,25 @@ function browser(hash: string, outreach: "off" | "on" | "approved" = "off") {
       if (path === "/private/api/outreach")
         return outreach === "on"
           ? Response.json({ items: deskFixtureOutreach(deskFixtureClock()) })
-          : outreach === "approved"
+          : outreach === "approved-off"
             ? Response.json({
+                sending_enabled: false,
                 items: deskFixtureOutreach(deskFixtureClock()).map((i) => ({
                   ...i,
                   status: "approved",
                 })),
               })
-            : Response.json(
-                { error: "Unknown private route" },
-                { status: 404 },
-              );
+            : outreach === "approved"
+              ? Response.json({
+                  items: deskFixtureOutreach(deskFixtureClock()).map((i) => ({
+                    ...i,
+                    status: "approved",
+                  })),
+                })
+              : Response.json(
+                  { error: "Unknown private route" },
+                  { status: 404 },
+                );
       if (path === "/private/api/desk/confirm" && init?.method === "POST")
         return new Promise<Response>((resolve) => {
           releaseConfirm = () => resolve(Response.json({ commitment: {} }));
@@ -167,6 +184,34 @@ describe("desk presentation helpers", () => {
       "Overdue · Due Thu 15 Oct",
     );
     expect(dueLabel("2026-10-30", "2026-10-22")).toBe("Due Fri 30 Oct");
+  });
+});
+
+describe("outreach sending copy", () => {
+  it("never promises a Gmail draft unless sending is on", () => {
+    expect(emailApproval(true).notice).toContain("creates a Gmail draft");
+    expect(emailApproval(false).notice).toContain(
+      "nothing will be drafted in Gmail",
+    );
+    expect(emailApproval(null).notice).toContain(
+      "only while sending is switched on",
+    );
+    expect(sendingLine(false)).toContain("switched off");
+    expect(sendingLine(null)).toBeNull();
+  });
+  it("shows the switched-off state and lets the owner copy an approved email", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(deskFixtureClock());
+    const { elements } = browser("#desk", "approved-off");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const queue = elements.get("desk-outreach")!;
+    expect(text(queue)).toContain(
+      "Sending is switched off: approvals never create Gmail drafts.",
+    );
+    expect(text(queue)).toContain("nothing will be drafted in Gmail");
+    expect(text(queue)).not.toContain("Waiting for the Gmail step");
+    expect(all(queue, (e) => e.textContent === "Copy text")).toHaveLength(2);
   });
 });
 

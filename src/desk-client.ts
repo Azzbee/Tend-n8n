@@ -4,6 +4,7 @@ import {
   deskItemTitle,
   outreachActionable,
   outreachReasonLabels,
+  outreachSending,
   parseOutreachList,
   reviewPosition,
   type DeskItem,
@@ -116,6 +117,36 @@ const safeLink = (value: string | null | undefined): string | null => {
   }
 };
 
+export function emailApproval(sending: boolean | null): {
+  notice: string;
+  detail: string;
+} {
+  if (sending === true)
+    return {
+      notice: "Approved. Tend creates a Gmail draft; you press Send yourself.",
+      detail:
+        "Waiting for the Gmail step to create the draft. You press Send yourself.",
+    };
+  if (sending === false)
+    return {
+      notice:
+        "Approved. Sending is switched off, so nothing will be drafted in Gmail.",
+      detail:
+        "Sending is switched off: nothing will be drafted in Gmail. Copy the text to send it yourself.",
+    };
+  return {
+    notice:
+      "Approved. A Gmail draft is created only while sending is switched on.",
+    detail: "A Gmail draft is created only while sending is switched on.",
+  };
+}
+export function sendingLine(sending: boolean | null): string | null {
+  return sending === true
+    ? "Sending is on: approving an email creates a Gmail draft that you send yourself."
+    : sending === false
+      ? "Sending is switched off: approvals never create Gmail drafts."
+      : null;
+}
 export function mountDesk(ctx: DeskContext): DeskController {
   const get = (id: string): HTMLElement => {
     const found = document.getElementById(id);
@@ -160,6 +191,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
   ];
   let snapshot: DeskSnapshot | null = null;
   let outreach: OutreachItem[] | "disabled" | "unavailable" = [];
+  let sending: boolean | null = null;
   let reviewIndex = 0;
   let current = "desk";
   let generation = 0;
@@ -491,7 +523,9 @@ export function mountDesk(ctx: DeskContext): DeskController {
       return;
     }
     const now = new Date();
+    const state = sendingLine(sending);
     target.replaceChildren(
+      ...(state ? [el("p", state, "small sending-state")] : []),
       ...outreach.map((item) => {
         const node = el("article", undefined, "card outreach-card");
         const top = el("div", undefined, "card-top");
@@ -529,7 +563,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
             : item.status === "approved" && item.channel !== "email"
               ? "Copy the text and send it yourself."
               : item.status === "approved"
-                ? "Waiting for the Gmail step to create the draft. You press Send yourself."
+                ? emailApproval(sending).detail
                 : outreachStatusDetail[item.status];
         if (detail) node.append(el("p", detail, "meta"));
         const row = el("div", undefined, "actions");
@@ -543,7 +577,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
                   "outreach/approve",
                   { id: item.id, text_code: item.text_code },
                   item.channel === "email"
-                    ? "Approved. Tend creates a Gmail draft; you press Send yourself."
+                    ? emailApproval(sending).notice
                     : "Approved. Copy the text and send it yourself.",
                 ),
             ),
@@ -563,7 +597,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
           item.status === "approved" &&
           Date.parse(item.expires_at) > now.getTime()
         ) {
-          if (item.channel !== "email") {
+          if (item.channel !== "email" || sending === false) {
             row.append(
               button("Copy text", "quiet", () => void copy(item.draft_text)),
             );
@@ -833,8 +867,11 @@ export function mountDesk(ctx: DeskContext): DeskController {
       }
       renderDesk(desk);
       let queue: typeof outreach;
+      let queueSending: boolean | null = null;
       try {
-        queue = parseOutreachList(await request("outreach"));
+        const listed = await request("outreach");
+        queue = parseOutreachList(listed);
+        queueSending = outreachSending(listed);
       } catch (error) {
         queue =
           (error as { status?: number }).status === 404
@@ -843,6 +880,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       }
       if (stale()) return;
       outreach = queue;
+      sending = queueSending;
       renderOutreach();
     } catch (error) {
       if (stale()) return;
@@ -875,6 +913,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       current = "desk";
       snapshot = null;
       outreach = [];
+      sending = null;
       reviewIndex = 0;
       for (const id of containers) get(id).replaceChildren();
       get("desk-headline").textContent = "Your promises, quoted.";

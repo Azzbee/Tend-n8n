@@ -345,6 +345,30 @@ describe("outreach routes", () => {
       store.close();
     }
   });
+  it("passes the outreach kill switch through only when the service reports it", async () => {
+    for (const [reported, expected] of [
+      [false, false],
+      [true, true],
+      [undefined, undefined],
+      ["yes", undefined],
+    ] as const) {
+      const outreach = backend();
+      outreach.list.mockResolvedValueOnce({
+        items: deskFixtureOutreach(deskFixtureClock()),
+        ...(reported === undefined
+          ? {}
+          : { sending_enabled: reported as boolean }),
+      });
+      const { get, store } = await unlocked({ outreach });
+      try {
+        expect(
+          (await get("/private/api/outreach")).json().sending_enabled,
+        ).toBe(expected);
+      } finally {
+        store.close();
+      }
+    }
+  });
   it("list, approve, edit and skip exactly the named draft with CSRF", async () => {
     const outreach = backend();
     const { get, post, store } = await unlocked({ outreach });
