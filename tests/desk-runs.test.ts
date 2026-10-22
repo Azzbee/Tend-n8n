@@ -103,8 +103,44 @@ describe("workflow run reader", () => {
     expect(view.runs_connected).toBe(true);
     expect(buildDeskRuns(null, []).runs_connected).toBe(false);
   });
-  it("caches for 60 seconds, shares one read, and fails closed to no run data", async () => {
+  it("caches for 60 seconds, shares one read and fails closed without a good read", async () => {
     let now = 0;
+    const run = vi
+      .fn<(script: string, timeout: number) => Promise<string>>()
+      .mockRejectedValueOnce(new Error("container down"))
+      .mockResolvedValueOnce("not json")
+      .mockResolvedValueOnce(
+        JSON.stringify([
+          {
+            name: gmail,
+            last_success: "2026-10-22 07:00:00",
+            last_failure: null,
+          },
+        ]),
+      );
+    const read = createWorkflowRunsReader({
+      run,
+      names,
+      clock: () => now,
+      timeoutMs: 1234,
+    });
+    const [a, b] = await Promise.all([read(), read()]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![1]).toBe(1234);
+    expect(a).toEqual([]);
+    expect(b).toEqual([]);
+    now = 59_999;
+    expect(await read()).toEqual([]);
+    expect(run).toHaveBeenCalledTimes(1);
+    now = 60_000;
+    expect(await read()).toEqual([]);
+    now = 120_000;
+    expect((await read())[0]!.last_status).toBe("success");
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+  it("answers from the last good read while refreshing, and drops it after 10 minutes of failures", async () => {
+    let now = 0;
+    let release: (value: string) => void = () => {};
     const run = vi
       .fn<(script: string, timeout: number) => Promise<string>>()
       .mockResolvedValueOnce(
@@ -116,27 +152,31 @@ describe("workflow run reader", () => {
           },
         ]),
       )
-      .mockRejectedValueOnce(new Error("container down"))
-      .mockResolvedValueOnce("not json");
-    const read = createWorkflowRunsReader({
-      run,
-      names,
-      clock: () => now,
-      timeoutMs: 1234,
-    });
-    const [a, b] = await Promise.all([read(), read()]);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]![1]).toBe(1234);
-    expect(a).toEqual(b);
-    expect(a[0]!.last_status).toBe("success");
-    now = 59_999;
-    await read();
-    expect(run).toHaveBeenCalledTimes(1);
-    now = 60_000;
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => (release = resolve)),
+      )
+      .mockRejectedValue(new Error("container down"));
+    const read = createWorkflowRunsReader({ run, names, clock: () => now });
+    expect(await read()).toHaveLength(1);
+    now = 61_000;
+    expect(await read()).toHaveLength(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    release(
+      JSON.stringify([
+        {
+          name: gmail,
+          last_success: null,
+          last_failure: "2026-10-22 08:00:00",
+        },
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    now = 62_000;
+    expect((await read())[0]!.last_status).toBe("error");
+    now = 200_000;
+    expect(await read()).toHaveLength(1);
+    now = 661_000;
     expect(await read()).toEqual([]);
-    now = 130_000;
-    expect(await read()).toEqual([]);
-    expect(run).toHaveBeenCalledTimes(3);
   });
   it("opens the n8n database read-only and selects only names, outcomes and times", () => {
     const script = insightsScript("/home/node/.n8n/database.sqlite");

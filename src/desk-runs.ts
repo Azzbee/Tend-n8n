@@ -111,30 +111,43 @@ export function createWorkflowRunsReader(options: {
   names: Map<string, string>;
   dbPath?: string;
   ttlMs?: number;
+  staleMs?: number;
   timeoutMs?: number;
   clock?: () => number;
 }): () => Promise<DeskWorkflowRun[]> {
   const ttl = options.ttlMs ?? 60_000,
-    timeout = options.timeoutMs ?? 5_000,
+    stale = options.staleMs ?? 600_000,
+    timeout = options.timeoutMs ?? 15_000,
     clock = options.clock ?? Date.now,
     script = insightsScript(
       options.dbPath ?? "/home/node/.n8n/database.sqlite",
     );
-  let cached: { at: number; runs: DeskWorkflowRun[] } | null = null;
+  // good: last successful read. checked: last attempt, so a broken container is tried once per TTL.
+  let good: { at: number; runs: DeskWorkflowRun[] } | null = null;
+  let checked = -Infinity;
   let pending: Promise<DeskWorkflowRun[]> | null = null;
-  return () => {
-    if (cached && clock() - cached.at < ttl)
-      return Promise.resolve(cached.runs);
-    // One read at a time; failures are cached too so a broken container is not hammered.
-    pending ??= options
+  const usable = (): DeskWorkflowRun[] =>
+    good && clock() - good.at < stale ? good.runs : [];
+  const refresh = (): Promise<DeskWorkflowRun[]> =>
+    (pending ??= options
       .run(script, timeout)
-      .then((out) => runsFromRows(JSON.parse(out) as unknown, options.names))
-      .catch(() => [] as DeskWorkflowRun[])
-      .then((runs) => {
-        cached = { at: clock(), runs };
+      .then((out) => {
+        good = {
+          at: clock(),
+          runs: runsFromRows(JSON.parse(out) as unknown, options.names),
+        };
+      })
+      .catch(() => undefined)
+      .then(() => {
+        checked = clock();
         pending = null;
-        return runs;
-      });
-    return pending;
+        return usable();
+      }));
+  return () => {
+    if (clock() - checked < ttl) return Promise.resolve(usable());
+    // With a usable earlier read, answer at once and refresh in the background; otherwise wait.
+    const current = usable();
+    const next = refresh();
+    return current.length ? Promise.resolve(current) : next;
   };
 }
