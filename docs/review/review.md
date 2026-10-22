@@ -43,14 +43,35 @@ Fix (commit on review/codex): the steps and the node note now say to switch on "
 
 `src/outreach-store.ts:283` (`approve` takes only `id`), `src/desk-api.ts:218-232` (`fields(data, ["id"])`), `src/outreach-store.ts:256-278` (`modelDraft`).
 `plan()` stores a template draft, then the planner (23/25) calls `/draft` once per proposal, after Ollama replies (60 s timeout each), and `modelDraft` replaces the text while the item is still `pending`. Approve only names the item, so it approves whatever text is stored at that moment.
-Failing scenario: the hourly planner runs; Adam has the Desk open (or just ran `/outreach`) and sees the template "Hi Mira, following up on ...". Before he clicks Approve, n8n saves the model text. His click approves the model text, its hash is bound, and workflow 26 creates a Gmail draft he never read. Reproduced in `.scratch/review/race.test.ts` on the fictional lane: `modelDraft(id, "Hi Mira, I have decided to cancel our deal.")` is accepted, then `approve(id)` returns that text and `approvedEmail` hands it to Gmail. The owner still presses Send in Gmail, which is the last line of defence, but the brief requires approval of "that exact message".
+Failing scenario: the hourly planner runs; Adam has the Desk open (or just ran `/outreach`) and sees the template "Hi Mira, following up on ...". Before he clicks Approve, n8n saves the model text. His click approves the model text, its hash is bound, and workflow 26 creates a Gmail draft he never read. Reproduced on the fictional lane (vitest, from the repo root):
+
+```ts
+const { book, store } = createFixtureOutreachService();
+const load = () => snapshotOf(store, "demo-owner");
+const seen = book
+  .list(load())
+  .items.find((i) => i.reason === "overdue_owed_to_you")!;
+// n8n's planner saves the model draft after the owner loaded the Desk
+expect(
+  book.modelDraft(
+    seen.id,
+    "Hi Mira, I have decided to cancel our deal.",
+    load(),
+  ).accepted,
+).toBe(true);
+const approved = book.approve(seen.id, load()); // the Desk sends only {id}
+expect(approved.draft_text).not.toBe(seen.draft_text); // passes
+expect(book.approvedEmail(load()).items.length).toBe(1); // the unseen text goes to Gmail
+```
+
+The owner still presses Send in Gmail, which is the last line of defence, but the brief requires approval of "that exact message".
 Suggested fix: the Desk sends the `draft_text` (or its SHA-256) it rendered; `OutreachBook.approve(id, snapshot, expectedHash)` throws "draft changed since you opened it" on mismatch (add that phrase to `safeOutreachError`). For Telegram, show a short text-hash suffix in `/outreach` and require `/approve <id> <suffix>`, or refuse Telegram approval while `draft_source === "template"` and a model draft is pending. The Telegram part is a UX call for the lead.
 
 ### M1. Approved emails become duplicate Gmail drafts when the receipt step fails (Medium, open)
 
 `src/outreach-store.ts:340-375` (`approvedEmail`, `recordGmailDraft`), `src/outreach-workflows.ts:270-313` (workflows 24, 26).
 `approvedEmail` keeps returning an approved item until `recordGmailDraft` succeeds, and 24/26 run every 10 minutes. Nothing marks an item as handed off.
-Failing scenario: drafts.create succeeds for item 1, then the HTTP node fails on item 2 (Gmail 429) or "Record draft in send ledger" fails (private API restarting, Header Auth not bound yet). The execution fails, no receipt is stored, and the next run creates the same Gmail draft again: up to 144 copies in the 24 h approval window, while the ledger shows none. Reproduced in `.scratch/review/race.test.ts` (second test: two consecutive `approvedEmail` calls both return the item).
+Failing scenario: drafts.create succeeds for item 1, then the HTTP node fails on item 2 (Gmail 429) or "Record draft in send ledger" fails (private API restarting, Header Auth not bound yet). The execution fails, no receipt is stored, and the next run creates the same Gmail draft again: up to 144 copies in the 24 h approval window, while the ledger shows none. Reproduced: after `book.approve(id, load())`, two consecutive `book.approvedEmail(load())` calls both return the item (no receipt recorded in between), so each 10-minute run hands it to drafts.create again.
 Suggested fix: record `handed_at` when an item is returned, exclude handed-off items from `sendable`, and expire them with a visible reason ("Gmail receipt missing, check Gmail drafts") if no receipt arrives within the run timeout. Optionally set `onError: continueRegularOutput` on the create node so one failure does not drop the other receipts.
 
 ### M2. Two injection filters disagree, so the Desk and the planner treat the same message differently (Medium, fixed on review/codex)
@@ -102,7 +123,10 @@ Each is a separate commit; the test in each fails without the fix (checked by re
 - `d1d09c1` H1: gmail.compose-only custom scopes in the re-consent steps and the workflow 26 node note; test in `tests/outreach-workflows.test.ts`.
 - `430c2c3` M2: shared `src/instruction-like.ts` for the Desk and the planner; test in `tests/desk-model.test.ts`.
 - `0fee381` L2: Specification export count (21 → 26). The outreach-status error-workflow line is fixed inside `d1d09c1`.
+- `af57042` follow-up to `430c2c3`: my first version of the shared filter used the Desk's `[^.\n]` and so stopped the planner matching "Ignore\nthe previous instructions" across a line break. Restored `[^.]` and added that phrase to the test. Pick it together with `430c2c3`.
+
+Cherry-pick dry run onto `improve/lead` at cd5ff58: `d1d09c1`, `0fee381` and `af57042` apply cleanly; `430c2c3` conflicts only on the import lines of `tests/desk-model.test.ts` (keep both `import { readdirSync } from "node:fs";` and `import { isInstructionLike } from "../src/outreach.ts";`). If `web/private/app.js` ever conflicts, run `bun run build` rather than merging the minified file by hand. After the picks, `bun run build` leaves no diff and the desk-model, outreach and outreach-workflows tests pass (43).
 
 ## Re-review 1: improve/lead at cd5ff58 (22 Oct, 11:00 Paris)
 
-New since 05f7050: workflows 22-26 listed on How it runs (`src/desk-model.ts` `workflowCatalog`), and the Desk preview server now goes through `createLiveServer` with `createPrivateOutreach` (`:memory:` ledger, `OUTREACH_ENABLED=false`, in-memory `InternalAuth`, ports 18767/18768/18769/5678 refused). No new findings. The one merge conflict (imports in `tests/desk-model.test.ts`) was resolved by keeping both imports. On the merged tree: typecheck, lint, build (26 exports, no diff), format pass; 1309 tests passed, 16 skipped; the same 2 Postgres files fail on sandbox shared memory. H2, M1 and M3 are still open.
+New since 05f7050: workflows 22-26 listed on How it runs (`src/desk-model.ts` `workflowCatalog`), and the Desk preview server now goes through `createLiveServer` with `createPrivateOutreach` (`:memory:` ledger, `OUTREACH_ENABLED=false`, in-memory `InternalAuth`, ports 18767/18768/18769/5678 refused). No new findings. The one merge conflict (imports in `tests/desk-model.test.ts`) was resolved by keeping both imports. On the merged tree: typecheck, lint, build (26 exports, no diff), format pass; 1307 tests passed, 16 skipped across 55 files (an earlier count of 1309 wrongly included my scratch repro file, which vitest picked up from `.scratch/`; it is now outside the test glob); the same 2 Postgres files fail on sandbox shared memory. H2, M1 and M3 are still open.
