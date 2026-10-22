@@ -1,6 +1,6 @@
 {
-  "id": "TendReview23",
-  "name": "Tend 23: Approved outreach to mock Gmail drafts (fictional lane)",
+  "id": "TendReview24",
+  "name": "Tend 24: Approved outreach to mock Gmail drafts (fictional lane)",
   "active": false,
   "nodes": [
     {
@@ -131,6 +131,6 @@
   },
   "tags": [],
   "pinData": {},
-  "versionId": "tendreview23-v1",
+  "versionId": "tendreview24-v1",
   "meta": { "templateCredsSetupCompleted": false }
 }

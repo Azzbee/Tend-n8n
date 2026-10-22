@@ -98,12 +98,12 @@ describe("fictional outreach lane over HTTP", () => {
       const plan = await call("/api/outreach/plan", {});
       expect(plan.json.quiet_hours).toBe(false);
       const split = runCode(
-        code("22-outreach-planner.json", "One item per proposal"),
+        code("23-outreach-planner.json", "One item per proposal"),
         { $input: { first: () => ({ json: plan.json }) } },
       );
       expect(split).toHaveLength(5);
       const read = runCode(
-        code("22-outreach-planner.json", "Read model text"),
+        code("23-outreach-planner.json", "Read model text"),
         {
           $: () => ({ all: () => split }),
           $input: {
@@ -116,7 +116,7 @@ describe("fictional outreach lane over HTTP", () => {
         const saved = await call("/api/outreach/draft", r.json);
         expect(saved.json).toMatchObject({ accepted: false });
       }
-      const notice = runCode(code("22-outreach-planner.json", "Owner notice"), {
+      const notice = runCode(code("23-outreach-planner.json", "Owner notice"), {
         $input: { all: () => read },
       });
       expect(
@@ -143,7 +143,7 @@ describe("fictional outreach lane over HTTP", () => {
       // Workflow 23: approved email only, mock drafts.create, ledger.
       const approved = await call("/api/outreach/approved-email");
       const items = runCode(
-        code("23-outreach-gmail-drafts.json", "One item per approved draft"),
+        code("24-outreach-gmail-drafts.json", "One item per approved draft"),
         { $input: { first: () => ({ json: approved.json }) } },
       );
       expect(items.map((i) => i.json.id)).toEqual([target.id]);
@@ -157,7 +157,7 @@ describe("fictional outreach lane over HTTP", () => {
           ).json,
         });
       const receipts = runCode(
-        code("23-outreach-gmail-drafts.json", "Read draft receipt"),
+        code("24-outreach-gmail-drafts.json", "Read draft receipt"),
         { $: () => ({ all: () => items }), $input: { all: () => created } },
       );
       const recorded = await call(

@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import vm from "node:vm";
 import { readdirSync, readFileSync } from "node:fs";
-import { buildOutreachWorkflows } from "../src/outreach-workflows.ts";
+import {
+  buildOutreachWorkflows,
+  outreachCanvasNotes,
+} from "../src/outreach-workflows.ts";
 import { GMAIL_DRAFTS_CREATE_URL } from "../src/outreach-gmail.ts";
 
 const built = buildOutreachWorkflows();
@@ -23,8 +26,8 @@ describe("outreach workflow exports", () => {
   });
   it("keeps the private lane on the no-data policy with placeholder credentials", () => {
     for (const file of [
-      "24-private-outreach-planner.json",
-      "25-private-outreach-gmail-drafts.json",
+      "25-private-outreach-planner.json",
+      "26-private-outreach-gmail-drafts.json",
     ]) {
       const w = find(file);
       expect(w.settings).toMatchObject({
@@ -41,8 +44,8 @@ describe("outreach workflow exports", () => {
           expect(c.id.startsWith("CONFIGURE_")).toBe(true);
     }
     for (const file of [
-      "22-outreach-planner.json",
-      "23-outreach-gmail-drafts.json",
+      "23-outreach-planner.json",
+      "24-outreach-gmail-drafts.json",
     ]) {
       const raw = readFileSync(`workflows/${file}`, "utf8");
       expect(raw).not.toContain('"credentials"');
@@ -59,7 +62,7 @@ describe("outreach workflow exports", () => {
         [])
         if (!/^1[1-9]-/.test(f)) expect(url).toBe(GMAIL_DRAFTS_CREATE_URL);
     }
-    const create = find("25-private-outreach-gmail-drafts.json").nodes.find(
+    const create = find("26-private-outreach-gmail-drafts.json").nodes.find(
       (n) => n.name === "Create Gmail draft (drafts.create only)",
     )!;
     expect(create.type).toBe("n8n-nodes-base.httpRequest");
@@ -69,7 +72,7 @@ describe("outreach workflow exports", () => {
       nodeCredentialType: "gmailOAuth2",
     });
     expect(create.retryOnFail).toBe(false);
-    const mock = find("23-outreach-gmail-drafts.json").nodes.find(
+    const mock = find("24-outreach-gmail-drafts.json").nodes.find(
       (n) => n.name === "Create Gmail draft (drafts.create only)",
     )!;
     expect(mock.parameters.url).toBe(
@@ -81,7 +84,7 @@ describe("outreach workflow exports", () => {
       ).toBe(false);
   });
   it("runs hourly in Paris time and never lets n8n approve", () => {
-    const planner = find("22-outreach-planner.json");
+    const planner = find("23-outreach-planner.json");
     expect(planner.settings.timezone).toBe("Europe/Paris");
     expect(planner.nodes[0]!.parameters).toEqual({
       rule: { interval: [{ field: "hours", hoursInterval: 1 }] },
@@ -93,10 +96,26 @@ describe("outreach workflow exports", () => {
   });
 });
 
+describe("outreach canvas notes", () => {
+  it("describe every outreach workflow ID with purpose, inputs, outputs and privacy", () => {
+    expect(Object.keys(outreachCanvasNotes).sort()).toEqual(
+      built.map((b) => b.workflow.id).sort(),
+    );
+    for (const note of Object.values(outreachCanvasNotes))
+      for (const field of [
+        note.purpose,
+        note.inputs,
+        note.outputs,
+        note.privacy,
+      ])
+        expect(field.length).toBeGreaterThan(20);
+  });
+});
+
 describe("outreach workflow code nodes", () => {
   it("splits a plan, keeps the template when the model fails and tells the owner", () => {
     const split = run(
-      codeOf("22-outreach-planner.json", "One item per proposal"),
+      codeOf("23-outreach-planner.json", "One item per proposal"),
       {
         $input: {
           first: () => ({
@@ -114,7 +133,7 @@ describe("outreach workflow code nodes", () => {
       { id: "Oa", request: { model: "m" } },
       { id: "Ob", request: {} },
     ]);
-    const read = run(codeOf("22-outreach-planner.json", "Read model text"), {
+    const read = run(codeOf("23-outreach-planner.json", "Read model text"), {
       $: () => ({ all: () => split }),
       $input: {
         all: () => [
@@ -127,7 +146,7 @@ describe("outreach workflow code nodes", () => {
       { id: "Oa", text: "Hi Mira, any news?" },
       { id: "Ob", text: null },
     ]);
-    const notice = run(codeOf("22-outreach-planner.json", "Owner notice"), {
+    const notice = run(codeOf("23-outreach-planner.json", "Owner notice"), {
       $input: { all: () => [{}, {}] },
     }) as { json: { chat_id: string; text: string } }[];
     expect(notice).toHaveLength(1);
@@ -136,13 +155,13 @@ describe("outreach workflow code nodes", () => {
       notice[0]!.json.text.startsWith("Course demo • fictional data"),
     ).toBe(true);
     expect(() =>
-      run(codeOf("22-outreach-planner.json", "One item per proposal"), {
+      run(codeOf("23-outreach-planner.json", "One item per proposal"), {
         $input: { first: () => ({ json: { error: "x" } }) },
       }),
     ).toThrow(/invalid outreach plan/);
   });
   it("passes only id, approval hash and raw message to Gmail and requires a receipt", () => {
-    const file = "23-outreach-gmail-drafts.json";
+    const file = "24-outreach-gmail-drafts.json";
     const split = run(codeOf(file, "One item per approved draft"), {
       $input: {
         first: () => ({

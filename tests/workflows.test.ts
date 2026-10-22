@@ -49,7 +49,7 @@ describe("import and node boundaries", () => {
   it("ships twenty-five inactive exports without private account credentials or external recipients", () => {
     const files = readdirSync("workflows").filter((f) => f.endsWith(".json"));
     expect(files).toHaveLength(25);
-    expect(files).toContain("25-private-outreach-gmail-drafts.json");
+    expect(files).toContain("26-private-outreach-gmail-drafts.json");
     expect(files).toContain("21-error-handler.json");
     expect(files).toContain("20-daily-owner-briefing.json");
     for (const f of files) {

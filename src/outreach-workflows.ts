@@ -310,36 +310,81 @@ export function buildOutreachWorkflows(): {
 }[] {
   return [
     {
-      file: "22-outreach-planner.json",
+      file: "23-outreach-planner.json",
       workflow: planner(
-        "TendReview22",
-        `Tend 22: Outreach planner (${lanes.fictional.label})`,
-        "fictional",
-      ),
-    },
-    {
-      file: "23-outreach-gmail-drafts.json",
-      workflow: gmailDrafts(
         "TendReview23",
-        `Tend 23: Approved outreach to mock Gmail drafts (${lanes.fictional.label})`,
+        `Tend 23: Outreach planner (${lanes.fictional.label})`,
         "fictional",
       ),
     },
     {
-      file: "24-private-outreach-planner.json",
+      file: "24-outreach-gmail-drafts.json",
+      workflow: gmailDrafts(
+        "TendReview24",
+        `Tend 24: Approved outreach to mock Gmail drafts (${lanes.fictional.label})`,
+        "fictional",
+      ),
+    },
+    {
+      file: "25-private-outreach-planner.json",
       workflow: planner(
         "TendLiveOutreachPlanner",
-        `Tend 24: Outreach planner (${lanes.private.label})`,
+        `Tend 25: Outreach planner (${lanes.private.label})`,
         "private",
       ),
     },
     {
-      file: "25-private-outreach-gmail-drafts.json",
+      file: "26-private-outreach-gmail-drafts.json",
       workflow: gmailDrafts(
         "TendLiveOutreachGmail",
-        `Tend 25: Approved outreach to Gmail drafts (${lanes.private.label})`,
+        `Tend 26: Approved outreach to Gmail drafts (${lanes.private.label})`,
         "private",
       ),
     },
   ];
 }
+// Canvas notes for improve/lead's withCanvasNote(), keyed by workflow ID.
+export const outreachCanvasNotes: Record<
+  string,
+  { purpose: string; inputs: string; outputs: string; privacy: string }
+> = {
+  TendReview23: {
+    purpose:
+      "Hourly outreach planner: proposes nudges, status updates, meeting follow-ups and replies, then drafts each with local AI.",
+    inputs:
+      "Confirmed fictional promises, meetings and threads from the fixture API; Ollama for the draft text.",
+    outputs:
+      "Pending drafts in the outreach queue (Desk and Telegram /outreach) and one mock Telegram notice.",
+    privacy:
+      "Fictional data only. Quiet hours 21:00-08:00 Paris, one proposal per item per 3 days, instruction-like messages held back. Nothing is sent.",
+  },
+  TendReview24: {
+    purpose:
+      "Turns owner-approved email drafts into mock Gmail drafts and records them in the send ledger.",
+    inputs:
+      "Approved email items with their exact approved text from the fixture API.",
+    outputs:
+      "A mock Gmail draft per item and a gmail_draft_created ledger entry.",
+    privacy:
+      "Mock Gmail accepts drafts.create for example.invalid recipients only. No real account is reached.",
+  },
+  TendLiveOutreachPlanner: {
+    purpose:
+      "Private outreach planner template: the same rules as 23 against the private API.",
+    inputs:
+      "Private promises, meetings and threads through the internal API; local Ollama.",
+    outputs:
+      "Pending drafts for the owner to approve on the Desk or in Telegram.",
+    privacy:
+      "Inactive template, no saved execution data, internal credential placeholder. n8n cannot approve; nothing is sent.",
+  },
+  TendLiveOutreachGmail: {
+    purpose:
+      "Creates a Gmail draft for each owner-approved email so the owner presses Send in Gmail.",
+    inputs:
+      "Approved email items from the private API, returned only while OUTREACH_ENABLED=true.",
+    outputs: "A draft in the owner's Gmail and a ledger receipt.",
+    privacy:
+      "Calls users.drafts.create only, with a gmail.compose credential placeholder; never a send endpoint. Inactive, no saved execution data.",
+  },
+};

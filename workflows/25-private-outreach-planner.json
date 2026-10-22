@@ -1,6 +1,6 @@
 {
-  "id": "TendReview22",
-  "name": "Tend 22: Outreach planner (fictional lane)",
+  "id": "TendLiveOutreachPlanner",
+  "name": "Tend 25: Outreach planner (private, inactive template)",
   "active": false,
   "nodes": [
     {
@@ -14,36 +14,37 @@
       }
     },
     {
-      "id": "run-fictional-demo",
-      "name": "Run fictional demo",
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [260, 0],
-      "parameters": {}
-    },
-    {
       "id": "plan-outreach-quiet-hours-3-day-limit-",
       "name": "Plan outreach (quiet hours, 3-day limit)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [520, 0],
+      "position": [260, 0],
       "parameters": {
-        "url": "http://host.docker.internal:18767/api/outreach/plan",
+        "url": "http://host.docker.internal:18768/api/live/outreach/plan",
         "method": "POST",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify({}) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": { "timeout": 10000 }
       },
-      "notes": "Proposes nudges, updates, meeting follow-ups and replies from confirmed promises and meetings. Instruction-like messages are held back, never drafted."
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Proposes nudges, updates, meeting follow-ups and replies from confirmed promises and meetings. Instruction-like messages are held back, never drafted.",
+      "notesInFlow": true
     },
     {
       "id": "one-item-per-proposal",
       "name": "One item per proposal",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [780, 0],
+      "position": [520, 0],
       "parameters": {
         "jsCode": "const x=$input.first().json;if(!x||!Array.isArray(x.created))throw new Error('invalid outreach plan');return x.created.map(i=>({json:{id:i.id,request:i.request}}));"
       }
@@ -53,7 +54,7 @@
       "name": "Local AI draft (Ollama, cited evidence only)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1040, 0],
+      "position": [780, 0],
       "parameters": {
         "url": "http://host.docker.internal:11434/api/chat",
         "method": "POST",
@@ -70,7 +71,7 @@
       "name": "Read model text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1300, 0],
+      "position": [1040, 0],
       "parameters": {
         "jsCode": "const props=$('One item per proposal').all();return $input.all().map((it,i)=>{let text=null;try{const c=it.json&&it.json.message&&it.json.message.content;const o=typeof c==='string'?JSON.parse(c):null;if(o&&typeof o.text==='string')text=o.text.slice(0,1200);}catch(e){}return {json:{id:props[i].json.id,text}};});"
       }
@@ -80,57 +81,30 @@
       "name": "Save draft if every detail is cited",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1560, 0],
+      "position": [1300, 0],
       "parameters": {
-        "url": "http://host.docker.internal:18767/api/outreach/draft",
+        "url": "http://host.docker.internal:18768/api/live/outreach/draft",
         "method": "POST",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
         "body": "={{ JSON.stringify($json) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "options": { "timeout": 10000 }
-      }
-    },
-    {
-      "id": "owner-notice",
-      "name": "Owner notice",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1820, 0],
-      "parameters": {
-        "jsCode": "const n=$input.all().length;return [{json:{chat_id:'424242',text:'Course demo • fictional data\\n'+n+' outreach draft(s) wait for your approval. Reply /outreach to review. Nothing is sent until you approve.'}}];"
-      }
-    },
-    {
-      "id": "tell-owner-on-mock-telegram",
-      "name": "Tell owner on mock Telegram",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [2080, 0],
-      "parameters": {
-        "url": "http://host.docker.internal:18767/api/mock-telegram/botFIXTURE_ONLY/sendMessage",
-        "method": "POST",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($json) }}",
-        "options": { "timeout": 10000 }
-      }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind the private Header Auth credential. No secret is included in this inactive export.",
+      "notesInFlow": true
     }
   ],
   "connections": {
     "Every hour": {
-      "main": [
-        [
-          {
-            "node": "Plan outreach (quiet hours, 3-day limit)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Run fictional demo": {
       "main": [
         [
           {
@@ -170,26 +144,18 @@
           }
         ]
       ]
-    },
-    "Save draft if every detail is cited": {
-      "main": [[{ "node": "Owner notice", "type": "main", "index": 0 }]]
-    },
-    "Owner notice": {
-      "main": [
-        [{ "node": "Tell owner on mock Telegram", "type": "main", "index": 0 }]
-      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
     "timezone": "Europe/Paris",
     "executionTimeout": 300,
-    "saveDataSuccessExecution": "all",
-    "saveDataErrorExecution": "all",
-    "errorWorkflow": "TendReview21"
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
   },
   "tags": [],
   "pinData": {},
-  "versionId": "tendreview22-v1",
+  "versionId": "tendliveoutreachplanner-v1",
   "meta": { "templateCredsSetupCompleted": false }
 }
