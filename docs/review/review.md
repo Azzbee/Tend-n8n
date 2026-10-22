@@ -138,3 +138,19 @@ The lead picked `d1d09c1` (as f3841b4), `430c2c3` (as 2a2dc0e) and `0fee381` (as
 New commit `0811861` partly closes M3. The integration now plans with 23, checks there is no mock draft before approval, approves one fictional email and runs 24 until there is exactly one mock drafts.create receipt. It also publishes a fictional webhook workflow that throws "Mira Tan F17" text and asserts that 21 records only names, the execution ID and the withheld marker. All of it runs in the isolated container on an ephemeral port, never on 5678 or 18768. Workflow 21 now uses the same allowlist redactor as 22, which also fixes a leak I had not flagged: the old 200-character cut kept emails, URLs and body text. The unit test now checks that an email, a URL and body text are withheld. M3 stays open until `bun run integration` actually runs (Docker, after 14:00) and `evidence/runtime-checks.json` is re-recorded. The evidence file still says "22 workflows imported".
 
 Gate on the merged tree: typecheck, lint, build (26 exports, no diff) and format pass. Tests: 1307 passed, 16 skipped, 55 files; the same 2 sandbox Postgres files fail. Still open: H2, M1, M3 (the run itself), and L1, L3 to L6.
+
+## Re-review 3: improve/lead at 03524f6 (22 Oct, 11:10 Paris)
+
+- `af57042` is in improve/lead as 03524f6. The shared filter there now uses `[^.]` again.
+- **H2 fixed (6a584e3, kept by the merge 23306ee).**
+  - Each item carries `text_code`, the first 8 hex characters of SHA-256 of the draft. `OutreachBook.approve(id, seen, snapshot)` throws "draft changed since you saw it" on a mismatch.
+  - The Desk route requires `{id, text_code}` matching `^[0-9a-f]{8}$` (otherwise 400), and the client sends the code of the item it rendered.
+  - Telegram takes `/approve ID CODE`, and `/outreach` lists the code. The fixture route and the integration pass the code; a missing code becomes `""` and is refused.
+  - The new phrase is in both `safeOutreachError` and `safeReasons`. Telegram refusals go through `safeOutreachReason`, so no draft text is echoed back.
+  - Re-checked my repro: after a model rewrite, approving with the old code throws, and approving with the current code approves exactly the current text.
+  - 32 bits is enough here. The code catches a stale view; it is not an authorization token (that is still the session plus CSRF, or the owner-only chat).
+- New, Low: after `/edit` in Telegram, the reply prints the new text but not its code (`src/telegram.ts`, `outreach_item` branch). The owner has to run `/outreach` again before `/approve`. Add `' code '+string(o.text_code)` to that line.
+- `3e2f0b0` (`repeatsEvidence`) rejects model drafts that echo the cited message, and the template is kept. It is safe: it can only reject. An empty model reply is now logged as "model repeated the cited message" instead of "empty draft"; that is cosmetic.
+- Gate on the merged tree: typecheck, lint, build (26 exports, no diff) and format pass. Tests: 1315 passed, 16 skipped, 55 files; the same 2 sandbox Postgres files fail.
+
+Still open: M1 (duplicate Gmail drafts, the lead's next item), M3 (the integration run and re-recorded evidence, in progress), and L1, L3 to L6.
