@@ -71,6 +71,16 @@ Chrome note for parallel testers: session cookies are scoped by host, not port, 
 
 Full suite after the merge: 1313 passed, 16 skipped; only the two PostgreSQL files fail (sandbox `shmget`).
 
+## Real last-run status on How it runs (F4, 11:45 to 12:00)
+
+`src/desk-runs.ts` reads n8n's insights tables in `tend-nocode-live` through `docker exec` with fixed arguments, no shell and a read-only SQLite open. It keeps only workflow name, outcome and time; live workflow IDs never leave the container. Names map to catalog IDs through the exported workflow names, plus the three deployed social pollers (17 to 19), which run under their own names (node shapes checked read-only). n8n's insight types are 2 = success and 3 = failure, checked against the live counts; my first guess (1 and 2) was wrong and is fixed in `7f13d39`.
+
+Behaviour: one read at a time, 60 s cache, 15 s timeout. With an earlier good read the Desk answers at once and refreshes in the background; a failed refresh keeps that read for up to 10 minutes; with no good read it fails closed to "No run data on this device". Once the reader is connected, workflows without insights say "No runs recorded in n8n". Wired as `workflowRuns` in `createLiveServer`, and in `startLiveServer` unless `TEND_N8N_CONTAINER=off`.
+
+Proven: 9 unit tests with an injected runner, plus one through the real `createLiveServer` over HTTP. Against the live container (read-only), the read takes 0.3 to 4.2 s on this busy Mac and returns 8 workflows with status (11, 12, 14, 15, 17, 18, 19, 20). In Chrome, How it runs on the preview (`DESK_DEV_RUNS=live`) showed those 8 with times and 18 as "No runs recorded in n8n"; a cached reply took 15 ms. No screenshot was saved, because this is live operational data. Times from compacted insights are the start of their hour bucket.
+
+Full suite at 11:58: 1329 passed, 16 skipped; only the two sandbox PostgreSQL files fail.
+
 ## Open items
 
 - Cross-vendor review: `codex exec` cannot start in this sandbox ("failed to initialize in-process app-server client"). A fresh-context Claude review ran instead and returned BLOCK on one issue: an action in flight during lock re-rendered private Desk text into the hidden page. Fixed in `cdaa49b` with a regression test that fails on the old client. Its nits were also fixed: aborting superseded loads, re-enabling buttons after a failed reload, focus after actions and review steps, held-back candidates kept off promise lists, meeting times compared as instants, validated run statuses, a held-back total, expiry gating and a second click on Withdraw, and lock resetting section titles. Not done: moving focus when switching to People (the People view keeps its existing behaviour). Run `/codex:review` before merging to main.

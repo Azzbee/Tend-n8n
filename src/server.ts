@@ -17,6 +17,11 @@ import {
   fixtureIdentities,
 } from "./fixtures.ts";
 import { createLiveServer } from "./live-api.ts";
+import {
+  createWorkflowRunsReader,
+  dockerRunner,
+  exportedWorkflowNames,
+} from "./desk-runs.ts";
 import { InternalAuth } from "./internal-auth.ts";
 import { parseLivePolicy } from "./live-policy.ts";
 import { OutreachBook } from "./outreach-store.ts";
@@ -467,6 +472,17 @@ async function startLiveServer(): Promise<void> {
     store,
     auth,
     outreach,
+    // Last-run status for How it runs: read-only insights from the n8n container; off with TEND_N8N_CONTAINER=off.
+    ...(process.env.TEND_N8N_CONTAINER === "off"
+      ? {}
+      : {
+          workflowRuns: createWorkflowRunsReader({
+            run: dockerRunner(
+              process.env.TEND_N8N_CONTAINER ?? "tend-nocode-live",
+            ),
+            names: exportedWorkflowNames(),
+          }),
+        }),
     normalModel: services.normalModel,
     normalSemanticSearch: services.normalSemanticSearch,
     privateSemanticSearch: services.privateSemanticSearch,
