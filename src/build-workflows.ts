@@ -2,6 +2,7 @@ import { isExplicitCommitment } from "./authored-promises.ts";
 import { writeFile, mkdir } from "node:fs/promises";
 import { format } from "prettier";
 import { buildDailyBriefingWorkflow } from "./daily-workflow.ts";
+import { buildOutreachWorkflows } from "./outreach-workflows.ts";
 import {
   telegramGuardCode,
   telegramReplyCode,
@@ -1644,6 +1645,9 @@ await writeJson(
   "workflows/20-daily-owner-briefing.json",
   buildDailyBriefingWorkflow(),
 );
+const outreachWorkflows = buildOutreachWorkflows();
+for (const { file, workflow: w } of outreachWorkflows)
+  await writeJson(`workflows/${file}`, w);
 await mkdir("fixtures", { recursive: true });
 await writeJson("fixtures/local-ollama.json", [
   {
@@ -1663,5 +1667,5 @@ await writeJson("fixtures/demo.json", {
   command: demoAuth,
 });
 console.log(
-  `Built ${workflows.length + 2} inactive workflow exports and fictional fixture data.`,
+  `Built ${workflows.length + 2 + outreachWorkflows.length} inactive workflow exports and fictional fixture data.`,
 );

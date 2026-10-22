@@ -1,0 +1,152 @@
+{
+  "id": "TendLiveOutreachGmail",
+  "name": "Tend 25: Approved outreach to Gmail drafts (private, inactive template)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "every-10-minutes",
+      "name": "Every 10 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 10 }] }
+      }
+    },
+    {
+      "id": "approved-email-only",
+      "name": "Approved email only",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/outreach/approved-email",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 10000 }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Returns only email items whose exact text the owner approved in the last 24 hours, with a re-verified recipient. Empty while OUTREACH_ENABLED is not true.",
+      "notesInFlow": true
+    },
+    {
+      "id": "one-item-per-approved-draft",
+      "name": "One item per approved draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0],
+      "parameters": {
+        "jsCode": "const x=$input.first().json;if(!x||!Array.isArray(x.items))throw new Error('invalid approved list');return x.items.map(i=>({json:{id:i.id,approval_hash:i.approval_hash,message:{raw:i.message.raw}}}));"
+      }
+    },
+    {
+      "id": "create-gmail-draft-drafts-create-only-",
+      "name": "Create Gmail draft (drafts.create only)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 0],
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ message: { raw: $json.message.raw } }) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": { "timeout": 10000 }
+      },
+      "retryOnFail": false,
+      "notes": "Creates a draft in the owner's Gmail; the owner presses Send. Needs a Gmail credential with the gmail.compose scope only, re-consented by the owner. Never change this URL to a send endpoint.",
+      "notesInFlow": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "CONFIGURE_GMAIL_COMPOSE_CREDENTIAL_ID",
+          "name": "CONFIGURE_GMAIL_COMPOSE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "read-draft-receipt",
+      "name": "Read draft receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 0],
+      "parameters": {
+        "jsCode": "const sent=$('One item per approved draft').all();return $input.all().map((it,i)=>{if(!it.json||typeof it.json.id!=='string')throw new Error('Gmail draft receipt missing');return {json:{id:sent[i].json.id,approval_hash:sent[i].json.approval_hash,draft_id:it.json.id}};});"
+      }
+    },
+    {
+      "id": "record-draft-in-send-ledger",
+      "name": "Record draft in send ledger",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 0],
+      "parameters": {
+        "url": "http://host.docker.internal:18768/api/live/outreach/gmail-draft",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 10000 }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "CONFIGURE_INTERNAL_API_CREDENTIAL_ID",
+          "name": "CONFIGURE_INTERNAL_API_CREDENTIAL"
+        }
+      },
+      "notes": "Bind the private Header Auth credential. No secret is included in this inactive export.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Every 10 minutes": {
+      "main": [[{ "node": "Approved email only", "type": "main", "index": 0 }]]
+    },
+    "Approved email only": {
+      "main": [
+        [{ "node": "One item per approved draft", "type": "main", "index": 0 }]
+      ]
+    },
+    "One item per approved draft": {
+      "main": [
+        [
+          {
+            "node": "Create Gmail draft (drafts.create only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail draft (drafts.create only)": {
+      "main": [[{ "node": "Read draft receipt", "type": "main", "index": 0 }]]
+    },
+    "Read draft receipt": {
+      "main": [
+        [{ "node": "Record draft in send ledger", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Paris",
+    "executionTimeout": 300,
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "tags": [],
+  "pinData": {},
+  "versionId": "tendliveoutreachgmail-v1",
+  "meta": { "templateCredsSetupCompleted": false }
+}
