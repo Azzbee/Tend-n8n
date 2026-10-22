@@ -1,6 +1,6 @@
 // Gmail is reached only through users.drafts.create: the owner presses Send
 // in Gmail. gmail.compose technically also allows sending, so the exports and
-// tests pin the single permitted endpoint; gmail.send is never requested.
+// tests pin the single permitted endpoint; the send-only scope is never requested.
 export const GMAIL_COMPOSE_SCOPE =
   "https://www.googleapis.com/auth/gmail.compose";
 export const GMAIL_DRAFTS_CREATE_URL =
