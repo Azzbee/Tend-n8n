@@ -4,6 +4,7 @@ import {
   dueLabel,
   emailApproval,
   itemMeta,
+  seenOn,
   sendingLine,
   viewFromHash,
 } from "../src/desk-client.ts";
@@ -185,7 +186,7 @@ describe("desk presentation helpers", () => {
     expect(deskItemTitle(desk.you_owe[0]!)).toBe("You: Review your demo");
     expect(deskItemTitle(desk.owed_to_you[0]!)).toBe("Mira Tan: Send the demo");
     expect(itemMeta(desk.pending[0]!)).toMatch(
-      /^LinkedIn · Mira Tan wrote · Tue 13 Oct.* · li1$/,
+      /^WhatsApp personal · Mira Tan wrote · Tue 13 Oct.* · wp2$/,
     );
     expect(dueLabel("2026-10-16")).toBe("Due Fri 16 Oct");
     expect(dueLabel(null)).toBe("No due date");
@@ -225,6 +226,53 @@ describe("outreach sending copy", () => {
 });
 
 describe("mounted desk", () => {
+  it("shows a promise thread as one card and links or splits a sighting from it", async () => {
+    vi.useFakeTimers();
+    const { elements, fetch, release } = browser("#desk");
+    mountPrivateWorkspace();
+    await vi.advanceTimersByTimeAsync(0);
+    const owed = elements.get("desk-owed")!;
+    expect(owed.children).toHaveLength(1);
+    expect(text(owed)).toContain("Seen on Email and LinkedIn");
+    expect(text(owed)).toContain("NOT LINKED YET");
+    expect(text(owed)).toContain("tend-source:linkedin/fixture-linkedin/li1");
+    const thread = snapshot().owed_to_you[0]!;
+    const li1 = thread.sources[1]!.commitment_id;
+    all(owed, (e) => e.textContent === "Confirm and link")[0]!.dispatchEvent(
+      new Event("click"),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    const body = (path: string): unknown =>
+      JSON.parse(
+        String(
+          (fetch.mock.calls.find(([p]) => p === path)![1] as RequestInit).body,
+        ),
+      );
+    expect(body("/private/api/desk/confirm")).toEqual({
+      id: li1,
+      due_date: "2026-10-15",
+    });
+    all(
+      elements.get("desk-owed")!,
+      (e) => e.textContent === "Not the same ask",
+    )[0]!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(body("/private/api/desk/separate")).toEqual({ id: li1 });
+    expect(elements.get("notice")!.textContent).toContain(
+      "will not link these two again",
+    );
+    expect(seenOn({ sources: thread.sources.slice(0, 1) })).toBeNull();
+    expect(
+      seenOn({
+        sources: [
+          thread.sources[0]!,
+          { ...thread.sources[0]!, commitment_id: "x" },
+        ],
+      }),
+    ).toBe("Seen 2 times on Email");
+  });
   it("renders the desk, says outreach is not enabled on 404, and wipes every desk container on lock", async () => {
     vi.useFakeTimers();
     const { elements } = browser("#desk");
@@ -237,7 +285,10 @@ describe("mounted desk", () => {
     );
     expect(elements.get("desk-owe")!.children).toHaveLength(1);
     expect(text(elements.get("desk-yes")!)).toContain(
-      "I will send the demo by 2026-10-15.",
+      "I will share the pilot checklist by 2026-10-20.",
+    );
+    expect(text(elements.get("desk-owed")!)).toContain(
+      "Seen on Email and LinkedIn",
     );
     expect(text(elements.get("desk-held")!)).toContain("g-injection");
     expect(text(elements.get("desk-meeting")!)).toContain(
@@ -283,7 +334,7 @@ describe("mounted desk", () => {
     expect(init.headers["X-Tend-CSRF"]).toBe("fictional-csrf");
     expect(JSON.parse(String(init.body))).toEqual({
       id: snapshot().pending[0]!.commitment_id,
-      due_date: "2026-10-15",
+      due_date: "2026-10-20",
     });
     expect(elements.get("notice")!.textContent).toContain("Nothing was sent");
   });

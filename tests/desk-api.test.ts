@@ -142,9 +142,53 @@ describe("desk routes", () => {
       expect(res.headers["cache-control"]).toBe("no-store");
       const desk = res.json() as Record<string, { record_id: string }[]>;
       expect(desk.you_owe!.map((c) => c.record_id)).toEqual(["g2"]);
-      expect(desk.pending!.map((c) => c.record_id)).toEqual(["li1"]);
+      expect(desk.pending!.map((c) => c.record_id)).toEqual(["wp2"]);
       expect(desk.held_back!.map((c) => c.record_id)).toEqual(["g-injection"]);
       expect(JSON.stringify(desk.pipeline)).toContain("1 failure logged");
+    } finally {
+      store.close();
+    }
+  });
+  it("serve one card per promise thread without writing on GET, and split on Not the same ask", async () => {
+    const { get, post, store } = await unlocked();
+    try {
+      const link = vi.spyOn(store, "linkPromiseThreads");
+      const command = vi.spyOn(store, "command");
+      type Item = {
+        record_id: string;
+        thread_id: string | null;
+        sources: { record_id: string; commitment_id: string }[];
+      };
+      let desk = (await get("/private/api/desk")).json() as Record<
+        string,
+        Item[]
+      >;
+      // A page load never links or writes; that is addCandidate's and the operator backfill's job.
+      expect(link).not.toHaveBeenCalled();
+      expect(desk.owed_to_you!).toHaveLength(1);
+      expect(desk.owed_to_you![0]!.sources.map((s) => s.record_id)).toEqual([
+        "g1",
+        "li1",
+      ]);
+      const li1 = desk.owed_to_you![0]!.sources[1]!.commitment_id;
+      expect(
+        (await post("/private/api/desk/separate", { id: li1 })).status,
+      ).toBe(200);
+      expect(command).toHaveBeenLastCalledWith({
+        ...auth,
+        text: `/separate ${li1}`,
+      });
+      desk = (await get("/private/api/desk")).json() as Record<string, Item[]>;
+      expect(desk.owed_to_you!.map((c) => [c.record_id, c.thread_id])).toEqual([
+        ["g1", null],
+      ]);
+      expect(desk.pending!.map((c) => c.record_id).sort()).toEqual([
+        "li1",
+        "wp2",
+      ]);
+      const again = await post("/private/api/desk/separate", { id: li1 });
+      expect(again.status).toBe(409);
+      expect(again.json().error).toBe("Not changed: invalid transition.");
     } finally {
       store.close();
     }
@@ -205,7 +249,7 @@ describe("desk routes", () => {
           .commitments(owner)
           .map((c) => c.status)
           .sort(),
-      ).toEqual(["confirmed", "dismissed", "done"]);
+      ).toEqual(["confirmed", "dismissed", "done", "pending"]);
     } finally {
       store.close();
     }

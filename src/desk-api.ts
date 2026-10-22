@@ -20,6 +20,7 @@ export const deskRoutes = [
   "/private/api/desk/confirm",
   "/private/api/desk/dismiss",
   "/private/api/desk/done",
+  "/private/api/desk/separate",
   "/private/api/runs",
 ];
 export const outreachRoutes = [
@@ -87,6 +88,7 @@ export async function handleDeskRoute(input: {
   const failures = async (): Promise<DeskFailure[] | null> =>
     options.failureLog ? await options.failureLog().catch(() => null) : null;
   if (method === "GET" && path === "/private/api/desk") {
+    // Read only: threads are linked when a candidate is added and by the operator backfill, never on a page load.
     const [commitments, records, contacts, sources, log] = await Promise.all([
       store.commitments(owner),
       store.interactions(owner),
@@ -146,10 +148,15 @@ export async function handleDeskRoute(input: {
   }
   if (
     path === "/private/api/desk/dismiss" ||
-    path === "/private/api/desk/done"
+    path === "/private/api/desk/done" ||
+    path === "/private/api/desk/separate"
   ) {
     fields(data, ["id"]);
-    const verb = path.endsWith("dismiss") ? "/dismiss" : "/done";
+    const verb = path.endsWith("dismiss")
+      ? "/dismiss"
+      : path.endsWith("separate")
+        ? "/separate"
+        : "/done";
     return {
       status: 200,
       body: { commitment: await command(`${verb} ${id(data)}`) },

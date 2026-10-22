@@ -21,6 +21,18 @@ import type { DailyBriefingRow } from "./daily-briefing.ts";
 import { chmodSync } from "node:fs";
 import { validateLiveAI, liveAIRecordFingerprint } from "./live-ai.ts";
 import type { VerifiedContactGroup } from "./live-policy.ts";
+import {
+  annotateThreads,
+  linkThreads,
+  onePerThread,
+  separateFromThread,
+  threadMembers,
+  withoutThread,
+  type ActionCosine,
+  type ThreadOverride,
+  type ThreadRow,
+  type ThreadedCommitment,
+} from "./promise-threads.ts";
 import type {
   PreparedTelegramRead,
   TelegramAIFreshness,
@@ -992,6 +1004,9 @@ export class TendStore {
  CREATE TABLE IF NOT EXISTS sources(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(owner_id,source));
  CREATE TABLE IF NOT EXISTS interactions(record_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,source_record_id TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,source,account_id,source_record_id));
  CREATE TABLE IF NOT EXISTS commitments(commitment_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,record_key TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner_id,record_key));
+ CREATE TABLE IF NOT EXISTS commitment_threads(owner_id TEXT NOT NULL,thread_id TEXT NOT NULL CHECK(thread_id LIKE 'T%' AND length(thread_id) BETWEEN 2 AND 81),created_at TEXT NOT NULL,PRIMARY KEY(owner_id,thread_id));
+ CREATE TABLE IF NOT EXISTS commitment_thread_members(owner_id TEXT NOT NULL,thread_id TEXT NOT NULL,commitment_id TEXT NOT NULL,linked_by TEXT NOT NULL CHECK(linked_by IN ('auto','owner')),similarity REAL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,commitment_id),FOREIGN KEY(owner_id,thread_id) REFERENCES commitment_threads(owner_id,thread_id) ON DELETE CASCADE);
+ CREATE TABLE IF NOT EXISTS commitment_thread_overrides(owner_id TEXT NOT NULL,commitment_id TEXT NOT NULL,other_commitment_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(owner_id,commitment_id,other_commitment_id));
  CREATE TABLE IF NOT EXISTS quarantines(id INTEGER PRIMARY KEY,source TEXT,reason TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS telegram_updates(channel_id TEXT NOT NULL,update_id INTEGER NOT NULL,payload_hash TEXT NOT NULL,reply_data TEXT NOT NULL,status TEXT NOT NULL,telegram_message_id INTEGER,PRIMARY KEY(channel_id,update_id));
  CREATE TABLE IF NOT EXISTS live_quarantines(owner_id TEXT NOT NULL,source TEXT NOT NULL,account_id TEXT NOT NULL,record_id TEXT NOT NULL,reason TEXT NOT NULL,observed_at TEXT NOT NULL,PRIMARY KEY(owner_id,source,account_id,record_id));
@@ -1102,7 +1117,9 @@ export class TendStore {
       ),
       commitments: Number(
         this.db
-          .prepare("SELECT count(*) AS n FROM commitments WHERE owner_id=?")
+          .prepare(
+            "SELECT count(DISTINCT coalesce(m.thread_id,c.commitment_id)) AS n FROM commitments c LEFT JOIN commitment_thread_members m ON m.owner_id=c.owner_id AND m.commitment_id=c.commitment_id WHERE c.owner_id=?",
+          )
           .get(owner)?.n,
       ),
     };
@@ -2659,6 +2676,7 @@ export class TendStore {
           evidence_valid: true,
         };
         this.put(proposed);
+        this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
         return proposed;
       }
       if (current.status === "confirmed" && current.evidence_valid === false)
@@ -2684,21 +2702,119 @@ export class TendStore {
     this.db
       .prepare("INSERT INTO commitments VALUES(?,?,?,?)")
       .run(id, c.owner_id, c.record_key, JSON.stringify(c));
+    this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
     return c;
   }
-  commitments(owner: string): Commitment[] {
+  commitments(owner: string): ThreadedCommitment[] {
     this.assertOwner(owner);
-    return this.db
-      .prepare("SELECT data FROM commitments WHERE owner_id=?")
-      .all(owner)
-      .map((r) => JSON.parse(String(r.data)) as Commitment);
+    return annotateThreads(
+      this.db
+        .prepare("SELECT data FROM commitments WHERE owner_id=?")
+        .all(owner)
+        .map((r) => JSON.parse(String(r.data)) as Commitment),
+      this.threadRows(owner),
+    );
   }
-  private put(c: Commitment): void {
+  private put(c: ThreadedCommitment): void {
     this.db
       .prepare(
         "UPDATE commitments SET data=? WHERE commitment_id=? AND owner_id=?",
       )
-      .run(JSON.stringify(c), c.commitment_id, c.owner_id);
+      .run(JSON.stringify(withoutThread(c)), c.commitment_id, c.owner_id);
+  }
+  /** One commitment per promise thread, for counts and lists. */
+  promises(owner: string): ThreadedCommitment[] {
+    return onePerThread(
+      this.commitments(owner),
+      new Map(
+        this.interactions(owner).map((r) => [r.record_key, r.occurred_at]),
+      ),
+    );
+  }
+  // The policy's verified groups, set once by the private web handler; candidates added later link through them.
+  private threadGroups: readonly VerifiedContactGroup[] = [];
+  setThreadGroups(groups: readonly VerifiedContactGroup[]): void {
+    this.threadGroups = groups;
+  }
+  threadRows(owner: string): ThreadRow[] {
+    this.assertOwner(owner);
+    return this.db
+      .prepare(
+        "SELECT thread_id,commitment_id,linked_by,similarity,created_at FROM commitment_thread_members WHERE owner_id=? ORDER BY thread_id,created_at,commitment_id",
+      )
+      .all(owner) as unknown as ThreadRow[];
+  }
+  threadOverrides(owner: string): ThreadOverride[] {
+    this.assertOwner(owner);
+    return this.db
+      .prepare(
+        "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=? ORDER BY commitment_id,other_commitment_id",
+      )
+      .all(owner) as unknown as ThreadOverride[];
+  }
+  /** Adds auto links for open commitments that are the same ask; writes only when something links. */
+  linkPromiseThreads(
+    owner: string,
+    groups?: readonly VerifiedContactGroup[],
+    cosine?: ActionCosine,
+    only?: readonly string[],
+  ): ThreadRow[] {
+    this.assertOwner(owner);
+    const remembered = groups ?? this.threadGroups;
+    const commitments = this.db
+      .prepare("SELECT data FROM commitments WHERE owner_id=?")
+      .all(owner)
+      .map((r) => JSON.parse(String(r.data)) as Commitment);
+    const added = linkThreads({
+      commitments,
+      occurredAt: new Map(
+        this.interactions(owner).map((r) => [r.record_key, r.occurred_at]),
+      ),
+      rows: this.threadRows(owner),
+      overrides: this.threadOverrides(owner),
+      groups: remembered,
+      ...(cosine ? { cosine } : {}),
+      ...(only ? { only } : {}),
+      now: this.clock(),
+    });
+    // Plain member inserts: a conflict would mean a double placement, which is a bug.
+    for (const row of added) {
+      this.db
+        .prepare("INSERT OR IGNORE INTO commitment_threads VALUES(?,?,?)")
+        .run(owner, row.thread_id, row.created_at);
+      this.db
+        .prepare("INSERT INTO commitment_thread_members VALUES(?,?,?,?,?,?)")
+        .run(
+          owner,
+          row.thread_id,
+          row.commitment_id,
+          row.linked_by,
+          row.similarity,
+          row.created_at,
+        );
+    }
+    return added;
+  }
+  private separateCommitment(owner: string, id: string): void {
+    const split = separateFromThread(this.threadRows(owner), id);
+    const at = this.clock().toISOString();
+    for (const o of split.overrides)
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO commitment_thread_overrides VALUES(?,?,?,?)",
+        )
+        .run(owner, o.commitment_id, o.other_commitment_id, at);
+    for (const member of split.remove)
+      this.db
+        .prepare(
+          "DELETE FROM commitment_thread_members WHERE owner_id=? AND commitment_id=?",
+        )
+        .run(owner, member);
+    this.db
+      .prepare(
+        "DELETE FROM commitment_threads WHERE owner_id=? AND thread_id NOT IN (SELECT thread_id FROM commitment_thread_members WHERE owner_id=?)",
+      )
+      .run(owner, owner);
   }
   revokeSource(owner: string, source: Source): void {
     this.assertOwner(owner);
@@ -2953,7 +3069,9 @@ export class TendStore {
     const expectedArgs =
       cmd === "/confirm"
         ? 3
-        : ["/draft", "/done", "/cancel", "/dismiss"].includes(cmd ?? "")
+        : ["/draft", "/done", "/cancel", "/dismiss", "/separate"].includes(
+              cmd ?? "",
+            )
           ? 2
           : 1;
     if (
@@ -2989,7 +3107,7 @@ export class TendStore {
           ? {
               unavailable_record_count: this.quarantineCount(owner),
               extraction_review_count: this.extractionReviewCount(owner),
-              unverified_commitment_count: this.commitments(owner).filter(
+              unverified_commitment_count: this.promises(owner).filter(
                 (c) => c.evidence_valid === false,
               ).length,
             }
@@ -3040,7 +3158,7 @@ export class TendStore {
                 }
               : {}),
           })),
-        commitments: this.commitments(owner).filter(
+        commitments: this.promises(owner).filter(
           (c) => c.contact_id === contact.contact_id,
         ),
         coverage: this.sourceStatus(owner),
@@ -3074,7 +3192,7 @@ export class TendStore {
               ? { coverage: "partial manual snapshot" }
               : {}),
           })),
-        commitments: this.commitments(owner).filter(
+        commitments: this.promises(owner).filter(
           (c) =>
             c.status === "confirmed" &&
             c.due_date !== null &&
@@ -3085,7 +3203,7 @@ export class TendStore {
                   })
                 : "2026-10-13"),
         ),
-        pending: this.commitments(owner).filter((c) => c.status === "pending"),
+        pending: this.promises(owner).filter((c) => c.status === "pending"),
         clock:
           this.mode === "live"
             ? this.clock().toISOString() +
@@ -3094,8 +3212,15 @@ export class TendStore {
         coverage: this.sourceStatus(owner),
       };
     }
-    const c = this.commitments(owner).find((c) => c.commitment_id === id);
+    const all = this.commitments(owner);
+    const c = all.find((c) => c.commitment_id === id);
     if (!c) throw new Error("unknown commitment");
+    const members = threadMembers(all, c.commitment_id);
+    if (cmd === "/separate") {
+      if (members.length < 2) throw new Error("invalid transition");
+      this.separateCommitment(owner, c.commitment_id);
+      return { outbound_sent: false, separated: c.commitment_id };
+    }
     if (cmd === "/draft") {
       if (c.status !== "confirmed") throw new Error("unconfirmed draft");
       if (c.evidence_valid === false)
@@ -3114,27 +3239,55 @@ export class TendStore {
         throw new Error("invalid transition: evidence review required");
       if (!date || !exactTimestamp(`${date}T00:00:00Z`))
         throw new Error("explicit valid date required");
-      if (c.status === "confirmed" && c.due_date === date)
+      // Confirming any sighting of a thread confirms and links every pending sighting once.
+      const pending = members.filter(
+        (m) => m.status === "pending" && m.evidence_valid !== false,
+      );
+      if (c.status === "confirmed" && c.due_date === date && !pending.length)
         return { outbound_sent: false, ...c };
-      if (c.status !== "pending") throw new Error("invalid transition");
-      const next = { ...c, status: "confirmed", due_date: date };
-      this.put(next);
-      return { outbound_sent: false, ...next };
+      if (
+        c.status !== "pending" &&
+        !(c.status === "confirmed" && pending.length)
+      )
+        throw new Error("invalid transition");
+      for (const m of pending)
+        this.put({ ...m, status: "confirmed", due_date: date });
+      if (members.length > 1)
+        this.db
+          .prepare(
+            "UPDATE commitment_thread_members SET linked_by='owner' WHERE owner_id=? AND thread_id=?",
+          )
+          .run(owner, c.thread_id!);
+      const next =
+        c.status === "pending"
+          ? { ...c, status: "confirmed", due_date: date }
+          : c;
+      return {
+        outbound_sent: false,
+        ...next,
+        ...(members.length > 1 ? { linked: members.length } : {}),
+      };
     }
     if (cmd === "/dismiss") {
       if (c.status === "dismissed") return { outbound_sent: false, ...c };
       if (c.status !== "pending") throw new Error("invalid transition");
-      const next = { ...c, status: "dismissed" };
-      this.put(next);
-      return { outbound_sent: false, ...next };
+      for (const m of members.filter((m) => m.status === "pending"))
+        this.put({ ...m, status: "dismissed" });
+      return { outbound_sent: false, ...c, status: "dismissed" };
     }
     const target =
       cmd === "/done" ? "done" : cmd === "/cancel" ? "cancelled" : null;
     if (!target) throw new Error("unsupported command");
     if (c.status === target) return { outbound_sent: false, ...c };
     if (c.status !== "confirmed") throw new Error("invalid transition");
-    const next = { ...c, status: target };
-    this.put(next);
-    return { outbound_sent: false, ...next };
+    // The promise is closed once, on every channel it was seen on.
+    for (const m of members.filter(
+      // Pending sightings close too, but never one whose evidence changed (same rule as /confirm).
+      (m) =>
+        m.status === "confirmed" ||
+        (m.status === "pending" && m.evidence_valid !== false),
+    ))
+      this.put({ ...m, status: target });
+    return { outbound_sent: false, ...c, status: target };
   }
 }

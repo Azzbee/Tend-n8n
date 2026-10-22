@@ -85,6 +85,8 @@ export function createPrivateWebHandler(
   const { store, policy } = options,
     clock = options.clock ?? (() => new Date()),
     sessions = new PrivateWebSessions(clock);
+  // In memory only: candidates this store adds link through the policy's verified groups.
+  void store.setThreadGroups(policy.verified_contact_groups ?? []);
   const cursors = new Map<
     string,
     {

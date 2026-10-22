@@ -42,7 +42,20 @@ import {
   calendarWindow,
   exampleLivePolicy,
   type LivePolicy,
+  type VerifiedContactGroup,
 } from "./live-policy.ts";
+import {
+  annotateThreads,
+  linkThreads,
+  onePerThread,
+  separateFromThread,
+  threadMembers,
+  withoutThread,
+  type ActionCosine,
+  type ThreadOverride,
+  type ThreadRow,
+  type ThreadedCommitment,
+} from "./promise-threads.ts";
 import type {
   HistoryCheckpoint,
   HistoryPageCommit,
@@ -167,6 +180,12 @@ export class PostgresStore implements LiveStore {
       );
       const referenceColumn = await pool.query(
         "SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='live_review_quarantines' AND column_name='original_reference'",
+      );
+      await pool.query(
+        readFileSync(
+          new URL("../schema/007-promise-threads.sql", import.meta.url),
+          "utf8",
+        ),
       );
       if (referenceColumn.rowCount === 0) {
         await pool.query(
@@ -299,7 +318,7 @@ export class PostgresStore implements LiveStore {
     return this.run(async (s) => {
       const r = (
         await s.q<{ interactions: string; commitments: string }>(
-          "SELECT (SELECT count(*) FROM live_records WHERE owner_id=$1) interactions,(SELECT count(*) FROM live_obligations WHERE owner_id=$1) commitments",
+          "SELECT (SELECT count(*) FROM live_records WHERE owner_id=$1) interactions,(SELECT count(DISTINCT coalesce(m.thread_id,o.commitment_id)) FROM live_obligations o LEFT JOIN commitment_thread_members m ON m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id WHERE o.owner_id=$1) commitments",
           [owner],
         )
       )[0]!;
@@ -1692,13 +1711,186 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
       return rows[0]!;
     });
   }
-  async commitments(owner: string): Promise<Commitment[]> {
+  async commitments(owner: string): Promise<ThreadedCommitment[]> {
     this.owner(owner);
-    return this.run((s) =>
-      s.q<Commitment & QueryResultRow>(
-        "SELECT * FROM live_obligations WHERE owner_id=$1 ORDER BY commitment_id",
+    return this.run(async (s) =>
+      annotateThreads(await s.obligations(owner), await s.threadRows(owner)),
+    );
+  }
+  private obligations(owner: string): Promise<Commitment[]> {
+    return this.q<Commitment & QueryResultRow>(
+      "SELECT * FROM live_obligations WHERE owner_id=$1 ORDER BY commitment_id",
+      [owner],
+    );
+  }
+  // Promise threads (schema/007): same contract as TendStore, see src/promise-threads.ts.
+  private threadGroups: readonly VerifiedContactGroup[] = [];
+  async setThreadGroups(
+    groups: readonly VerifiedContactGroup[],
+  ): Promise<void> {
+    this.threadGroups = groups;
+    return Promise.resolve();
+  }
+  async threadRows(owner: string): Promise<ThreadRow[]> {
+    this.owner(owner);
+    return this.run(async (s) =>
+      (
+        await s.q<ThreadRow & QueryResultRow>(
+          "SELECT thread_id,commitment_id,linked_by,similarity,created_at FROM commitment_thread_members WHERE owner_id=$1 ORDER BY thread_id,created_at,commitment_id",
+          [owner],
+        )
+      ).map((r) => ({
+        ...r,
+        similarity: r.similarity === null ? null : Number(r.similarity),
+      })),
+    );
+  }
+  async linkPromiseThreads(
+    owner: string,
+    groups?: readonly VerifiedContactGroup[],
+    cosine?: ActionCosine,
+    only?: readonly string[],
+  ): Promise<ThreadRow[]> {
+    return (await this.linkBatch(owner, groups, cosine, only)).rows;
+  }
+  /**
+   * One bounded link pass under the owner lock: SQL scoped to open obligations, a 2 s budget, and a
+   * savepoint so a slow or failing link adds no thread without undoing the caller's work.
+   */
+  async linkBatch(
+    owner: string,
+    groups?: readonly VerifiedContactGroup[],
+    cosine?: ActionCosine,
+    only?: readonly string[],
+  ): Promise<{ rows: ThreadRow[]; outcome: "ok" | "timed_out" }> {
+    this.owner(owner);
+    const remembered = groups ?? this.threadGroups;
+    return this.run(async (s) => {
+      await s.q("SAVEPOINT promise_link");
+      try {
+        await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+        const rows = await s.linkWithin(
+          owner,
+          remembered,
+          cosine,
+          only,
+          Date.now() + OUTREACH_READ_BUDGET_MS,
+        );
+        await s.q("SET LOCAL statement_timeout TO DEFAULT");
+        await s.q("RELEASE SAVEPOINT promise_link");
+        return { rows, outcome: "ok" as const };
+      } catch (error) {
+        await s.q("ROLLBACK TO SAVEPOINT promise_link");
+        await s.q("RELEASE SAVEPOINT promise_link");
+        // Only the time budget is absorbed (the backfill retries it); any other error is a bug and surfaces.
+        if ((error as { code?: unknown } | null)?.code !== "57014") throw error;
+        return { rows: [], outcome: "timed_out" as const };
+      }
+    });
+  }
+  /** Read only: open, valid obligations in no thread yet, for the operator backfill. */
+  async unlinkedOpenIds(owner: string): Promise<string[]> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+      try {
+        return (
+          await s.q<{ commitment_id: string }>(
+            "SELECT o.commitment_id FROM live_obligations o WHERE o.owner_id=$1 AND o.status IN ('pending','confirmed') AND o.evidence_valid AND NOT EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id) ORDER BY o.commitment_id",
+            [owner],
+          )
+        ).map((r) => r.commitment_id);
+      } finally {
+        await s.q("SET LOCAL statement_timeout TO DEFAULT").catch(() => {});
+      }
+    });
+  }
+  private async linkWithin(
+    owner: string,
+    remembered: readonly VerifiedContactGroup[],
+    cosine: ActionCosine | undefined,
+    only: readonly string[] | undefined,
+    deadline: number,
+  ): Promise<ThreadRow[]> {
+    // statement_timeout bounds each statement; this bounds the whole link to the same budget.
+    const due = (): void => {
+      if (Date.now() > deadline)
+        throw Object.assign(new Error("promise link budget"), {
+          code: "57014",
+        });
+    };
+    // Open obligations plus current thread members: closed ones never link, so they are not read.
+    const commitments = await this.q<Commitment & QueryResultRow>(
+        "SELECT o.* FROM live_obligations o WHERE o.owner_id=$1 AND (o.status IN ('pending','confirmed') OR EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=o.owner_id AND m.commitment_id=o.commitment_id)) ORDER BY o.commitment_id",
         [owner],
       ),
+      keys = commitments.map((c) => c.record_key),
+      times = keys.length
+        ? await this.q<{ record_key: string; occurred_at: string }>(
+            "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
+            [owner, keys],
+          )
+        : [];
+    due();
+    const added = linkThreads({
+      commitments,
+      occurredAt: new Map(
+        times.map((r) => [r.record_key, String(r.occurred_at)]),
+      ),
+      rows: await this.threadRows(owner),
+      overrides: await this.q<ThreadOverride & QueryResultRow>(
+        "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=$1 ORDER BY commitment_id,other_commitment_id",
+        [owner],
+      ),
+      groups: remembered,
+      ...(cosine ? { cosine } : {}),
+      ...(only ? { only } : {}),
+      now: this.clock(),
+    });
+    const created = new Set(
+      (await this.threadRows(owner)).map((r) => r.thread_id),
+    );
+    due();
+    // Plain inserts: a conflict would mean a reused thread id or a double placement, which is a bug.
+    for (const row of added) {
+      due();
+      if (!created.has(row.thread_id)) {
+        await this.q("INSERT INTO commitment_threads VALUES($1,$2,$3)", [
+          owner,
+          row.thread_id,
+          row.created_at,
+        ]);
+        created.add(row.thread_id);
+      }
+      await this.q(
+        "INSERT INTO commitment_thread_members VALUES($1,$2,$3,$4,$5,$6)",
+        [
+          owner,
+          row.thread_id,
+          row.commitment_id,
+          row.linked_by,
+          row.similarity,
+          row.created_at,
+        ],
+      );
+    }
+    return added;
+  }
+  private async separateCommitment(owner: string, id: string): Promise<void> {
+    const split = separateFromThread(await this.threadRows(owner), id),
+      at = this.clock().toISOString();
+    for (const o of split.overrides)
+      await this.q(
+        "INSERT INTO commitment_thread_overrides VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        [owner, o.commitment_id, o.other_commitment_id, at],
+      );
+    await this.q(
+      "DELETE FROM commitment_thread_members WHERE owner_id=$1 AND commitment_id=ANY($2::text[])",
+      [owner, split.remove],
+    );
+    await this.q(
+      "DELETE FROM commitment_threads t WHERE owner_id=$1 AND NOT EXISTS(SELECT 1 FROM commitment_thread_members m WHERE m.owner_id=t.owner_id AND m.thread_id=t.thread_id)",
+      [owner],
     );
   }
   private async put(c: Commitment): Promise<void> {
@@ -1712,6 +1904,8 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
   }
   async addCandidate(raw: RawRecord, input: unknown): Promise<Commitment> {
     this.owner(raw.owner_id);
+    // Transaction stores are fresh instances, so the groups are carried in from this one.
+    const groups = this.threadGroups;
     return this.run(async (s) => {
       const normalized = normalizeLiveRecord(
           raw,
@@ -1747,6 +1941,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
         evidence_valid: true,
       };
       await s.put(c);
+      await s.linkPromiseThreads(raw.owner_id, groups, undefined, [id]);
       return c;
     });
   }
@@ -2006,7 +2201,9 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
       const expected =
         cmd === "/confirm"
           ? 3
-          : ["/draft", "/done", "/cancel", "/dismiss"].includes(cmd ?? "")
+          : ["/draft", "/done", "/cancel", "/dismiss", "/separate"].includes(
+                cmd ?? "",
+              )
             ? 2
             : 1;
       if (
@@ -2035,7 +2232,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
           counts: await s.counts(owner),
           unavailable_record_count: await s.quarantineCount(owner),
           extraction_review_count: await s.extractionReviewCount(owner),
-          unverified_commitment_count: (await s.commitments(owner)).filter(
+          unverified_commitment_count: (await s.promises(owner)).filter(
             (c) => !c.evidence_valid,
           ).length,
         };
@@ -2083,7 +2280,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
                   }
                 : {}),
             })),
-          commitments: (await s.commitments(owner)).filter(
+          commitments: (await s.promises(owner)).filter(
             (c) => c.contact_id === contact.contact_id,
           ),
           coverage: await s.sourceStatus(owner),
@@ -2093,7 +2290,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
       }
       if (cmd === "/today") {
         const window = calendarWindow(exampleLivePolicy, s.clock()),
-          commitments = await s.commitments(owner);
+          commitments = await s.promises(owner);
         return {
           outbound_sent: false,
           mode,
@@ -2127,10 +2324,15 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
           coverage: await s.sourceStatus(owner),
         };
       }
-      const c = (await s.commitments(owner)).find(
-        (c) => c.commitment_id === id,
-      );
+      const all = await s.commitments(owner),
+        c = all.find((c) => c.commitment_id === id);
       if (!c) throw new Error("unknown commitment");
+      const members = threadMembers(all, c.commitment_id);
+      if (cmd === "/separate") {
+        if (members.length < 2) throw new Error("invalid transition");
+        await s.separateCommitment(owner, c.commitment_id);
+        return { outbound_sent: false, separated: c.commitment_id };
+      }
       if (cmd === "/draft") {
         if (c.status !== "confirmed" || !c.evidence_valid)
           throw new Error("unconfirmed or unavailable evidence for draft");
@@ -2148,29 +2350,75 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
           throw new Error("explicit valid date required");
         if (!c.evidence_valid)
           throw new Error("invalid transition: evidence unavailable");
-        if (c.status === "confirmed" && c.due_date === date)
+        // Confirming any sighting of a thread confirms and links every pending sighting once.
+        const pending = members.filter(
+          (m) => m.status === "pending" && m.evidence_valid,
+        );
+        if (c.status === "confirmed" && c.due_date === date && !pending.length)
           return { outbound_sent: false, ...c };
-        if (c.status !== "pending" || !c.evidence_valid)
+        if (
+          c.status !== "pending" &&
+          !(c.status === "confirmed" && pending.length)
+        )
           throw new Error("invalid transition");
-        const next = { ...c, status: "confirmed", due_date: date };
-        await s.put(next);
-        return { outbound_sent: false, ...next };
+        for (const m of pending)
+          await s.put(
+            withoutThread({ ...m, status: "confirmed", due_date: date }),
+          );
+        if (members.length > 1)
+          await s.q(
+            "UPDATE commitment_thread_members SET linked_by='owner' WHERE owner_id=$1 AND thread_id=$2",
+            [owner, c.thread_id],
+          );
+        const next =
+          c.status === "pending"
+            ? { ...c, status: "confirmed", due_date: date }
+            : c;
+        return {
+          outbound_sent: false,
+          ...next,
+          ...(members.length > 1 ? { linked: members.length } : {}),
+        };
       }
       if (cmd === "/dismiss") {
         if (c.status === "dismissed") return { outbound_sent: false, ...c };
         if (c.status !== "pending") throw new Error("invalid transition");
-        const next = { ...c, status: "dismissed" };
-        await s.put(next);
-        return { outbound_sent: false, ...next };
+        for (const m of members.filter((m) => m.status === "pending"))
+          await s.put(withoutThread({ ...m, status: "dismissed" }));
+        return { outbound_sent: false, ...c, status: "dismissed" };
       }
       const target =
         cmd === "/done" ? "done" : cmd === "/cancel" ? "cancelled" : null;
       if (!target) throw new Error("unsupported command");
       if (c.status === target) return { outbound_sent: false, ...c };
       if (c.status !== "confirmed") throw new Error("invalid transition");
-      const next = { ...c, status: target };
-      await s.put(next);
-      return { outbound_sent: false, ...next };
+      // The promise is closed once, on every channel it was seen on.
+      for (const m of members.filter(
+        // Pending sightings close too, but never one whose evidence changed (same rule as /confirm).
+        (m) =>
+          m.status === "confirmed" ||
+          (m.status === "pending" && m.evidence_valid !== false),
+      ))
+        await s.put(withoutThread({ ...m, status: target }));
+      return { outbound_sent: false, ...c, status: target };
+    });
+  }
+  /** One commitment per promise thread, for counts and lists. */
+  async promises(owner: string): Promise<ThreadedCommitment[]> {
+    this.owner(owner);
+    return this.run(async (s) => {
+      const all = await s.commitments(owner),
+        keys = all.map((c) => c.record_key),
+        times = keys.length
+          ? await s.q<{ record_key: string; occurred_at: string }>(
+              "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
+              [owner, keys],
+            )
+          : [];
+      return onePerThread(
+        all,
+        new Map(times.map((r) => [r.record_key, String(r.occurred_at)])),
+      );
     });
   }
 }

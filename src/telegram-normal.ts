@@ -1,4 +1,5 @@
 import { eligibleRecords as eligible } from "./record-eligibility.ts";
+import { onePerThread } from "./promise-threads.ts";
 import type {
   AuthCommand,
   Commitment,
@@ -407,14 +408,16 @@ export async function prepareNormalReply(input: {
       ...(await store.command({ ...auth, text: "/status" })),
       normal_message: "Current imported source status.",
     });
+  // A promise seen on several channels is one promise in every briefing.
+  const threaded = onePerThread(state.commitments);
   const promises = {
-    commitments: state.commitments.filter(
+    commitments: threaded.filter(
       (c) =>
         c.owner_id === auth.owner_id &&
         c.status === "confirmed" &&
         c.evidence_valid,
     ),
-    pending: state.commitments.filter(
+    pending: threaded.filter(
       (c) =>
         c.owner_id === auth.owner_id &&
         c.status === "pending" &&

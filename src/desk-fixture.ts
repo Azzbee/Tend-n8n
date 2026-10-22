@@ -97,6 +97,14 @@ export const deskFixtureRecords: LiveRecord[] = [
     "linkedin:fictional-mira",
     "2026-10-13T08:10:00Z",
   ),
+  // Same person, same direction, different ask: stays its own promise next to the g1 + li1 thread.
+  record(
+    "whatsapp_personal",
+    "wp2",
+    "I will share the pilot checklist by 2026-10-20.",
+    "+00000000017",
+    "2026-10-13T08:15:00Z",
+  ),
   record(
     "gmail",
     "g-injection",
@@ -158,38 +166,34 @@ export function createDeskFixtureStore(
             .replace(".000Z", "Z"),
         }
       : raw;
-  for (const raw of deskFixtureRecords.map(meeting)) {
-    const stored = store.ingest(raw);
-    if (!raw.body_text.startsWith("I will")) continue;
-    store.markExtractionAttempt(owner, stored.record_key, stored.content_hash);
-    const due = /\d{4}-\d{2}-\d{2}/.exec(raw.body_text)![0];
-    store.addCandidate(raw, {
-      quote: raw.body_text,
-      action: raw.body_text.includes("review")
-        ? "review your demo"
-        : "send the demo",
-      suggested_due: due,
-    });
-  }
   const auth = {
     owner_id: owner,
     user_id: "live-owner",
     chat_id: "live-private",
     chat_type: "private",
   };
-  const emails = new Set(
-    store
-      .interactions(owner)
-      .filter((r) => r.source === "gmail")
-      .map((r) => r.record_key),
-  );
-  // Email promises g1 and g2 start confirmed; LinkedIn li1 stays pending for review.
-  for (const c of store.commitments(owner))
-    if (emails.has(c.record_key))
+  // Records arrive in time order. Email promises g1 and g2 are confirmed as they arrive, so LinkedIn li1
+  // (the same ask as g1) joins g1's thread as a new pending sighting; WhatsApp wp2 is a different ask.
+  for (const raw of deskFixtureRecords.map(meeting)) {
+    const stored = store.ingest(raw);
+    if (!raw.body_text.startsWith("I will")) continue;
+    store.markExtractionAttempt(owner, stored.record_key, stored.content_hash);
+    const due = /\d{4}-\d{2}-\d{2}/.exec(raw.body_text)![0];
+    const candidate = store.addCandidate(raw, {
+      quote: raw.body_text,
+      action: raw.body_text.includes("review")
+        ? "review your demo"
+        : raw.body_text.includes("checklist")
+          ? "share the pilot checklist"
+          : "send the demo",
+      suggested_due: due,
+    });
+    if (raw.source === "gmail")
       store.command({
         ...auth,
-        text: `/confirm ${c.commitment_id} ${c.suggested_due}`,
+        text: `/confirm ${candidate.commitment_id} ${due}`,
       });
+  }
   return store;
 }
 export const deskFixtureFailures: DeskFailure[] = [

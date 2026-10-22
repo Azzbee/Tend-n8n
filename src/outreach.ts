@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Commitment, Contact, NormalizedRecord } from "./engine.ts";
 import { isInstructionLike } from "./instruction-like.ts";
+import type { ThreadedCommitment } from "./promise-threads.ts";
 
 // Pure outreach rules: no I/O, so the planner, quiet hours, rate limit,
 // recipient check and draft validation are testable on plain data.
@@ -252,10 +253,14 @@ export function planOutreach(
       fallback_text: fallbackDraft(reason, contact.name, quote),
     });
   };
+  const threadLead = threadRepresentatives(snapshot.commitments, byKey, prior);
   for (const c of snapshot.commitments) {
     if (c.status !== "confirmed" || !c.evidence_valid || !c.due_date) continue;
     const record = byKey.get(c.record_key);
     if (!record || record.cancelled) continue;
+    // One follow-up per promise thread: the member that already has one, else its earliest confirmed sighting.
+    const thread = (c as ThreadedCommitment).thread_id;
+    if (thread && threadLead.get(thread) !== c.commitment_id) continue;
     if (c.direction === "owed_to_me" && c.due_date < today)
       add("overdue_owed_to_you", c.commitment_id, record, c.quote);
     if (
@@ -511,4 +516,43 @@ export function outreachWindow(
           ? Date.parse(r.end_at)
           : Date.parse(r.occurred_at) + MEETING_DEFAULT_MS) >= meetingSince),
   );
+}
+
+/**
+ * The member that keys each promise thread's follow-up. A member that already has an item keeps the
+ * lead, so an older sighting confirmed later never starts a second follow-up; otherwise the earliest
+ * confirmed, valid sighting leads.
+ */
+function threadRepresentatives(
+  commitments: readonly Commitment[],
+  byKey: ReadonlyMap<string, NormalizedRecord>,
+  prior: readonly { item_key: string }[],
+): Map<string, string> {
+  const proposed = new Set(
+    prior
+      .filter(
+        (p) =>
+          p.item_key.startsWith("overdue_owed_to_you:") ||
+          p.item_key.startsWith("you_owe_soon:"),
+      )
+      .map((p) => p.item_key.split(":")[1]),
+  );
+  const lead = new Map<string, { id: string; at: string }>();
+  for (const c of commitments as readonly ThreadedCommitment[]) {
+    const record = byKey.get(c.record_key);
+    if (
+      !c.thread_id ||
+      c.status !== "confirmed" ||
+      !c.evidence_valid ||
+      !record ||
+      record.cancelled
+    )
+      continue;
+    // A member with an earlier item sorts first ("0") whatever its date.
+    const at = `${proposed.has(c.commitment_id) ? "0" : "1"}|${record.occurred_at}|${c.commitment_id}`;
+    const current = lead.get(c.thread_id);
+    if (!current || at < current.at)
+      lead.set(c.thread_id, { id: c.commitment_id, at });
+  }
+  return new Map([...lead].map(([thread, v]) => [thread, v.id]));
 }

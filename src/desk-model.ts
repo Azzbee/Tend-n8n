@@ -6,6 +6,7 @@ import type {
   SourceState,
 } from "./engine.ts";
 import { isInstructionLike } from "./instruction-like.ts";
+import { collapseThreads, type ThreadedCommitment } from "./promise-threads.ts";
 
 export interface DeskItem {
   commitment_id: string;
@@ -20,6 +21,20 @@ export interface DeskItem {
   source: Source;
   record_id: string;
   occurred_at: string | null;
+  evidence_valid: boolean;
+  /** Set when the same ask was seen on more than one channel; actions on any member act on all. */
+  thread_id: string | null;
+  /** Every sighting of this promise, each quoted exactly with its own reference and validity. */
+  sources: DeskSource[];
+}
+export interface DeskSource {
+  commitment_id: string;
+  source: Source;
+  record_id: string;
+  reference: string | null;
+  quote: string;
+  occurred_at: string | null;
+  status: string;
   evidence_valid: boolean;
 }
 export interface DeskRecordLine {
@@ -144,7 +159,7 @@ export function confirmDefaultDate(item: Pick<DeskItem, "suggested_due">) {
 }
 
 export function buildDeskSnapshot(input: {
-  commitments: Commitment[];
+  commitments: ThreadedCommitment[];
   records: NormalizedRecord[];
   contacts: Pick<Contact, "contact_id" | "name">[];
   sources: SourceState[];
@@ -162,7 +177,24 @@ export function buildDeskSnapshot(input: {
   const byKey = new Map(records.map((r) => [r.record_key, r]));
   const names = new Map(input.contacts.map((c) => [c.contact_id, c.name]));
   const name = (id: string): string => names.get(id) ?? id;
-  const item = (c: Commitment): DeskItem => {
+  const sighting = (c: Commitment): DeskSource => {
+    const record = byKey.get(c.record_key);
+    return {
+      commitment_id: c.commitment_id,
+      source: c.source,
+      record_id: record?.source_record_id ?? c.record_key,
+      reference: record?.evidence_reference ?? null,
+      quote: c.quote,
+      occurred_at: record?.occurred_at ?? null,
+      status: c.status,
+      evidence_valid: c.evidence_valid !== false,
+    };
+  };
+  const item = (
+    c: Commitment,
+    thread_id: string | null = null,
+    members: Commitment[] = [c],
+  ): DeskItem => {
     const record = byKey.get(c.record_key);
     return {
       commitment_id: c.commitment_id,
@@ -178,6 +210,8 @@ export function buildDeskSnapshot(input: {
       record_id: record?.source_record_id ?? c.record_key,
       occurred_at: record?.occurred_at ?? null,
       evidence_valid: c.evidence_valid !== false,
+      thread_id,
+      sources: members.map(sighting),
     };
   };
   const byDue = (a: DeskItem, b: DeskItem): number =>
@@ -195,11 +229,13 @@ export function buildDeskSnapshot(input: {
   const open = input.commitments.filter(
     (c) => !closed.has(c.status) && !heldKeys.has(c.record_key),
   );
-  const confirmed = open.filter((c) => c.status === "confirmed").map(item);
-  const pending = open
-    .filter((c) => c.status === "pending")
-    .map(item)
-    .sort(byDue);
+  // One card per promise thread: the same ask seen on several channels is counted once.
+  const promises = collapseThreads(
+    open,
+    new Map(records.map((r) => [r.record_key, r.occurred_at])),
+  ).map((t) => item(t.primary, t.thread_id, t.members));
+  const confirmed = promises.filter((c) => c.status === "confirmed");
+  const pending = promises.filter((c) => c.status === "pending").sort(byDue);
   const linked = new Map(input.commitments.map((c) => [c.record_key, c]));
   const line = (r: NormalizedRecord, reason: string): DeskRecordLine => ({
     record_id: r.source_record_id,

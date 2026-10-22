@@ -86,6 +86,14 @@ export function itemMeta(item: DeskItem): string {
     item.record_id,
   ].join(" · ");
 }
+/** "Seen on Email and LinkedIn": every channel the same ask came through, in source order. */
+export function seenOn(item: Pick<DeskItem, "sources">): string | null {
+  const names = [...new Set(item.sources.map((s) => sourceName(s.source)))];
+  if (item.sources.length < 2) return null;
+  return names.length < 2
+    ? `Seen ${item.sources.length} times on ${names[0]}`
+    : `Seen on ${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
 const statusLabels: Record<string, string> = {
   confirmed: "Confirmed",
   pending: "Pending",
@@ -261,6 +269,82 @@ export function mountDesk(ctx: DeskContext): DeskController {
   function quote(text: string, className = "quote"): HTMLElement {
     return el("blockquote", `“${text}”`, className);
   }
+  // Each sighting of a threaded promise keeps its exact quote, reference and validity.
+  function sightings(item: DeskItem): HTMLElement[] {
+    const label = seenOn(item);
+    if (!label) return [quote(item.quote), el("p", itemMeta(item), "meta")];
+    const list = el("ul", undefined, "sightings");
+    item.sources.forEach((source, index) => {
+      const row = el("li", undefined, "sighting");
+      row.append(
+        quote(source.quote),
+        el(
+          "p",
+          [
+            sourceName(source.source),
+            item.direction === "owed_by_me"
+              ? "you wrote"
+              : `${item.contact_name} wrote`,
+            source.occurred_at
+              ? parisMoment(source.occurred_at)
+              : "date unavailable",
+            source.record_id,
+            ...(source.reference ? [source.reference] : []),
+          ].join(" · "),
+          "meta",
+        ),
+      );
+      if (!source.evidence_valid)
+        row.append(
+          el(
+            "p",
+            "Source changed. This quote no longer matches its message and is not counted.",
+            "warn",
+          ),
+        );
+      const tools: HTMLButtonElement[] = [];
+      if (
+        item.status === "confirmed" &&
+        source.status === "pending" &&
+        source.evidence_valid &&
+        item.due_date
+      ) {
+        row.prepend(el("p", "NOT LINKED YET", "kicker waiting"));
+        tools.push(
+          button(
+            "Confirm and link",
+            "primary",
+            () =>
+              void act(
+                "desk/confirm",
+                { id: source.commitment_id, due_date: item.due_date },
+                "Linked to the confirmed promise. Only your private ledger changed. Nothing was sent.",
+              ),
+          ),
+        );
+      }
+      if (index > 0)
+        tools.push(
+          button(
+            "Not the same ask",
+            "quiet",
+            () =>
+              void act(
+                "desk/separate",
+                { id: source.commitment_id },
+                "Kept separate. Tend will not link these two again.",
+              ),
+          ),
+        );
+      if (tools.length) {
+        const bar = el("div", undefined, "actions");
+        bar.append(...tools);
+        row.append(bar);
+      }
+      list.append(row);
+    });
+    return [el("p", label, "seen-on"), list];
+  }
   function card(item: DeskItem): HTMLElement {
     const pending = item.status === "pending";
     const node = el("article", undefined, pending ? "card pending" : "card");
@@ -283,8 +367,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       top,
       el("h3", deskItemTitle(item)),
       el("p", `${item.contact_name} · ${item.contact_id}`, "small"),
-      quote(item.quote),
-      el("p", itemMeta(item), "meta"),
+      ...sightings(item),
     );
     if (!item.evidence_valid)
       node.append(
@@ -309,7 +392,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
       input.value = confirmDefaultDate(item);
       input.required = true;
       const confirm = button(
-        "Confirm",
+        item.sources.length > 1 ? "Confirm and link" : "Confirm",
         "primary",
         () =>
           void act(
@@ -738,14 +821,18 @@ export function mountDesk(ctx: DeskContext): DeskController {
       el("dd", dueLabel(item.suggested_due)),
     );
     node.append(
-      el("p", itemMeta(item), "meta"),
-      el(
-        "p",
-        item.direction === "owed_by_me"
-          ? "You wrote"
-          : `${item.contact_name} wrote`,
-      ),
-      quote(item.quote, "quote large"),
+      ...(item.sources.length > 1
+        ? sightings(item)
+        : [
+            el("p", itemMeta(item), "meta"),
+            el(
+              "p",
+              item.direction === "owed_by_me"
+                ? "You wrote"
+                : `${item.contact_name} wrote`,
+            ),
+            quote(item.quote, "quote large"),
+          ]),
       facts,
     );
     if (!item.evidence_valid)
