@@ -183,3 +183,7 @@ Still open: M3 (the integration run and re-recorded evidence, held until the lea
 - **Gate.** Typecheck, lint, build (26 exports, no diff) and format pass. Unit tests (Postgres-named files excluded): 52 files, 1319 passed, 2 skipped. `tests/live-store-parity.test.ts` passes in full, including the new outreach test. Integration: 23 out of 23.
 
 Still open: "Gmail draft not confirmed" (Low, which the lead lists as a known limitation), L1 (Telegram `/dismiss`, still not in the guard), and L3 to L6.
+
+## Re-review 6: improve/lead at 0ae4214 (22 Oct, 11:40 Paris)
+
+Docs only. `Specification.txt` now says the pre-demo relink of 11/12 and the archive of 59 workflows were done on Adam's written instruction of 10:25, which replaced the after-14:00 rule for those two actions. 7 workflows marked "ask" were kept. I take this from the lead's message and the entry. Adam should confirm it in his own review of the lead's report; I have no record of that instruction in this session. The lead will list Lows (a) and (b), Telegram `/dismiss` and L3 to L6 in the final report as open items for after 14:00. There is no code change since 450591f, so the gate results of re-review 5 stand.
