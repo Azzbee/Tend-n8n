@@ -8,6 +8,7 @@ import {
   type VerifiedContactGroup,
 } from "./live-policy.ts";
 import { authoredSpans } from "./authored-promises.ts";
+import { isInstructionLike } from "./instruction-like.ts";
 
 export type LiveAIPurpose = "briefing" | "draft";
 export interface LiveAICitation {
@@ -111,6 +112,10 @@ function selected(
   const text =
     record.kind === "meeting" ? record.body_text : record.authored_text;
   if (!text?.trim() || bytes(text) > MAX_TEXT_BYTES) return null;
+  // Same rule as the Desk's Held back list and the outreach planner: such a
+  // message is never cited, quoted or sent to the model.
+  if (isInstructionLike(record.body_text) || isInstructionLike(text))
+    return null;
   return {
     record_key: record.record_key,
     content_hash: record.content_hash,

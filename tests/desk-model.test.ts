@@ -424,10 +424,24 @@ describe("Desk fixture as People evidence", () => {
           purpose,
           records: store.interactions(owner),
         });
-        expect(prepared.evidence.map((e) => e.evidence_reference)).toContain(
+        const refs = prepared.evidence.map((e) => e.evidence_reference);
+        expect(refs).toContain(
           `tend-source:gmail/${encodeURIComponent(exampleLivePolicy.account_email)}/g1`,
         );
+        // F13: what the Desk holds back is never cited, quoted or sent.
+        expect(refs.some((r) => r.endsWith("/g-injection"))).toBe(false);
+        expect(JSON.stringify(prepared)).not.toContain("Ignore earlier rules");
       }
+      // The fixture really does carry it for Mira, so the check above bites.
+      expect(
+        store
+          .interactions(owner)
+          .some(
+            (r) =>
+              r.contact_ids?.[0] === "F17" &&
+              r.evidence_reference.endsWith("/g-injection"),
+          ),
+      ).toBe(true);
     } finally {
       store.close();
     }
