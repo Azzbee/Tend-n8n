@@ -97,4 +97,8 @@ Failing scenario: Adam types `/dismiss c-123` in the control chat; the guard map
 
 ## Fix commits on review/codex for the lead to cherry-pick
 
-See `git log improve/lead..review/codex`. Each fix is its own commit with a test.
+Each is a separate commit; the test in each fails without the fix (checked by reverting the source change).
+
+- `d1d09c1` H1: gmail.compose-only custom scopes in the re-consent steps and the workflow 26 node note; test in `tests/outreach-workflows.test.ts`.
+- `430c2c3` M2: shared `src/instruction-like.ts` for the Desk and the planner; test in `tests/desk-model.test.ts`.
+- `0fee381` L2: Specification export count (21 → 26). The outreach-status error-workflow line is fixed inside `d1d09c1`.
