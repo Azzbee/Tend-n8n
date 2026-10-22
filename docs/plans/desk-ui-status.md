@@ -53,6 +53,14 @@ No other wiring is needed: the Desk reads `store.commitments/interactions/contac
 - 1440 px: real 1440 px window. 390 px: Chrome would not shrink below 606 px and headless Chrome is blocked by the sandbox, so the body was constrained to 390 px inside the 606 px window. No CSS breakpoint lies between 390 and 606, so the same rules apply as on a phone.
 - Screenshots (fictional data only): `.scratch/screens/desk/` (`390-*`, `1440-desk`, `1710-*` from the first maximized window).
 
+## End to end on the merged stack (10:45)
+
+`088db62` merges improve/lead (which already contains improve/outreach) into this branch. `src/desk-dev-server.ts` now serves the Desk through the production `createLiveServer` with `createPrivateOutreach` on an in-memory ledger (`OUTREACH_ENABLED=false`) and the fictional Mira Tan store. `.scratch/desk-e2e.mjs 18797` drives it with its own cookie jar: 15 of 15 checks pass. Covered: desk groups and held back; error handler connected; outreach drafts from the real planner; a placeholder draft refused with its reason; edit, then approve, then withdraw (final); a dash refused; unknown draft refused; confirm, done and a refused dismiss; both lanes on How it runs (26 workflows); 401 after logout. Approvals expire when their evidence changes, as the outreach service intends, and the Desk shows them as Expired.
+
+`30e486a` adds workflows 22 to 26 to How it runs, with a test that fails if the catalog and `workflows/` drift apart.
+
+Chrome note for parallel testers: session cookies are scoped by host, not port, so two previews on 127.0.0.1 in one Chrome profile log each other out. Take turns.
+
 ## Open items
 
 - Cross-vendor review: `codex exec` cannot start in this sandbox ("failed to initialize in-process app-server client"). A fresh-context Claude review ran instead and returned BLOCK on one issue: an action in flight during lock re-rendered private Desk text into the hidden page. Fixed in `cdaa49b` with a regression test that fails on the old client. Its nits were also fixed: aborting superseded loads, re-enabling buttons after a failed reload, focus after actions and review steps, held-back candidates kept off promise lists, meeting times compared as instants, validated run statuses, a held-back total, expiry gating and a second click on Withdraw, and lock resetting section titles. Not done: moving focus when switching to People (the People view keeps its existing behaviour). Run `/codex:review` before merging to main.
