@@ -10,22 +10,22 @@ Tend is a set of n8n workflows plus a small local API. The workflows read messag
 
 ## Workflows at a glance
 
-| Lane | Workflows | What they do |
-|---|---|---|
-| Classroom (fictional data, safe to demo) | 01-05 | Source adapters (Gmail, Calendar, WhatsApp personal and business, LinkedIn) |
-| | 06 | Sub-workflow called with Execute Workflow: normalize and store |
-| | 07 | Local AI extraction (LLM Chain with a written system prompt), output validated against the exact quote and date |
-| | 08 | Command router (If branch) and briefing |
-| | 09 | Retry fixture: synthetic 429, bounded retries |
-| | 21 | Error workflow (Error Trigger) for 01-09 |
-| | 23, 24 | Outreach planner and Gmail drafts (mock Gmail) |
-| Private (owner's own accounts, saves no execution data) | 10, 14 | Telegram owner control (message trigger) |
-| | 11, 12, 13 | Read-only Gmail and Calendar sync, normalize and store |
-| | 15, 16 | Local AI extraction and cited briefing or draft |
-| | 17, 18, 19 | WhatsApp personal, LinkedIn, WhatsApp business read pages |
-| | 20 | Daily briefing at 09:00 Europe/Paris |
-| | 22 | Error workflow for the private lane |
-| | 25, 26 | Outreach planner and approved Gmail draft (drafts.create only) |
+| Lane                                                    | Workflows  | What they do                                                                                                    |
+| ------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| Classroom (fictional data, safe to demo)                | 01-05      | Source adapters (Gmail, Calendar, WhatsApp personal and business, LinkedIn)                                     |
+|                                                         | 06         | Sub-workflow called with Execute Workflow: normalize and store                                                  |
+|                                                         | 07         | Local AI extraction (LLM Chain with a written system prompt), output validated against the exact quote and date |
+|                                                         | 08         | Command router (If branch) and briefing                                                                         |
+|                                                         | 09         | Retry fixture: synthetic 429, bounded retries                                                                   |
+|                                                         | 21         | Error workflow (Error Trigger) for 01-09                                                                        |
+|                                                         | 23, 24     | Outreach planner and Gmail drafts (mock Gmail)                                                                  |
+| Private (owner's own accounts, saves no execution data) | 10, 14     | Telegram owner control (message trigger)                                                                        |
+|                                                         | 11, 12, 13 | Read-only Gmail and Calendar sync, normalize and store                                                          |
+|                                                         | 15, 16     | Local AI extraction and cited briefing or draft                                                                 |
+|                                                         | 17, 18, 19 | WhatsApp personal, LinkedIn, WhatsApp business read pages                                                       |
+|                                                         | 20         | Daily briefing at 09:00 Europe/Paris                                                                            |
+|                                                         | 22         | Error workflow for the private lane                                                                             |
+|                                                         | 25, 26     | Outreach planner and approved Gmail draft (drafts.create only)                                                  |
 
 ## Run it from a fresh clone
 
@@ -41,25 +41,25 @@ docker compose exec n8n n8n import:workflow --separate --input=/workflows
 
 Open http://localhost:5678, create the owner account, then create the credentials the workflows reference (placeholders named `CONFIGURE_...` in the JSON):
 
-| Credential in n8n | Used by | Notes |
-|---|---|---|
-| Header Auth | private workflows 11-20, 22, 25, 26 (calls to the Tend API) | `Authorization: Bearer <key>`; the key is set once on the local setup page |
-| Ollama | 07, 15, 16 | Local Ollama at `http://host.docker.internal:11434` |
-| Telegram API | 10, 14, 16, 20 | Bot token from BotFather; owner chat only |
-| Gmail OAuth2 API (read-only) | 11, 12 | Google app in Testing mode |
-| Google Calendar OAuth2 API | 12 | read-only |
-| Gmail OAuth2 API "Gmail drafts (compose only)" | 26 | Custom Scopes on, Enabled Scopes exactly `https://www.googleapis.com/auth/gmail.compose` |
+| Credential in n8n                              | Used by                                                     | Notes                                                                                    |
+| ---------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Header Auth                                    | private workflows 11-20, 22, 25, 26 (calls to the Tend API) | `Authorization: Bearer <key>`; the key is set once on the local setup page               |
+| Ollama                                         | 07, 15, 16                                                  | Local Ollama at `http://host.docker.internal:11434`                                      |
+| Telegram API                                   | 10, 14, 16, 20                                              | Bot token from BotFather; owner chat only                                                |
+| Gmail OAuth2 API (read-only)                   | 11, 12                                                      | Google app in Testing mode                                                               |
+| Google Calendar OAuth2 API                     | 12                                                          | read-only                                                                                |
+| Gmail OAuth2 API "Gmail drafts (compose only)" | 26                                                          | Custom Scopes on, Enabled Scopes exactly `https://www.googleapis.com/auth/gmail.compose` |
 
 Workflows and data live in the named volumes `tend_n8n_data` and `tend_postgres_data`, so `docker compose down` then `docker compose up -d` keeps everything.
 
 ### Environment variables (`.env`)
 
-| Variable | Purpose |
-|---|---|
+| Variable                                            | Purpose                                                     |
+| --------------------------------------------------- | ----------------------------------------------------------- |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Database n8n uses for workflows, credentials and executions |
-| `N8N_ENCRYPTION_KEY` | Encrypts stored credentials; keep it safe |
-| `N8N_PORT` | Host port for the editor (default 5678) |
-| `GENERIC_TIMEZONE` | Schedules run in this time zone (default Europe/Paris) |
+| `N8N_ENCRYPTION_KEY`                                | Encrypts stored credentials; keep it safe                   |
+| `N8N_PORT`                                          | Host port for the editor (default 5678)                     |
+| `GENERIC_TIMEZONE`                                  | Schedules run in this time zone (default Europe/Paris)      |
 
 The Tend API also reads `OUTREACH_ENABLED` (default `false`: approvals never create Gmail drafts).
 
@@ -78,6 +78,7 @@ bun run integration           # imports the workflows into a throwaway n8n conta
 ```
 
 Manual checks in the editor:
+
 - Triggers fire on demand: classroom workflows 01-09 start from a Manual Trigger, and the private syncs 11, 12 and 15 have a Manual Trigger next to their schedule. Open one and click **Execute workflow**.
 - Unknown or malformed commands to the bot return the usage message (`/help`).
 - Workflow 09 shows bounded retries recovering on attempt three.
