@@ -175,6 +175,39 @@ describe("model output boundary and explicit state", () => {
       store.command({ ...demoAuth, text: `/cancel ${c.commitment_id}` }),
     ).toThrow("transition");
   });
+  it("dismisses only a pending candidate, idempotently, without sending", () => {
+    const r = fixtureRecords[0]!;
+    store.ingest(r);
+    const c = store.addCandidate(r, proposed);
+    const dismiss = { ...demoAuth, text: `/dismiss ${c.commitment_id}` };
+    const first = store.command(dismiss);
+    expect(first).toMatchObject({ status: "dismissed", outbound_sent: false });
+    expect(store.command(dismiss)).toHaveProperty("status", "dismissed");
+    expect(() =>
+      store.command({
+        ...demoAuth,
+        text: `/confirm ${c.commitment_id} 2026-10-15`,
+      }),
+    ).toThrow("transition");
+    expect(() =>
+      store.command({ ...demoAuth, text: `/dismiss ${c.commitment_id} extra` }),
+    ).toThrow("arguments");
+    expect(() =>
+      store.command({ ...demoAuth, owner_id: "intruder", text: dismiss.text }),
+    ).toThrow();
+  });
+  it("refuses to dismiss a confirmed promise", () => {
+    const r = fixtureRecords[0]!;
+    store.ingest(r);
+    const c = store.addCandidate(r, proposed);
+    store.command({
+      ...demoAuth,
+      text: `/confirm ${c.commitment_id} 2026-10-15`,
+    });
+    expect(() =>
+      store.command({ ...demoAuth, text: `/dismiss ${c.commitment_id}` }),
+    ).toThrow("invalid transition");
+  });
   it("asks the contact for progress only on an incoming promise", () => {
     const record = fixtureRecords[0]!;
     store.ingest(record);

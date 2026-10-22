@@ -1191,6 +1191,7 @@ export class TendStore {
           status: [
             "done",
             "cancelled",
+            "dismissed",
             ...(this.mode === "live" ? ["confirmed"] : []),
           ].includes(candidate.status)
             ? candidate.status
@@ -1695,6 +1696,7 @@ export class TendStore {
         status: [
           "done",
           "cancelled",
+          "dismissed",
           ...(this.mode === "live" ? ["confirmed"] : []),
         ].includes(c.status)
           ? c.status
@@ -2701,6 +2703,7 @@ export class TendStore {
           status: [
             "done",
             "cancelled",
+            "dismissed",
             ...(this.mode === "live" ? ["confirmed"] : []),
           ].includes(c.status)
             ? c.status
@@ -2926,7 +2929,7 @@ export class TendStore {
     const expectedArgs =
       cmd === "/confirm"
         ? 3
-        : ["/draft", "/done", "/cancel"].includes(cmd ?? "")
+        : ["/draft", "/done", "/cancel", "/dismiss"].includes(cmd ?? "")
           ? 2
           : 1;
     if (
@@ -3091,6 +3094,13 @@ export class TendStore {
         return { outbound_sent: false, ...c };
       if (c.status !== "pending") throw new Error("invalid transition");
       const next = { ...c, status: "confirmed", due_date: date };
+      this.put(next);
+      return { outbound_sent: false, ...next };
+    }
+    if (cmd === "/dismiss") {
+      if (c.status === "dismissed") return { outbound_sent: false, ...c };
+      if (c.status !== "pending") throw new Error("invalid transition");
+      const next = { ...c, status: "dismissed" };
       this.put(next);
       return { outbound_sent: false, ...next };
     }
