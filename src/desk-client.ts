@@ -544,7 +544,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
                 void act(
                   "outreach/skip",
                   { id: item.id },
-                  "Skipped. Nothing was sent.",
+                  "Skipped. Nothing was sent. Tend will not propose this again for 3 days.",
                 ),
             ),
           );
@@ -572,12 +572,20 @@ export function mountDesk(ctx: DeskContext): DeskController {
                 void act(
                   "outreach/skip",
                   { id: item.id },
-                  "Approval withdrawn. Nothing was sent.",
+                  "Approval withdrawn. Nothing was sent. Tend will not propose this again for 3 days.",
                 ),
             ),
           );
         }
         node.append(row);
+        if (item.status === "approved")
+          node.append(
+            el(
+              "p",
+              "Withdrawing is final for this draft and Tend waits 3 days before proposing it again. Edit sends it back for your yes instead.",
+              "meta",
+            ),
+          );
         return node;
       }),
     );
