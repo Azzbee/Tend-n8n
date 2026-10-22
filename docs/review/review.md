@@ -154,3 +154,12 @@ Gate on the merged tree: typecheck, lint, build (26 exports, no diff) and format
 - Gate on the merged tree: typecheck, lint, build (26 exports, no diff) and format pass. Tests: 1315 passed, 16 skipped, 55 files; the same 2 sandbox Postgres files fail.
 
 Still open: M1 (duplicate Gmail drafts, the lead's next item), M3 (the integration run and re-recorded evidence, in progress), and L1, L3 to L6.
+
+## Re-review 4: improve/lead at 3ae99d6 (22 Oct, 11:15 Paris)
+
+- **M1 fixed (2317c16).** `approvedEmail` now sets `handed_at` and logs `handed_to_gmail`, and leaves out items already handed over. A failed receipt step therefore can no longer create the same Gmail draft every 10 minutes. A late receipt is still accepted, and `approve` clears the mark. The tests cover the single hand-off, the late receipt and a new hand-off after edit and re-approval.
+- **New, Low.** If drafts.create itself fails, the item stays "Approved" on the Desk until the 24 h window expires. Nothing tells the owner the draft never reached Gmail. The only retry is Edit, then Approve, because `approve` accepts only pending items. Suggested fix: in `view()`, flag an approved email with `handed_at` set and no receipt after one run interval as "Gmail draft not confirmed, check Gmail or approve again", and let Withdraw/Edit say so.
+- **Telegram /edit code fixed (3ae99d6).** The reply now ends with "Code xxxxxxxx.", and a vm test runs the reply code. It went into the shared reply code, so the live export 10 changes too. That is harmless: the live guard still strips the outreach commands, so the live lane never produces an `outreach_item`.
+- **Gate on the merged tree** (Postgres and Docker tests excluded at the lead's request, demo load): typecheck, lint, build (26 exports, no diff) and format pass. 52 files, 1315 passed, 2 skipped.
+
+Still open: M3 (the integration run and re-recorded evidence, held until the lead clears Docker use), the Low above, and L1, L3 to L6.
