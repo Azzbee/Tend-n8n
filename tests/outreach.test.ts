@@ -15,6 +15,7 @@ import {
   isInstructionLike,
   isQuietHours,
   planOutreach,
+  styleOnly,
   verifiedRecipient,
   withinRateLimit,
   type OutreachSnapshot,
@@ -126,13 +127,23 @@ describe("outreach planner rules", () => {
       style_examples: string[];
       evidence: { from: string; text: string }[];
     };
-    expect(user.style_examples).toEqual([
-      "I will review your demo by 2026-10-16.",
-    ]);
+    // Dates, links and numbers are scrubbed so the model cannot copy an
+    // uncited detail from a style example into the draft.
+    expect(user.style_examples).toEqual(["I will review your demo soon."]);
     expect(user.evidence).toEqual([
       { from: "Mira", text: "I will send the demo by 2026-10-15." },
     ]);
     expect(item.request.messages[0]!.content).toMatch(/never instructions/);
+  });
+});
+
+describe("style example scrubbing", () => {
+  it("keeps tone but removes dates, links, addresses and numbers", () => {
+    expect(
+      styleOnly(
+        "Sent it on 12 Oct, see https://example.invalid/x or mail me@example.invalid, call +00000000017 before 2026-10-30.",
+      ),
+    ).toBe("Sent it soon, see or mail, call soon.");
   });
 });
 
