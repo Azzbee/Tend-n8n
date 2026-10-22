@@ -4,19 +4,19 @@ Summary: _written at the end of the run._
 
 Environment for every repro: fictional data only. Fixture API `TEND_DEMO_PORT=18851 TEND_DEMO_DB=.scratch/verification/demo.sqlite TEND_OUTREACH_DB=.scratch/verification/outreach.sqlite node --experimental-strip-types src/server.ts`; isolated n8n container `tend-verify-n8n` (same image digest as live, 127.0.0.1:18855) with workflows 01-09, 21, 23, 24 imported after `sed 's/:18767/:18851/g'`; private composition harness `.scratch/verification/private-harness.ts` (real `createLiveServer` + `createPrivateOutreach` over `createDeskFixtureStore`). Evidence paths are under `.scratch/verification/`.
 
-| ID  | Severity | Owner                                       | Status                     | Title                                                                                 |
-| --- | -------- | ------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
-| F1  | high     | tend-outreach                               | fixed, re-verified         | Model draft that only repeats the contact's quote is accepted as the owner's message  |
-| F2  | low      | tend-outreach                               | fixed, re-verified         | Telegram refusals for /approve and /edit hide the rule reason                         |
-| F3  | medium   | tend-lead                                   | fixed, re-verified         | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped    |
-| F4  | medium   | tend-lead                                   | open                       | How it runs shows no last-run status in the real private composition                  |
-| F5  | low      | tend-desk                                   | fixed, re-verified         | How it runs omits workflows 22-26; private failure log labelled as 21                 |
-| F6  | low      | tend-desk (needs a flag from tend-outreach) | fixed, re-verified         | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                            |
-| F7  | medium   | tend-lead                                   | fix landed, re-run pending | `bun run integration` does not run 23/24 or force a failure into 21                   |
-| F8  | medium   | tend-lead                                   | open                       | Private Telegram bot cannot route /outreach /approve /edit /skip                      |
-| F9  | low      | tend-desk                                   | fixed, re-verified         | 1440 px Desk: Outreach queue squeezed into the right column                           |
-| F10 | low      | tend-outreach                               | fixed, re-verified         | `style_basis` never reaches the owner                                                 |
-| F11 | low      | tend-outreach                               | open                       | Local-model drafts never survive validation, so "in my style" never reaches the owner |
+| ID  | Severity | Owner                                       | Status                           | Title                                                                                 |
+| --- | -------- | ------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------- |
+| F1  | high     | tend-outreach                               | fixed, re-verified               | Model draft that only repeats the contact's quote is accepted as the owner's message  |
+| F2  | low      | tend-outreach                               | fixed, re-verified               | Telegram refusals for /approve and /edit hide the rule reason                         |
+| F3  | medium   | tend-lead                                   | fixed, re-verified               | Error handler 21 keeps URLs, emails and message text; the UI says they are dropped    |
+| F4  | medium   | tend-lead                                   | deferred (tend-lead, by design)  | How it runs shows no last-run status in the real private composition                  |
+| F5  | low      | tend-desk                                   | fixed, re-verified               | How it runs omits workflows 22-26; private failure log labelled as 21                 |
+| F6  | low      | tend-desk (needs a flag from tend-outreach) | fixed, re-verified               | Desk promises a Gmail draft while `OUTREACH_ENABLED=false`                            |
+| F7  | medium   | tend-lead                                   | fix landed; verify from lead run | `bun run integration` does not run 23/24 or force a failure into 21                   |
+| F8  | medium   | tend-lead                                   | open, fix in progress            | Private Telegram bot cannot route /outreach /approve /edit /skip                      |
+| F9  | low      | tend-desk                                   | fixed, re-verified               | 1440 px Desk: Outreach queue squeezed into the right column                           |
+| F10 | low      | tend-outreach                               | fixed, re-verified               | `style_basis` never reaches the owner                                                 |
+| F11 | low      | tend-outreach                               | open                             | Local-model drafts never survive validation, so "in my style" never reaches the owner |
 
 ## F1: model draft that only repeats the contact's quote is accepted (high, tend-outreach)
 
@@ -58,6 +58,8 @@ Expected (brief section 5): each workflow with its last-run status.
 Actual: every one of the 21 rows reads "No run data on this device". `createLiveServer` (`src/live-api.ts:238`) passes `failureLog` but no `workflowRuns` to `createPrivateWebHandler`, so the hook tend-desk documented is never wired. The fictional dev server shows statuses only because it fakes them.
 Evidence: `screens/1440-how-it-runs.jpg`.
 
+Decision (tend-lead, 11:40): deliberate deferral. The private API has no read path to n8n's database, so "No run data on this device" is the honest state rather than invented statuses. Brief section 5's "last-run status" stays unmet until such a read path exists; owner tend-lead.
+
 ## F5: How it runs omits 22-26; private failure log labelled as 21 (low, tend-desk)
 
 Same steps as F4. The classroom lane lists 01-09 and 21; the private lane lists 10-20. Workflows 22 (private error handler), 23/24 (fictional outreach) and 25/26 (private outreach) are missing, though the pipeline and outreach queue depend on them. On the private page the log heading reads "Failure log · what 21 kept" while the entries come from 22.
@@ -71,6 +73,8 @@ Evidence: `screens/1440-outreach-approved-banner.jpg`.
 ## F7: integration does not cover outreach or a forced failure (medium, tend-lead)
 
 `src/integration.ts` imports 26 workflows and publishes 21 but never executes 23 or 24, never forces a failure into 21 and never checks the redacted log. Brief section 7 lists all three as required integration steps. I ran them by hand (O1, O4, E1 in the feature map); E1 is how F3 was found.
+
+Update 11:40: `src/integration.ts` now executes 23 and 24 and forces a failure into 21 (lines ~888-1020). My re-run was stopped at tend-lead's request (Docker load before the 13:00 demo); this closes from tend-lead's own recorded integration evidence, or my re-run after 14:00.
 
 ## F8: private Telegram bot cannot route outreach commands (medium, tend-lead)
 
