@@ -35,7 +35,7 @@ CREATE TABLE interactions (
 CREATE TABLE commitments (
  owner_id text NOT NULL REFERENCES owners, commitment_id text NOT NULL, contact_id text NOT NULL,
  action_text text NOT NULL, direction text NOT NULL CHECK(direction IN ('owed_by_me','owed_to_me','unresolved')),
- status text NOT NULL CHECK(status IN ('pending','confirmed','done','cancelled','invalidated')),
+ status text NOT NULL CHECK(status IN ('pending','confirmed','done','cancelled','dismissed','invalidated')),
  suggested_due date, confirmed_due date, quote_text text NOT NULL,
  PRIMARY KEY(owner_id,commitment_id), FOREIGN KEY(owner_id,contact_id) REFERENCES contacts,
  CHECK(status<>'confirmed' OR confirmed_due IS NOT NULL)
