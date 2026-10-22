@@ -218,14 +218,14 @@ Gate on review/codex after these commits: typecheck, lint, build (26 exports, no
 
 Requested by tend-desk. Reviewed the five commits against the five focus points. Repros run against an export of 9610c3b; the repro file is `.scratch/review-repro/promise-threads.repro.ts` (gitignored, fictional data only). All three repro tests fail on 9610c3b, which confirms P1-P3.
 
-| ID | Severity | Location | Finding |
-|---|---|---|---|
-| P1 | High | `src/promise-threads.ts:64` | Stopwords are checked after stemming, so "the" becomes "th" and counts as a content word. False links between different asks from the same person. |
-| P2 | High | `src/promise-threads.ts:208` | Thread IDs are reused, so a member the owner separated can be pulled back into the thread they split it from. |
-| P3 | Medium | `src/outreach.ts:263` | The thread's follow-up can move to a new lead member, which plans a second follow-up for one promise. |
-| P4 | Medium | `src/postgres-store.ts:1741` | The savepoint catch swallows every error, not only the timeout. |
-| P5 | Low | `src/engine.ts:3280`, `src/postgres-store.ts:2310` | `/done` and `/cancel` also close pending members whose evidence is invalid. |
-| P6 | Low | `src/promise-threads.ts:19` | Verified groups are remembered in a process-global map. |
+| ID  | Severity | Location                                           | Finding                                                                                                                                            |
+| --- | -------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | High     | `src/promise-threads.ts:64`                        | Stopwords are checked after stemming, so "the" becomes "th" and counts as a content word. False links between different asks from the same person. |
+| P2  | High     | `src/promise-threads.ts:208`                       | Thread IDs are reused, so a member the owner separated can be pulled back into the thread they split it from.                                      |
+| P3  | Medium   | `src/outreach.ts:263`                              | The thread's follow-up can move to a new lead member, which plans a second follow-up for one promise.                                              |
+| P4  | Medium   | `src/postgres-store.ts:1741`                       | The savepoint catch swallows every error, not only the timeout.                                                                                    |
+| P5  | Low      | `src/engine.ts:3280`, `src/postgres-store.ts:2310` | `/done` and `/cancel` also close pending members whose evidence is invalid.                                                                        |
+| P6  | Low      | `src/promise-threads.ts:19`                        | Verified groups are remembered in a process-global map.                                                                                            |
 
 - **P1 (High): focus 1, a false link joins two asks.** At `src/promise-threads.ts:64`, `actionTokens` strips the endings `ing|ed|s|e` before the stopword filter runs.
   - "the" becomes "th", which is not in the stopword list, so nearly every action carries a shared token. "please" becomes "pleas", and "are" becomes "ar".
@@ -241,7 +241,7 @@ Requested by tend-desk. Reviewed the five commits against the five focus points.
     4. A is back in the same thread as B and C, despite the owner's "Not the same ask". The Desk shows one card again, and `/done` on any member closes all four.
   - **Reachable from the UI:** "Not the same ask" is offered on every member except index 0. If an older sighting joins later (a history backfill), the naming member is no longer index 0.
   - **Fix:** never reuse an existing thread ID for a new pair. Either pick a fresh one (for example `T<earlier>_<n>`), or make the pair insert fail instead of ignoring the conflict.
-- **P3 (Medium): focus 4, two follow-ups for one promise.** At `src/outreach.ts:263`, `threadRepresentatives` picks the earliest *confirmed* member as the thread's lead. That lead can change after an item was planned.
+- **P3 (Medium): focus 4, two follow-ups for one promise.** At `src/outreach.ts:263`, `threadRepresentatives` picks the earliest _confirmed_ member as the thread's lead. That lead can change after an item was planned.
   - **Failing scenario:**
     1. The owner confirms sighting x2. `plan()` creates `overdue_owed_to_you:<x2>`.
     2. An older sighting x1 of the same ask arrives and links into the thread. The owner confirms it with "Confirm and link".
@@ -260,6 +260,7 @@ Requested by tend-desk. Reviewed the five commits against the five focus points.
   - Tests that pass groups for `exampleLivePolicy.principal_id` also leak them into later tests in the same worker.
 
 **Checked with no finding:**
+
 - **Focus 1:** `personKey` uses only `contact_id` or an accepted proof kind. Names never count.
 - **Focus 2:** `/confirm` confirms only valid pending members. `/separate` rejects a single member.
 - **Focus 5:** the new error strings are fixed phrases.
@@ -270,13 +271,13 @@ Requested by tend-desk. Reviewed the five commits against the five focus points.
 
 Scope is tend-lead's own commits only. The merged branches are skipped, and promise threads are covered in the section above. Reviewed from git objects: the merge into this worktree fails because the sandbox denies writes to `.env.*`, and improve/lead now adds `.env.example`. No tests were run for this pass.
 
-| ID | Severity | Commit | Location | Finding |
-|---|---|---|---|---|
-| R1 | Medium | a799757 | `src/outreach-workflows.ts` (`retrySafe`) | A retry repeats the whole node, and a repeat of an item that already succeeded is refused. |
-| R2 | Low | 292e532 | `src/live-api.ts:1180`, `src/live-api.ts:1311` | The shared retention run means a record past its window can be served for up to 60 s. |
-| R3 | Low | 292e532 | `src/server.ts` (`timingLog`) | A throwing log write can fail a committed call or crash the process. |
-| R4 | Low | 8f3ba89 | `src/postgres-store.ts` (`boundedRecords`) | A timeout does not fail alone inside the command extension. |
-| R5 | Info | 1221c8a | `src/postgres-store.ts` (`outreachInteractions`) | SQL and JS break ties differently for the 10th sent record. |
+| ID  | Severity | Commit  | Location                                         | Finding                                                                                    |
+| --- | -------- | ------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| R1  | Medium   | a799757 | `src/outreach-workflows.ts` (`retrySafe`)        | A retry repeats the whole node, and a repeat of an item that already succeeded is refused. |
+| R2  | Low      | 292e532 | `src/live-api.ts:1180`, `src/live-api.ts:1311`   | The shared retention run means a record past its window can be served for up to 60 s.      |
+| R3  | Low      | 292e532 | `src/server.ts` (`timingLog`)                    | A throwing log write can fail a committed call or crash the process.                       |
+| R4  | Low      | 8f3ba89 | `src/postgres-store.ts` (`boundedRecords`)       | A timeout does not fail alone inside the command extension.                                |
+| R5  | Info     | 1221c8a | `src/postgres-store.ts` (`outreachInteractions`) | SQL and JS break ties differently for the 10th sent record.                                |
 
 - **R1 (Medium, a799757): retries cannot recover a partial failure.** The comment says a repeat "cannot act twice", but n8n's Retry On Fail re-runs the whole node over all its input items. `/draft` answers a repeat with "draft is no longer replaceable", and `recordGmailDraft` throws on a repeat.
   - **Failing scenario:**
@@ -302,6 +303,7 @@ Scope is tend-lead's own commits only. The merged branches are skipped, and prom
 - **R5 (Info, 1221c8a): tie-break difference.** The SQL breaks ties on equal `occurred_at` by `record_key`, while `outreachWindow` keeps input order. The two can pick a different 10th sent record (style examples only). The parity test has no tie.
 
 **Checked with no finding:**
+
 - **The "open" snapshot (8f3ba89) is enough.** Outside `plan()`, the book reads interactions only in `refresh()`, and only by `evidence_keys` of pending and approved items, which is exactly `openEvidenceKeys()`. approve, edit, skip, `approvedEmail` and `recordGmailDraft` otherwise use contacts and commitments, which are still read in full.
 - **F13 (b2b71d3) is stricter, not weaker.** The old test's quote-as-data assertion moved to a benign record, and the "untrusted data" framing is still asserted. The withheld case is pinned in `tests/live-ai.test.ts` and against the Desk fixture's `g-injection` in `tests/desk-model.test.ts`.
 - **`execution_url` (70d64bf).** The regex is anchored and allows no userinfo, query or fragment. JS `$` without the `m` flag does not match before a trailing newline. The Desk re-validates and opens the link with `rel=noreferrer`. The host is not pinned to the n8n origin (info only). The four-key shape is still accepted, and the five-key shape is checked.
