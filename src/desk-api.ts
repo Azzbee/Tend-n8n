@@ -41,7 +41,7 @@ const safeEngineError =
   /^(invalid transition(: evidence review required)?|unknown commitment|explicit valid date required|invalid command arguments)$/;
 // Fixed rule phrases from the outreach service; anything that could echo draft text stays generic.
 const safeOutreachError =
-  /^(unknown outreach item|cannot (approve|edit|skip) an? (pending|approved|skipped|gmail_draft_created|expired) item|recipient is not a verified identity of this contact|empty draft|draft too long|dash not allowed|instruction-like draft|fill in the bracketed placeholder first|draft is no longer replaceable)$/;
+  /^(unknown outreach item|cannot (approve|edit|skip) an? (pending|approved|skipped|gmail_draft_created|expired) item|recipient is not a verified identity of this contact|empty draft|draft too long|dash not allowed|instruction-like draft|fill in the bracketed placeholder first|draft is no longer replaceable|draft changed since you saw it)$/;
 function safeMessage(message: string): string {
   if (safeEngineError.test(message) || safeOutreachError.test(message))
     return `Not changed: ${message}.`;
@@ -172,14 +172,18 @@ export async function handleDeskRoute(input: {
     path === "/private/api/outreach/approve" ||
     path === "/private/api/outreach/skip"
   ) {
-    fields(data, ["id"]);
+    const approving = path.endsWith("approve");
+    fields(data, approving ? ["id", "text_code"] : ["id"]);
     const itemId = id(data);
+    const seen = data.text_code;
+    if (approving && (typeof seen !== "string" || !/^[0-9a-f]{8}$/.test(seen)))
+      throw new DeskRequestError(400, "Unexpected request fields");
     return {
       status: 200,
       body: {
         item: await guard(() =>
-          path.endsWith("approve")
-            ? outreach.approve(itemId)
+          approving
+            ? outreach.approve(itemId, seen as string)
             : outreach.skip(itemId),
         ),
       },

@@ -541,7 +541,7 @@ export function mountDesk(ctx: DeskContext): DeskController {
               () =>
                 void act(
                   "outreach/approve",
-                  { id: item.id },
+                  { id: item.id, text_code: item.text_code },
                   item.channel === "email"
                     ? "Approved. Tend creates a Gmail draft; you press Send yourself."
                     : "Approved. Copy the text and send it yourself.",

@@ -285,10 +285,24 @@ describe("mounted desk", () => {
   it("shows the outreach queue with approve, edit and skip only for live pending drafts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(deskFixtureClock());
-    const { elements } = browser("#desk", "on");
+    const { elements, fetch } = browser("#desk", "on");
     mountPrivateWorkspace();
     await vi.advanceTimersByTimeAsync(0);
     const queue = elements.get("desk-outreach")!;
+    all(
+      queue,
+      (e) => e.textContent === "Approve this message",
+    )[0]!.dispatchEvent(new Event("click"));
+    await vi.advanceTimersByTimeAsync(0);
+    const approveCall = fetch.mock.calls.find(
+      ([p]) => p === "/private/api/outreach/approve",
+    )!;
+    const shown = deskFixtureOutreach(deskFixtureClock())[0]!;
+    // The Desk approves the exact text it rendered, identified by its code.
+    expect(JSON.parse(String((approveCall[1] as RequestInit).body))).toEqual({
+      id: shown.id,
+      text_code: shown.text_code,
+    });
     expect(queue.children).toHaveLength(2);
     expect(text(queue)).toContain(
       "Hi Mira, could you share an update on the demo? Thanks.",

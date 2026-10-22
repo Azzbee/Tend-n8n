@@ -358,7 +358,7 @@ describe("outreach routes", () => {
         (
           await post(
             "/private/api/outreach/approve",
-            { id: "OUT-F17-1" },
+            { id: "OUT-F17-1", text_code: "0a1b2c3d" },
             { "x-tend-csrf": "no" },
           )
         ).status,
@@ -366,10 +366,27 @@ describe("outreach routes", () => {
       expect(outreach.approve).not.toHaveBeenCalled();
       expect(
         (
-          await post("/private/api/outreach/approve", { id: "OUT-F17-1" })
+          await post("/private/api/outreach/approve", {
+            id: "OUT-F17-1",
+            text_code: "0a1b2c3d",
+          })
         ).json().item,
       ).toMatchObject({ status: "approved" });
-      expect(outreach.approve).toHaveBeenCalledWith("OUT-F17-1");
+      expect(outreach.approve).toHaveBeenCalledWith("OUT-F17-1", "0a1b2c3d");
+      // Approval without the code of the text the owner saw is refused.
+      expect(
+        (await post("/private/api/outreach/approve", { id: "OUT-F17-1" }))
+          .status,
+      ).toBe(400);
+      expect(
+        (
+          await post("/private/api/outreach/approve", {
+            id: "OUT-F17-1",
+            text_code: "not-hex!",
+          })
+        ).status,
+      ).toBe(400);
+      expect(outreach.approve).toHaveBeenCalledTimes(1);
       expect(
         (
           await post("/private/api/outreach/edit", {
@@ -410,7 +427,12 @@ describe("outreach routes", () => {
         ).status,
       ).toBe(400);
       expect(
-        (await post("/private/api/outreach/approve", { id: "missing" })).status,
+        (
+          await post("/private/api/outreach/approve", {
+            id: "missing",
+            text_code: "0a1b2c3d",
+          })
+        ).status,
       ).toBe(409);
       expect(outreach.edit).toHaveBeenCalledTimes(1);
       outreach.approve.mockRejectedValueOnce(
@@ -418,9 +440,23 @@ describe("outreach routes", () => {
       );
       expect(
         (
-          await post("/private/api/outreach/approve", { id: "OUT-F17-2" })
+          await post("/private/api/outreach/approve", {
+            id: "OUT-F17-2",
+            text_code: "0a1b2c3d",
+          })
         ).json().error,
       ).toBe("Not changed: fill in the bracketed placeholder first.");
+      outreach.approve.mockRejectedValueOnce(
+        new Error("draft changed since you saw it"),
+      );
+      expect(
+        (
+          await post("/private/api/outreach/approve", {
+            id: "OUT-F17-2",
+            text_code: "0a1b2c3d",
+          })
+        ).json().error,
+      ).toBe("Not changed: draft changed since you saw it.");
       outreach.edit.mockRejectedValueOnce(
         new Error("uncited detail: Private Detail Text"),
       );

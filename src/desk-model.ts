@@ -103,6 +103,8 @@ export interface OutreachItem {
   channel: (typeof outreachChannels)[number];
   reason: (typeof outreachReasons)[number];
   draft_text: string;
+  // First 8 hex characters of the draft's SHA-256; approval must echo it.
+  text_code: string;
   evidence: { source: string; text: string; reference: string }[];
   status: (typeof outreachStatuses)[number];
   expires_at: string;
@@ -112,7 +114,7 @@ export interface OutreachItem {
 // Implemented by the outreach service (improve/outreach) and injected by live-api.ts.
 export interface DeskOutreachBackend {
   list(): Promise<{ items: OutreachItem[] }>;
-  approve(id: string): Promise<unknown>;
+  approve(id: string, seen: string): Promise<unknown>;
   edit(id: string, text: string): Promise<unknown>;
   skip(id: string): Promise<unknown>;
 }
@@ -403,6 +405,7 @@ export function parseOutreachList(value: unknown): OutreachItem[] {
       typeof raw.contact_id !== "string" ||
       typeof raw.contact_name !== "string" ||
       typeof raw.draft_text !== "string" ||
+      typeof raw.text_code !== "string" ||
       typeof raw.expires_at !== "string" ||
       !oneOf(outreachChannels, raw.channel) ||
       !oneOf(outreachReasons, raw.reason) ||
@@ -424,6 +427,7 @@ export function parseOutreachList(value: unknown): OutreachItem[] {
       channel: raw.channel,
       reason: raw.reason,
       draft_text: raw.draft_text,
+      text_code: raw.text_code,
       evidence: evidence.map(({ source, text, reference }) => ({
         source,
         text,
