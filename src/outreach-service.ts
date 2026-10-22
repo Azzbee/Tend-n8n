@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { TendStore, isRecord, type AuthCommand } from "./engine.ts";
+import { TendStore, isRecord } from "./engine.ts";
 import type { LiveStore } from "./live-store.ts";
 import {
   demoAuth,
@@ -95,12 +95,6 @@ export function createFixtureOutreachService(
   const load = (): OutreachSnapshot => snapshotOf(store, "demo-owner");
   book.plan(load());
   return { service: new OutreachService(book, load), book, store };
-}
-export function outreachTelegramExtension(
-  book: () => OutreachBook,
-  load: () => OutreachSnapshot,
-): (auth: AuthCommand) => ReturnType<OutreachBook["telegram"]> {
-  return (auth) => book().telegram(auth.text, load());
 }
 type RouteResult = { status: number; body: unknown } | null;
 // Fixture API routes for workflows 22-23 and the integration check.

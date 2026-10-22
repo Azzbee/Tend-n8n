@@ -10,6 +10,7 @@ import {
   evidenceHash,
   outreachDraftRequest,
   planOutreach,
+  repeatsEvidence,
   textHash,
   verifiedRecipient,
   type OutreachChannel,
@@ -270,9 +271,11 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         item: this.view(item),
       };
     const problem =
-      typeof text === "string"
-        ? draftProblem(text, item.evidence)
-        : "missing model text";
+      typeof text !== "string"
+        ? "missing model text"
+        : repeatsEvidence(text, item.evidence)
+          ? "model repeated the cited message"
+          : draftProblem(text, item.evidence);
     if (problem) {
       this.log(item.id, "model_draft_rejected", problem);
       return { accepted: false, problem, item: this.view(item) };

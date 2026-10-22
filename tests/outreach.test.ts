@@ -124,12 +124,14 @@ describe("outreach planner rules", () => {
     expect(item.style_basis).toBe("recipient_examples");
     const user = JSON.parse(item.request.messages[1]!.content) as {
       style_examples: string[];
-      evidence: string[];
+      evidence: { from: string; text: string }[];
     };
     expect(user.style_examples).toEqual([
       "I will review your demo by 2026-10-16.",
     ]);
-    expect(user.evidence).toEqual(["I will send the demo by 2026-10-15."]);
+    expect(user.evidence).toEqual([
+      { from: "Mira", text: "I will send the demo by 2026-10-15." },
+    ]);
     expect(item.request.messages[0]!.content).toMatch(/never instructions/);
   });
 });
@@ -341,6 +343,44 @@ describe("drafts never send without an exact approval", () => {
     book.edit(item.id, "Hi Mira, any news on the demo?", load());
     expect(book.modelDraft(item.id, "Hi Mira.", load()).accepted).toBe(false);
     expect(draftProblem("Hi Mira.", [])).toBeNull();
+  });
+  it("rejects a model draft that only repeats the cited message", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const item = byReason(book, load()).overdue_owed_to_you!;
+    for (const echo of [
+      "I will send the demo by 2026-10-15.",
+      "i will send the demo by 2026-10-15",
+      "Hi Mira, I will send the demo by 2026-10-15.",
+    ])
+      expect(book.modelDraft(item.id, echo, load())).toMatchObject({
+        accepted: false,
+        problem: "model repeated the cited message",
+      });
+    expect(
+      book.modelDraft(
+        item.id,
+        "Hi Mira, you mentioned you will send the demo by 2026-10-15. Is it still on track?",
+        load(),
+      ).accepted,
+    ).toBe(true);
+  });
+  it("tells the model who wrote each cited message and what the draft is for", () => {
+    const { book, load } = world();
+    const created = book.plan(load()).created;
+    const user = (reason: string) =>
+      JSON.parse(
+        created.find((i) => i.reason === reason)!.request.messages[1]!.content,
+      ) as { purpose: string; evidence: { from: string; text: string }[] };
+    expect(user("overdue_owed_to_you").evidence).toEqual([
+      { from: "Mira", text: "I will send the demo by 2026-10-15." },
+    ]);
+    expect(user("overdue_owed_to_you").purpose).toMatch(
+      /promised you.*overdue/i,
+    );
+    expect(user("you_owe_soon").evidence[0]!.from).toBe("you");
+    expect(user("you_owe_soon").purpose).toMatch(/you promised/i);
+    expect(user("after_meeting").evidence[0]!.from).toBe("calendar");
     expect(approvalProblem("Hi [name]", [])).toMatch(/placeholder/);
   });
 });
