@@ -81,6 +81,17 @@ Proven: 9 unit tests with an injected runner, plus one through the real `createL
 
 Full suite at 11:58: 1329 passed, 16 skipped; only the two sandbox PostgreSQL files fail.
 
+## Promise threads (17:21 to 18:30)
+
+Adam's request: the same ask from the same person across channels is one promise. Merged into improve/lead (61cdb59, cbd82d3).
+
+- Rule (`src/promise-threads.ts`): same person is the same contact or one verified group (owner_confirmed or provider_verified), never a name. Same ask is same direction, both open, word overlap of at least 0.7 after dropping common words (or granite cosine of at least 0.9 with a shared content word), due dates within 2 days, sources within 21 days.
+- Storage: `schema/007-promise-threads.sql` (threads, members with auto or owner, owner overrides), same tables in SQLite, PostgreSQL parity test.
+- Effect: one Desk and Review card per thread with every source quoted with its reference; Confirm and link, Not the same ask; /confirm, /dismiss and /done act on the thread; /today, /status, briefings, counts and the outreach planner count it once (item keys unchanged).
+- Lock safety: a new candidate links only itself, in PostgreSQL under a savepoint with a 2 s budget; the Desk GET never writes; existing promises are linked by `src/promise-thread-backfill.ts status|apply`, run by the operator.
+- Review: tend-codex-review P1 to P6 and N1, N2 fixed with tests.
+- Open: Telegram /help does not list /separate; granite is off on live until the lead adds the one live-api line.
+
 ## Open items
 
 - Cross-vendor review: `codex exec` cannot start in this sandbox ("failed to initialize in-process app-server client"). A fresh-context Claude review ran instead and returned BLOCK on one issue: an action in flight during lock re-rendered private Desk text into the hidden page. Fixed in `cdaa49b` with a regression test that fails on the old client. Its nits were also fixed: aborting superseded loads, re-enabling buttons after a failed reload, focus after actions and review steps, held-back candidates kept off promise lists, meeting times compared as instants, validated run statuses, a held-back total, expiry gating and a second click on Withdraw, and lock resetting section titles. Not done: moving focus when switching to People (the People view keeps its existing behaviour). Run `/codex:review` before merging to main.
