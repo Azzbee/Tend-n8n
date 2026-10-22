@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import vm from "node:vm";
 import {
   WITHHELD,
@@ -135,6 +137,22 @@ describe("private-lane failure redaction", () => {
         settings: { errorWorkflow?: string };
       };
       expect(w.settings.errorWorkflow, file).toBe(id);
+    }
+  });
+});
+
+describe("private failure-log allowlist location", () => {
+  it("loads the same allowlist when the API starts outside the repo", () => {
+    const expected = loadPrivateGuardMessages();
+    const cwd = process.cwd();
+    const away = mkdtempSync(join(tmpdir(), "tend-cwd-"));
+    try {
+      process.chdir(away);
+      expect(loadPrivateGuardMessages()).toEqual(expected);
+      expect(expected).toContain("Exact configured owner required");
+    } finally {
+      process.chdir(cwd);
+      rmSync(away, { recursive: true, force: true });
     }
   });
 });
