@@ -675,18 +675,14 @@ export function createLiveServer(options: LiveServerOptions): Server {
       if (req.method === "GET" && url.pathname === "/api/live/model-input") {
         const key = url.searchParams.get("record_key");
         const candidates = await store.commitments(owner);
-        const records = [];
-        for (const x of await store.interactions(owner)) {
-          if (
+        const records = (await store.extractionCandidates(owner, key)).filter(
+          (x) =>
             eligiblePromiseSpans(x).length > 0 &&
-            (key !== null || !(await store.extractionAttempted(x))) &&
             !candidates.some(
               (c) =>
                 c.record_key === x.record_key && c.status !== "invalidated",
-            )
-          )
-            records.push(x);
-        }
+            ),
+        );
         const record = key
           ? records.find((x) => x.record_key === key)
           : records[0];
