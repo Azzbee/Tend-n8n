@@ -47,7 +47,7 @@ export class OutreachService {
     this.book = book;
     this.load = load;
   }
-  async list(): Promise<{ items: OutreachItem[] }> {
+  async list(): Promise<ReturnType<OutreachBook["list"]>> {
     return this.book.list(await this.load());
   }
   async approve(id: string): Promise<OutreachItem> {

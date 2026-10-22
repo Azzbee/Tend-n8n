@@ -306,6 +306,7 @@ describe("drafts never send without an exact approval", () => {
     const id = byReason(book, load()).overdue_owed_to_you!.id;
     book.approve(id, load());
     expect(book.approvedEmail(load())).toEqual({ enabled: false, items: [] });
+    expect(book.list(load()).sending_enabled).toBe(false);
     expect(() => book.recordGmailDraft(id, "any", "r1", load())).toThrow();
   });
   it("gives WhatsApp and LinkedIn a copy-and-link path, never a Gmail step", () => {
@@ -426,6 +427,63 @@ describe("Gmail boundary", () => {
 });
 
 describe("Desk backend and Telegram commands", () => {
+  it("reports whether sending is enabled and each draft's style basis", async () => {
+    const { service } = createFixtureOutreachService();
+    const listed = await service.list();
+    expect(listed.sending_enabled).toBe(true);
+    const basis = Object.fromEntries(
+      listed.items.map((i) => [i.reason, i.style_basis]),
+    );
+    expect(basis.overdue_owed_to_you).toBe("recipient_examples");
+    const edited = await service.edit(
+      listed.items[0]!.id,
+      "Hi Mira, any news?",
+    );
+    expect(edited.style_basis).toBe("owner_edit");
+  });
+  it("names the rule when a Telegram outreach command is refused", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const item = byReason(book, load()).overdue_owed_to_you!;
+    expect(
+      book.telegram(
+        `/edit ${item.id} Hi Mira, see https://example.invalid/x`,
+        load(),
+      ),
+    ).toEqual({
+      outbound_sent: false,
+      outreach_error:
+        "The draft mentions a link, address, number or date that is not in the cited messages.",
+    });
+    book.skip(item.id, load());
+    expect(book.telegram(`/approve ${item.id}`, load())).toEqual({
+      outbound_sent: false,
+      outreach_error: "cannot approve a skipped item",
+    });
+    expect(book.telegram("/approve Onot-an-id", load())).toEqual({
+      outbound_sent: false,
+      outreach_error: "unknown outreach item",
+    });
+    const rendered = vm.runInNewContext(
+      `(function(){${telegramReplyCode}})()`,
+      {
+        $: () => ({
+          first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+        }),
+        $input: {
+          first: () => ({
+            json: {
+              outbound_sent: false,
+              outreach_error: "cannot approve a skipped item",
+            },
+          }),
+        },
+      },
+    ) as { json: { text: string } }[];
+    expect(rendered[0]!.json.text).toContain(
+      "Outreach refused: cannot approve a skipped item",
+    );
+  });
   it("serves the Desk contract shape", async () => {
     const { service } = createFixtureOutreachService();
     const { items } = await service.list();
@@ -444,6 +502,7 @@ describe("Desk backend and Telegram commands", () => {
           "reason",
           "recipient",
           "status",
+          "style_basis",
         ].sort(),
       );
       expect(i.id).toMatch(/^O[a-f0-9]{10}$/);
@@ -495,7 +554,16 @@ describe("Desk backend and Telegram commands", () => {
       outbound_sent: false,
       outreach_item: { status: "approved" },
     });
-    expect(send(`/approve ${id} extra`).error).toBeDefined();
+    expect(send(`/approve ${id} extra`).outreach_error).toBe(
+      "Use /outreach, /approve ID, /edit ID text or /skip ID.",
+    );
+    expect(
+      send(`/edit ${id} Hi Mira, see https://example.invalid/x`),
+    ).toMatchObject({
+      outbound_sent: false,
+      outreach_error:
+        "The draft mentions a link, address, number or date that is not in the cited messages.",
+    });
     expect(send(`/skip ${listed[1]!.id}`)).toMatchObject({
       outreach_item: { status: "skipped" },
     });
