@@ -2676,7 +2676,7 @@ export class TendStore {
           evidence_valid: true,
         };
         this.put(proposed);
-        this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
+        this.linkNew(raw.owner_id, id);
         return proposed;
       }
       if (current.status === "confirmed" && current.evidence_valid === false)
@@ -2702,7 +2702,7 @@ export class TendStore {
     this.db
       .prepare("INSERT INTO commitments VALUES(?,?,?,?)")
       .run(id, c.owner_id, c.record_key, JSON.stringify(c));
-    this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
+    this.linkNew(raw.owner_id, id);
     return c;
   }
   commitments(owner: string): ThreadedCommitment[] {
@@ -2775,6 +2775,10 @@ export class TendStore {
       groups: remembered,
       ...(cosine ? { cosine } : {}),
       ...(only ? { only } : {}),
+      threadIds: this.db
+        .prepare("SELECT thread_id FROM commitment_threads WHERE owner_id=?")
+        .all(owner)
+        .map((r) => String(r.thread_id)),
       now: this.clock(),
     });
     // Plain member inserts: a conflict would mean a double placement, which is a bug.
@@ -2794,6 +2798,14 @@ export class TendStore {
         );
     }
     return added;
+  }
+  // A link failure never costs the candidate: it is kept, and the operator backfill retries and surfaces it.
+  private linkNew(owner: string, id: string): void {
+    try {
+      this.linkPromiseThreads(owner, undefined, undefined, [id]);
+    } catch {
+      console.warn("Promise thread link failed; the backfill retries it.");
+    }
   }
   private separateCommitment(owner: string, id: string): void {
     const split = separateFromThread(this.threadRows(owner), id);

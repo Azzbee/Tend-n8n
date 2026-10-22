@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { beforeAll, afterAll, describe, it, expect } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
 import { TendStore, type SourceState, type LiveBatch } from "../src/engine.ts";
 import type { LiveRecord } from "../src/google-records.ts";
 import { PostgresStore, type LockTiming } from "../src/postgres-store.ts";
@@ -2074,6 +2074,51 @@ describe("canonical PostgreSQL live parity", () => {
       });
       proto.linkWithin = () => Promise.reject(new TypeError("bug"));
       await expect(pgC.linkBatch(owner)).rejects.toThrow("bug");
+      // addCandidate keeps the candidate when linking fails; the backfill retries it (review N1).
+      const r = {
+        ...record,
+        owner_id: owner,
+        source_record_id: "n1",
+        evidence_reference: "https://mail.google.com/mail/u/0/#all/n1",
+      };
+      await pgC.seed(
+        [],
+        [
+          {
+            owner_id: owner,
+            identity: "owner@example.com",
+            contact_id: "OWNER",
+          },
+        ],
+        [{ ...state, owner_id: owner }],
+      );
+      await pgC.commitLiveBatch({
+        ...batch([r]),
+        owner_id: owner,
+        seen_record_ids: ["n1"],
+        contacts: [{ owner_id: owner, contact_id: "friend", name: "Friend" }],
+        identities: [
+          {
+            owner_id: owner,
+            identity: "friend@example.com",
+            contact_id: "friend",
+          },
+        ],
+        operation_hash: "e".repeat(64),
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const kept = await pgC.addCandidate(r, {
+        quote: r.body_text,
+        action: "send the report",
+        suggested_due: "2026-10-15",
+      });
+      expect(
+        (await pgC.commitments(owner)).map((c) => c.commitment_id),
+      ).toEqual([kept.commitment_id]);
+      expect(warn).toHaveBeenCalledWith(
+        "Promise thread link failed; the backfill retries it.",
+      );
+      warn.mockRestore();
       proto.linkWithin = original;
       // The transaction is usable after both: the savepoint was rolled back each time.
       expect(await pgC.linkBatch(owner)).toEqual({ rows: [], outcome: "ok" });

@@ -1811,7 +1811,14 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
             "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
             [owner, keys],
           )
-        : [];
+        : [],
+      // Every stored thread id, including one whose members all cascaded away (review N2).
+      threadIds = (
+        await this.q<{ thread_id: string }>(
+          "SELECT thread_id FROM commitment_threads WHERE owner_id=$1",
+          [owner],
+        )
+      ).map((r) => r.thread_id);
     due();
     const added = linkThreads({
       commitments,
@@ -1826,11 +1833,10 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
       groups: remembered,
       ...(cosine ? { cosine } : {}),
       ...(only ? { only } : {}),
+      threadIds,
       now: this.clock(),
     });
-    const created = new Set(
-      (await this.threadRows(owner)).map((r) => r.thread_id),
-    );
+    const created = new Set(threadIds);
     due();
     // Plain inserts: a conflict would mean a reused thread id or a double placement, which is a bug.
     for (const row of added) {
@@ -1922,7 +1928,13 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
         evidence_valid: true,
       };
       await s.put(c);
-      await s.linkPromiseThreads(raw.owner_id, groups, undefined, [id]);
+      // A link failure never costs the candidate (the savepoint is already rolled back);
+      // the operator backfill retries it and surfaces the error (review N1).
+      await s
+        .linkPromiseThreads(raw.owner_id, groups, undefined, [id])
+        .catch(() =>
+          console.warn("Promise thread link failed; the backfill retries it."),
+        );
       return c;
     });
   }
