@@ -10,7 +10,9 @@ import {
   fixtureSources,
 } from "../src/fixtures.ts";
 import {
+  MAX_PROPOSALS_PER_RUN,
   approvalProblem,
+  isBulkMail,
   draftProblem,
   isInstructionLike,
   isQuietHours,
@@ -80,6 +82,122 @@ const byReason = (book: OutreachBook, snapshot: OutreachSnapshot) =>
   Object.fromEntries(book.list(snapshot).items.map((i) => [i.reason, i]));
 
 describe("outreach planner rules", () => {
+  // Live history: many received emails, most from senders the owner never
+  // wrote to, newsletters among them.
+  function inbox(): OutreachSnapshot {
+    const { load } = world();
+    const snap = load();
+    const li1 = snap.interactions.find((r) => r.source_record_id === "li1")!;
+    const mail = (n: number, contact: string, actor: string, body: string) => ({
+      ...li1,
+      source: "gmail" as const,
+      account_id: "demo-gmail",
+      source_record_id: `bulk-${contact}-${n}`,
+      source_thread_id: `thread-bulk-${contact}-${n}`,
+      actor_identity: actor,
+      occurred_at: new Date(
+        Date.parse(FIXTURE_OUTREACH_CLOCK) - (n + 2) * 3600000,
+      ).toISOString(),
+      body_text: body,
+      evidence_reference: `fixture://gmail/bulk-${contact}-${n}`,
+      contact_id: contact,
+      record_key: `bulk-${contact}-${n}`,
+    });
+    const people = Array.from({ length: 8 }, (_, n) => ({
+      owner_id: "demo-owner",
+      contact_id: `P${n}`,
+      name: `Person ${n}`,
+      emails: [`person${n}@example.invalid`],
+    }));
+    const records = [
+      ...people.map((p, n) =>
+        mail(n, p.contact_id, p.emails[0]!, "Quick question about the deck."),
+      ),
+      // The owner wrote to P0..P2 before; nobody else.
+      ...[0, 1, 2].map((n) => ({
+        ...mail(40 + n, `P${n}`, "owner@example.invalid", "Thanks, talk soon."),
+        direction: "sent" as const,
+        source_thread_id: `thread-sent-${n}`,
+      })),
+    ];
+    return {
+      ...snap,
+      contacts: [...snap.contacts, ...people],
+      interactions: [...snap.interactions, ...records],
+    };
+  }
+  it("recognises bulk mail by sender address or unsubscribe footer", () => {
+    for (const actor of [
+      "noreply@shop.example.invalid",
+      "no-reply@bank.example.invalid",
+      "newsletter+weekly@club.example.invalid",
+      "notifications@tool.example.invalid",
+      "do-not-reply@x.example.invalid",
+    ])
+      expect(isBulkMail({ actor_identity: actor, body_text: "Hello" })).toBe(
+        true,
+      );
+    expect(
+      isBulkMail({
+        actor_identity: "person@example.invalid",
+        body_text: "Our news. Click here to unsubscribe.",
+      }),
+    ).toBe(true);
+    expect(
+      isBulkMail({
+        actor_identity: "mira@example.invalid",
+        body_text: "See you Friday.",
+      }),
+    ).toBe(false);
+  });
+  it("never proposes a reply to bulk mail, even from a contact the owner wrote to", () => {
+    const snap = inbox();
+    const p0 = snap.interactions.find((r) => r.record_key === "bulk-P0-0")!;
+    p0.body_text = "Weekly digest. Unsubscribe here.";
+    const p1 = snap.interactions.find((r) => r.record_key === "bulk-P1-1")!;
+    p1.actor_identity = "noreply@example.invalid";
+    const keys = planOutreach(
+      snap,
+      new Date(FIXTURE_OUTREACH_CLOCK),
+      [],
+    ).proposals.map((p) => p.item_key);
+    expect(keys).not.toContain("reply_waiting:bulk-P0-0");
+    expect(keys).not.toContain("reply_waiting:bulk-P1-1");
+  });
+  it("proposes replies only to people the owner has written to, and at most five per run", () => {
+    const snap = inbox();
+    const keys = planOutreach(
+      snap,
+      new Date(FIXTURE_OUTREACH_CLOCK),
+      [],
+    ).proposals.map((p) => p.item_key);
+    expect(keys.length).toBe(MAX_PROPOSALS_PER_RUN);
+    expect(MAX_PROPOSALS_PER_RUN).toBe(5);
+    for (const n of [3, 4, 5, 6, 7])
+      expect(keys).not.toContain(`reply_waiting:bulk-P${n}-${n}`);
+    // Later runs pick up what the cap left out, never a stranger.
+    const prior: { item_key: string; created_at: string }[] = [];
+    const seen: string[] = [];
+    for (let run = 0; run < 5; run++) {
+      const got = planOutreach(
+        snap,
+        new Date(FIXTURE_OUTREACH_CLOCK),
+        prior,
+      ).proposals.map((p) => p.item_key);
+      seen.push(...got);
+      prior.push(
+        ...got.map((item_key) => ({
+          item_key,
+          created_at: FIXTURE_OUTREACH_CLOCK,
+        })),
+      );
+    }
+    expect(new Set(seen).size).toBe(seen.length);
+    for (const n of [0, 1, 2])
+      expect(seen).toContain(`reply_waiting:bulk-P${n}-${n}`);
+    for (const n of [3, 4, 5, 6, 7])
+      expect(seen).not.toContain(`reply_waiting:bulk-P${n}-${n}`);
+  });
   it("proposes each kind of follow-up from fictional commitments and meetings", () => {
     const { book, load } = world();
     const created = book.plan(load()).created;
