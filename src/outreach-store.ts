@@ -10,7 +10,9 @@ import {
   evidenceHash,
   outreachDraftRequest,
   planOutreach,
-  repeatsEvidence,
+  purposes,
+  repeatsAny,
+  styleOnly,
   textHash,
   verifiedRecipient,
   type OutreachChannel,
@@ -55,6 +57,8 @@ interface StoredItem extends Omit<
   approved_text_hash: string | null;
   gmail_draft_id: string | null;
   expiry_reason: string | null;
+  // Scrubbed style examples sent to the model, kept to catch echoes.
+  style_examples?: string[];
 }
 export interface OutreachBookOptions {
   owner_id: string;
@@ -250,6 +254,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
         evidence_keys: p.evidence_keys,
         evidence_hash: p.evidence_hash,
         style_basis: p.style_examples.length ? "recipient_examples" : "default",
+        style_examples: p.style_examples.map(styleOnly),
         draft_source: "template",
         status: "pending",
         created_at,
@@ -300,9 +305,17 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     const problem =
       typeof text !== "string"
         ? "missing model text"
-        : repeatsEvidence(text, item.evidence)
+        : repeatsAny(
+              text,
+              item.evidence.map((e) => e.text),
+            )
           ? "model repeated the cited message"
-          : draftProblem(text, item.evidence);
+          : repeatsAny(text, [
+                ...(item.style_examples ?? []),
+                purposes[item.reason],
+              ])
+            ? "model repeated the prompt"
+            : draftProblem(text, item.evidence);
     if (problem) {
       this.log(item.id, "model_draft_rejected", problem);
       return { accepted: false, problem, item: this.view(item) };
