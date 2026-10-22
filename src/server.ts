@@ -23,6 +23,7 @@ import { OutreachBook } from "./outreach-store.ts";
 import { MockGmail } from "./outreach-gmail.ts";
 import {
   FIXTURE_OUTREACH_CLOCK,
+  createDraftModelResolver,
   createPrivateOutreach,
   fixtureOutreachRoute,
   snapshotOf,
@@ -42,6 +43,7 @@ function startFixtureServer(): void {
     },
   );
   const mockGmail = new MockGmail();
+  const draftModel = createDraftModelResolver(process.env.TEND_OUTREACH_MODEL);
   const outreachSnapshot = () => snapshotOf(store, "demo-owner");
   const store: TendStore = new TendStore(
     process.env.TEND_DEMO_DB ?? ".scratch/demo.sqlite",
@@ -291,6 +293,7 @@ function startFixtureServer(): void {
         "POST",
         url.pathname,
         input,
+        url.pathname === "/api/outreach/plan" ? await draftModel() : undefined,
       );
       if (outreachPost) {
         respond(outreachPost.status, outreachPost.body);
