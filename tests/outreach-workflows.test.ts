@@ -81,6 +81,14 @@ describe("outreach workflow exports", () => {
       nodeCredentialType: "gmailOAuth2",
     });
     expect(create.retryOnFail).toBe(false);
+    // n8n's gmailOAuth2 defaults include https://mail.google.com/; the bind note must demand custom scopes.
+    expect(create.notes).toContain("Define custom scopes");
+    expect(create.notes).toContain(
+      "exactly https://www.googleapis.com/auth/gmail.compose",
+    );
+    expect(readFileSync("docs/plans/outreach-status.md", "utf8")).toContain(
+      'switch on "Define custom scopes"',
+    );
     const mock = find("24-outreach-gmail-drafts.json").nodes.find(
       (n) => n.name === "Create Gmail draft (drafts.create only)",
     )!;
