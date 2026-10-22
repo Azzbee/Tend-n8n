@@ -1179,7 +1179,9 @@ export function createLiveServer(options: LiveServerOptions): Server {
           removed_record_ids: removed,
           quarantines: review,
         });
-        await enforceRetention(true);
+        // Only a batch that stored records can bring one outside the server-clock
+        // window; empty polls reuse the once-a-minute run.
+        await enforceRetention(stored.length > 0);
         respond(200, {
           accepted: stored.length,
           record_keys: stored.map((x) => x.record_key),

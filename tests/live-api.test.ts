@@ -205,7 +205,7 @@ describe("private live API", () => {
       server.close();
     }
   });
-  it("forces a fresh retention run after every sync batch, inside the minute", async () => {
+  it("reuses the once-a-minute retention run for empty sync batches and forces one after a stored record", async () => {
     const policy = exampleLivePolicy,
       clock = () => new Date("2026-10-14T12:00:00Z");
     const store = new TendStore(":memory:", {
@@ -257,11 +257,48 @@ describe("private live API", () => {
             seen_record_ids: [],
           }),
         });
-      expect((await sync()).status).toBe(200);
-      // The shared run covers the request; the batch forces one more.
+      // A batch that stored a record forces a fresh run inside the minute.
+      const mail = {
+        id: "retention-fictional-message",
+        threadId: "retention-fictional-thread",
+        labelIds: ["INBOX"],
+        internalDate: String(Date.parse("2026-10-14T11:00:00Z")),
+        payload: {
+          mimeType: "text/plain",
+          headers: [
+            { name: "From", value: "Mira <mira@example.invalid>" },
+            { name: "To", value: policy.account_email },
+          ],
+          body: {
+            data: Buffer.from("Fictional note for F17.").toString("base64url"),
+          },
+        },
+      };
+      const stored = await fetch(base + "/api/live/sync", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          source: "gmail",
+          account_email: policy.account_email,
+          profile_account_email: policy.account_email,
+          calendar_id: null,
+          previous_cursor: null,
+          cursor: null,
+          records: [mail],
+          complete: false,
+          reconcile: false,
+          window_start: state.window_start,
+          window_end: state.window_end,
+          seen_record_ids: [],
+        }),
+      });
+      expect(stored.status).toBe(200);
+      expect(store.interactions(policy.principal_id)).toHaveLength(1);
       expect(runs).toBe(2);
+      // Empty polls (11, 12 and 15 every minute) reuse the shared run.
       expect((await sync()).status).toBe(200);
-      expect(runs).toBe(3);
+      expect((await sync()).status).toBe(200);
+      expect(runs).toBe(2);
     } finally {
       server.close();
     }

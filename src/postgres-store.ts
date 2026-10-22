@@ -429,7 +429,9 @@ export class PostgresStore implements LiveStore {
       return rows;
     } catch (error) {
       // Undoes the read and the SET LOCAL; the outer transaction stays usable.
-      await this.q("ROLLBACK TO SAVEPOINT bounded_read").catch(() => {});
+      await this.q("ROLLBACK TO SAVEPOINT bounded_read")
+        .then(() => this.q("RELEASE SAVEPOINT bounded_read"))
+        .catch(() => {});
       throw error;
     }
   }
