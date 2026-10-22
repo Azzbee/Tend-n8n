@@ -2,7 +2,7 @@ DONE
 
 # Commitment Desk UI (section 5), branch improve/desk-ui
 
-Summary: the private workspace now has four views (Desk, Review one by one, People, How it runs) plus an Outreach queue on the Desk. Confirm, Not a promise and Mark done call the same store commands as Telegram (`/confirm <id> <date>`, `/dismiss <id>`, `/done <id>`). 31 new tests pass; the full unit suite passes except the two PostgreSQL files that cannot start `initdb` in the agent sandbox. Checked in Chrome with fictional data only, at 390 px and 1440 px.
+Summary: the private workspace now has four views (Desk, Review one by one, People, How it runs) plus an Outreach queue on the Desk. Confirm, Not a promise and Mark done call the same store commands as Telegram (`/confirm <id> <date>`, `/dismiss <id>`, `/done <id>`). 29 new tests pass (49 with the existing client tests); the full unit suite passes except the two PostgreSQL files that cannot start `initdb` in the agent sandbox. Checked in Chrome with fictional data only, at 390 px and 1440 px.
 
 ## Commits (on top of 6740a78)
 
@@ -39,6 +39,9 @@ No other wiring is needed: the Desk reads `store.commitments/interactions/contac
 - Error responses only echo fixed rule phrases from the engine and the outreach service; anything else is a generic retry message.
 - Lock and session expiry empty every Desk container; the API returns 401 afterwards (checked in Chrome).
 - The client loads Desk then Outreach sequentially and aborts superseded loads, so it stays under the handler's limit of 2 concurrent requests (checked in Chrome by switching views quickly).
+- Differs from the canvas: the design says confirming li1 links it to g1 as one promise. The engine has no linking, so confirming li1 creates a second confirmed entry with the same words ("Owed to you · 2"). The Desk shows that honestly; linking would be an engine change.
+- "Open <name>" and "Prepare for <name>" switch to People and select that contact (checked in Chrome: Mira Tan selected, history loaded, Prepare briefing enabled).
+- If a commitment's source record is hidden (revoked source), its card shows the 64-character record key instead of a short ID like g1.
 - A candidate extracted from instruction-like text never appears as a promise on the Desk, even if the extractor produced one.
 - Approved outreach drafts offer Edit (back to pending) and Withdraw approval (two clicks; final, and the planner waits 3 days). Expired drafts offer nothing.
 
