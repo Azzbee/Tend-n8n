@@ -120,6 +120,6 @@ Same method: read-only, headings, counts, fixed labels and workflow statuses onl
 
 ## Final live check (22 Oct, 13:16, read-only, locked after)
 
-- Outreach queue: "No drafts waiting.", 0 status cards, 0 approve buttons. L-6 cleared live (the 585 pending items no longer appear).
+- Outreach queue: "No drafts waiting.", 0 status cards, 0 approve buttons. L-6 cleared live (the 585 pending items, withdrawn at 13:12 by tend-lead as expired with a backup, no longer appear). Re-check 13:17: Desk page height 4,735 px (was 128,499); 11, 12, 15, 17, 19 still passed 13:15.
 - How it runs: 11 passed 13:15, 12 13:15, 15 13:15, 17 13:15 (L-2 fixed), 18 13:12, 19 13:15, 20 13:10 (manual run; schedule proof tomorrow 09:00), 22 13:11. 25 and 26 "No runs recorded" (25 unpublished at 13:04, 26 unpublished pending Gmail consent). 14 still "Tue 20 Oct 17:00": live /outreach pending Adam's phone.
 - Failure log: one entry, workflow 15, node "Validate exact authored quote", execution 281768, message withheld. 15's next run passed (13:15). L-7 (low, tend-lead): an intermittent validation failure in 15, logged as an unlisted error rather than a named guard message; check after 14:05.
