@@ -353,6 +353,7 @@ describe("mounted desk", () => {
       all(done, (e) => e.textContent === "Withdraw approval"),
     ).toHaveLength(2);
     expect(all(done, (e) => e.textContent === "Copy text")).toHaveLength(1);
+    expect(text(done)).toContain("Approval ends Wed 14 Oct");
   });
   it("reviews pending promises one at a time and shows the failure log on How it runs", async () => {
     vi.useFakeTimers();
