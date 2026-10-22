@@ -396,6 +396,8 @@ export function repeatsAny(text: string, sources: string[]): boolean {
 const clockTime = /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b/gi;
 const progressClaim =
   /\bI(?:'ve|\s+have|\s+had)?\s+(?:already\s+)?(?:reviewed|sent|finished|completed|done|checked|fixed|shipped|delivered|signed|started|prepared|written|uploaded)\b/i;
+const newPromise =
+  /\b(?:I|we)(?:'ll|\u2019ll|\s+will|\s+shall|\s+promise|\s+am\s+going\s+to|'m\s+going\s+to|\s+are\s+going\s+to)\b/i;
 export function modelOnlyProblem(
   text: string,
   evidence: OutreachEvidence[],
@@ -421,6 +423,8 @@ export function modelOnlyProblem(
   }
   if (progressClaim.test(text))
     return "model claimed progress the evidence does not show";
+  // Commitments are the owner's to add by editing, never the model's.
+  if (newPromise.test(text)) return "model made a promise for the owner";
   return null;
 }
 export function approvalProblem(

@@ -453,7 +453,7 @@ describe("drafts never send without an exact approval", () => {
     expect(
       book.modelDraft(
         items.reply_waiting!.id,
-        "Hi Mira, thanks for the note about the checklist. I will take a look.",
+        "Hi Mira, thanks for the note about the checklist. It looks useful.",
         load(),
       ).accepted,
     ).toBe(true);
@@ -494,6 +494,25 @@ describe("drafts never send without an exact approval", () => {
       accepted: false,
       problem: "model claimed progress the evidence does not show",
     });
+    expect(
+      book.modelDraft(
+        items.you_owe_soon!.id,
+        "Hi Mira, I'll review your demo by 2026-10-16.",
+        load(),
+      ),
+    ).toMatchObject({
+      accepted: false,
+      problem: "model made a promise for the owner",
+    });
+    for (const promise of [
+      "Hi Mira, I'll check the demo by 2026-10-15.",
+      "Hi Mira, we will look at it.",
+      "Hi Mira, I am going to send notes.",
+    ])
+      expect(book.modelDraft(overdue, promise, load())).toMatchObject({
+        accepted: false,
+        problem: "model made a promise for the owner",
+      });
     expect(
       book.modelDraft(
         overdue,
