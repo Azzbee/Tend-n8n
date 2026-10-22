@@ -47,7 +47,11 @@ import {
   buildRawMessage,
   decodeRawMessage,
 } from "../src/outreach-gmail.ts";
-import { telegramGuardCode, telegramReplyCode } from "../src/telegram.ts";
+import {
+  configuredLiveGuard,
+  telegramGuardCode,
+  telegramReplyCode,
+} from "../src/telegram.ts";
 
 const at = (iso: string) => () => new Date(iso);
 function world(clock: () => Date = at(FIXTURE_OUTREACH_CLOCK)) {
@@ -322,6 +326,32 @@ describe("drafts never send without an exact approval", () => {
     );
     expect(book.ledger().map((l) => l.action)).toContain("gmail_draft_created");
   });
+  it("hands an approved email to the Gmail step once, so a failed receipt never duplicates the draft", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    const first = book.approvedEmail(load()).items;
+    expect(first.map((i) => i.id)).toEqual([id]);
+    // The receipt step failed: the next scheduled run must not create it again.
+    expect(book.approvedEmail(load()).items).toEqual([]);
+    expect(book.ledger().map((l) => l.action)).toContain("handed_to_gmail");
+    // The late receipt for that hand-off is still accepted.
+    expect(
+      book.recordGmailDraft(id, first[0]!.approval_hash, "r-late", load())
+        .status,
+    ).toBe("gmail_draft_created");
+  });
+  it("hands an email again only after the owner approves it again", () => {
+    const { book, load } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    book.approve(id, codeOf(book, id), load());
+    expect(book.approvedEmail(load()).items).toHaveLength(1);
+    book.edit(id, "Hi Mira, could you share an update? Thanks.", load());
+    book.approve(id, codeOf(book, id), load());
+    expect(book.approvedEmail(load()).items.map((i) => i.id)).toEqual([id]);
+  });
   it("keeps the send path shut when the kill switch is off", () => {
     const store = new TendStore(":memory:");
     store.seed(fixtureContacts, fixtureIdentities, fixtureSources);
@@ -562,9 +592,61 @@ describe("Desk backend and Telegram commands", () => {
         },
       },
     ) as { json: { text: string } }[];
+    const edited = vm.runInNewContext(`(function(){${telegramReplyCode}})()`, {
+      $: () => ({
+        first: () => ({ json: { reply_chat_id: "424242", help: false } }),
+      }),
+      $input: {
+        first: () => ({
+          json: {
+            outbound_sent: false,
+            outreach_item: {
+              id: item.id,
+              status: "pending",
+              text_code: "0a1b2c3d",
+              draft_text: "Hi Mira, any news?",
+            },
+          },
+        }),
+      },
+    }) as { json: { text: string } }[];
+    // After /edit the owner sees the code needed for /approve ID CODE.
+    expect(edited[0]!.json.text).toContain("Code 0a1b2c3d.");
     expect(rendered[0]!.json.text).toContain(
       "Outreach refused: cannot approve a skipped item",
     );
+  });
+  it("lets the live owner guard route /outreach, /approve, /edit and /skip", () => {
+    const guard = configuredLiveGuard(
+      "424242",
+      "424242",
+      "owner-1",
+      "owner-channel",
+    );
+    for (const text of [
+      "/outreach",
+      "/approve Oabc 0a1b2c3d",
+      "/edit Oabc Hi",
+      "/skip Oabc",
+    ]) {
+      const routed = vm.runInNewContext(`(function(){${guard}})()`, {
+        $input: {
+          first: () => ({
+            json: {
+              update_id: 9,
+              message: {
+                message_id: 1,
+                from: { id: 424242, is_bot: false },
+                chat: { id: 424242, type: "private" },
+                text,
+              },
+            },
+          }),
+        },
+      }) as { json: { help: boolean; command: { text: string } } }[];
+      expect(routed[0]!.json.help, text).toBe(false);
+      expect(routed[0]!.json.command.text).toBe(text);
+    }
   });
   it("serves the Desk contract shape", async () => {
     const { service } = createFixtureOutreachService();

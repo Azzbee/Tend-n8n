@@ -23,7 +23,6 @@ export const telegramLiveGuardCode = telegramGuardCode
     "status|today|prep|draft|confirm|done|cancel",
     "status|today|contacts|prep|draft|confirm|done|cancel",
   )
-  .replace("|outreach|approve|edit|skip", "")
   .replace("demo-owner", "CONFIGURE_LIVE_PRINCIPAL_ID")
   .replace("demo-user", "live-owner")
   .replace("demo-private", "live-private")
@@ -61,7 +60,7 @@ else {
  if(typeof reply.preview === 'string')lines.push('Private draft preview only. Nothing sent to a contact.',reply.preview);
  if(Array.isArray(reply.outreach)){lines.push('Outreach drafts. Nothing goes out until you approve; email becomes a Gmail draft you send yourself.');if(!reply.outreach.length)lines.push('None waiting.');for(const item of reply.outreach.filter(record))lines.push(string(item.id)+' code '+string(item.text_code)+' ['+string(item.status)+'] '+string(item.contact_name)+' via '+string(item.channel)+': '+string(item.draft_text));}
  if(typeof reply.outreach_error==='string')lines.push('Outreach refused: '+reply.outreach_error);
- if(record(reply.outreach_item)){const o=reply.outreach_item;lines.push(string(o.id)+': '+string(o.status)+'.',string(o.draft_text));if(typeof o.deep_link==='string')lines.push('Copy and send it yourself: '+o.deep_link);}
+ if(record(reply.outreach_item)){const o=reply.outreach_item;lines.push(string(o.id)+': '+string(o.status)+'.'+(typeof o.text_code==='string'?' Code '+o.text_code+'.':''),string(o.draft_text));if(typeof o.deep_link==='string')lines.push('Copy and send it yourself: '+o.deep_link);}
  if(typeof reply.warning === 'string')lines.push(reply.warning);
 }
 let text = lines.join('\\n');
@@ -98,7 +97,6 @@ export function configuredLiveGuard(
     .replaceAll("CONFIGURE_LIVE_CHANNEL_ID", channelId);
 }
 export const telegramLiveReplyCode = telegramReplyCode
-  .replace(", /outreach, /approve ID CODE, /edit ID text, /skip ID.", ".")
   .replace("['Course demo • fictional data']", "['Tend • private assistant']")
   .replace(
     "Commands: /status, /today, /prep F17,",

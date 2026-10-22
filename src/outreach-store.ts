@@ -57,6 +57,9 @@ interface StoredItem extends Omit<
   approved_text_hash: string | null;
   gmail_draft_id: string | null;
   expiry_reason: string | null;
+  // Set when the approved email is handed to the Gmail draft step, so a run
+  // whose receipt fails cannot create the same draft again.
+  handed_at?: string | null;
   // Scrubbed style examples sent to the model, kept to catch echoes.
   style_examples?: string[];
 }
@@ -354,6 +357,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     const now = this.now();
     item.status = "approved";
     item.approved_at = now.toISOString();
+    item.handed_at = null;
     item.approved_text_hash = textHash(item.draft_text);
     item.expires_at = new Date(now.getTime() + APPROVAL_TTL_MS).toISOString();
     this.put(item);
@@ -410,9 +414,14 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     enabled: boolean;
     items: { id: string; approval_hash: string; message: { raw: string } }[];
   } {
-    const items = this.refresh(snapshot).filter((i) =>
-      this.sendable(i, snapshot),
+    const items = this.refresh(snapshot).filter(
+      (i) => !i.handed_at && this.sendable(i, snapshot),
     );
+    for (const i of items) {
+      i.handed_at = this.now().toISOString();
+      this.put(i);
+      this.log(i.id, "handed_to_gmail", i.approved_text_hash!.slice(0, 16));
+    }
     return {
       enabled: this.options.sendingEnabled,
       items: items.map((i) => ({

@@ -1,3 +1,4 @@
+import { PostgresStore } from "./postgres-store.ts";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { TendStore, isRecord } from "./engine.ts";
@@ -169,6 +170,12 @@ export function createPrivateOutreach(
     sendingEnabled: env.OUTREACH_ENABLED === "true",
   });
   const load = () => liveSnapshotOf(store, owner);
+  // The private bot routes /outreach /approve /edit /skip through the book;
+  // every other command falls through to the store's own handler.
+  if (store instanceof PostgresStore)
+    store.setCommandExtension(async (auth, scoped) =>
+      book.telegram(auth.text, await liveSnapshotOf(scoped, owner)),
+    );
   return {
     service: new OutreachService(book, load),
     route: async (method, path, input) => {
