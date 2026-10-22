@@ -341,3 +341,28 @@ New, low priority:
 
 - **N1 (Low, trade-off):** after the P4 fix, a non-timeout link error inside `addCandidate` rolls back the candidate itself. A persistent linking bug would therefore stop all new candidates on PostgreSQL, where before it only stopped linking. This is the behaviour I asked for. If candidates should survive a link bug, catch in `addCandidate` only, record a fixed phrase, and leave the backfill to rethrow.
 - **N2 (Info):** PostgreSQL builds the set of thread IDs already in use from member rows, not from `commitment_threads`. A thread row whose members were all removed by an `ON DELETE CASCADE` from `live_obligations` stays behind. A new pair that picks the same ID then hits a plain PK conflict and raises. This needs the earlier member's own ID to come back, so it is very unlikely. The fix is to read in-use IDs from `commitment_threads`, or delete empty threads when obligations are removed.
+
+## Re-review 10: R1-R5 fixes, improve/lead 17f3607 (22 Oct, 18:25 Paris)
+
+R1 to R5 are closed. I checked this on an export of 17f3607:
+
+- `tsc --noEmit` is clean.
+- `tests/outreach.test.ts`, `tests/outreach-api.test.ts` and `tests/live-api.test.ts` pass (60/60).
+- I mutation-checked two of the new tests:
+  - Disabling the `recordGmailDraft` repeat branch fails 2 outreach tests.
+  - Reverting the post-batch `enforceRetention(true)` fails "forces a fresh retention run after every sync batch".
+
+How each finding was fixed:
+
+- **R1:** both repeat paths return before any state change.
+  - `recordGmailDraft` checks `gmail_draft_created`, the same `draft_id` and the same approval hash.
+  - `modelDraft` checks for a pending model draft with the same trimmed text, which was already validated when it was first saved.
+- **R2:** both sites force a run.
+- **R3:** all reporters are guarded.
+- **R4:** a savepoint plus `set_config(..., true)` restores the caller's timeout. The catch leaves the savepoint unreleased after `ROLLBACK TO`; this is harmless, since the next `SAVEPOINT` nests.
+- **R5:** ties break on record_key. `localeCompare` and PostgreSQL collation agree for the hex record keys.
+
+New:
+
+- **R2a (Low, performance):** `src/live-api.ts:1182` forces a retention run after _every_ sync batch, including empty ones. Workflows 11, 12 and 15 post a batch every minute, so retention runs about three times a minute again, under the owner lock. That is the contention 292e532 set out to remove.
+  - **Fix:** force only when `stored.length > 0`. An empty batch adds nothing that could be out of window.
