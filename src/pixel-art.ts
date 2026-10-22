@@ -64,6 +64,20 @@ export function profilePixels(): Pixel[] {
   }
   return pixels;
 }
+// A toggle button: the label stays put and aria-pressed carries the state;
+// with the device's reduce-motion setting there is nothing to toggle.
+export function motionButtonState(
+  paused: boolean,
+  reduced: boolean,
+): { label: string; disabled: boolean; pressed: "true" | "false" | null } {
+  return reduced
+    ? { label: "Motion off (device setting)", disabled: true, pressed: null }
+    : {
+        label: "Pause motion",
+        disabled: false,
+        pressed: String(paused) as "true" | "false",
+      };
+}
 export function mountPixelArt(
   canvas: HTMLCanvasElement,
   button: HTMLButtonElement,
@@ -124,12 +138,11 @@ export function mountPixelArt(
   function reconcile(): void {
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
-    button.disabled = motion.matches;
-    button.textContent = motion.matches
-      ? "Motion off (device setting)"
-      : paused
-        ? "Resume motion"
-        : "Pause motion";
+    const state = motionButtonState(paused, motion.matches);
+    button.disabled = state.disabled;
+    button.textContent = state.label;
+    if (state.pressed === null) button.removeAttribute("aria-pressed");
+    else button.setAttribute("aria-pressed", state.pressed);
     draw(0);
     if (animationAllowed(paused, motion.matches, document.hidden))
       frame = requestAnimationFrame(tick);

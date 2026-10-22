@@ -206,6 +206,10 @@ p {
   padding: 3px 7px;
   background: var(--paper);
 }
+.motion[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
 .searchbar {
   margin: 0 32px 26px;
   display: flex;

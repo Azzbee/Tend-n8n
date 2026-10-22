@@ -13,7 +13,11 @@ import {
   indexCoverageLines,
   contactActivityLines,
 } from "../src/private-web-client.ts";
-import { animationAllowed, profilePixels } from "../src/pixel-art.ts";
+import {
+  animationAllowed,
+  motionButtonState,
+  profilePixels,
+} from "../src/pixel-art.ts";
 
 describe("private dashboard presentation", () => {
   it("shows only server-provided contact activity and keeps zero activity explicit", () => {
@@ -148,6 +152,23 @@ describe("private dashboard presentation", () => {
     expect(animationAllowed(false, true, false)).toBe(false);
     expect(animationAllowed(false, false, true)).toBe(false);
     expect(profilePixels().length).toBeGreaterThan(500);
+  });
+  it("marks the motion toggle with aria-pressed and keeps its label", () => {
+    expect(motionButtonState(false, false)).toEqual({
+      label: "Pause motion",
+      disabled: false,
+      pressed: "false",
+    });
+    expect(motionButtonState(true, false)).toEqual({
+      label: "Pause motion",
+      disabled: false,
+      pressed: "true",
+    });
+    expect(motionButtonState(true, true)).toEqual({
+      label: "Motion off (device setting)",
+      disabled: true,
+      pressed: null,
+    });
   });
   it("ships a data-free locked shell and no inline handlers or external assets", () => {
     const html = readFileSync(
