@@ -6,7 +6,7 @@ import {
 import { createHistoryAPI } from "./history-api.ts";
 import { createPrivateWebHandler } from "./private-web.ts";
 import type { PrivateSemanticSearch } from "./private-web-types.ts";
-import type { DeskOutreachBackend } from "./desk-model.ts";
+import type { DeskOutreachBackend, DeskWorkflowRun } from "./desk-model.ts";
 import { SocialReadSessions } from "./social-read-session.ts";
 import { randomUUID } from "node:crypto";
 import { eligiblePromiseSpans } from "./authored-promises.ts";
@@ -55,6 +55,7 @@ export interface LiveServerOptions {
   privateSemanticSearch?: PrivateSemanticSearch;
   dailyOwner?: { owner_id: string; user_id: string; chat_id: string };
   dailyEnabledAt?: string;
+  workflowRuns?: () => Promise<DeskWorkflowRun[]>;
   outreach?: {
     service?: DeskOutreachBackend;
     route: (
@@ -238,6 +239,7 @@ export function createLiveServer(options: LiveServerOptions): Server {
   const privateWeb = createPrivateWebHandler({
     store,
     failureLog: async () => failureLog.list(),
+    ...(options.workflowRuns ? { workflowRuns: options.workflowRuns } : {}),
     ...(options.outreach?.service
       ? { outreach: options.outreach.service }
       : {}),
