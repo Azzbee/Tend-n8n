@@ -1724,51 +1724,74 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
     owner: string,
     groups?: readonly VerifiedContactGroup[],
     cosine?: ActionCosine,
+    only?: readonly string[],
   ): Promise<ThreadRow[]> {
     this.owner(owner);
     const remembered = rememberThreadGroups(owner, groups);
+    // Under the owner lock: SQL scoped to obligations, a 2 s budget, and a savepoint so a slow
+    // link fails on its own (no thread) without undoing the caller's work.
     return this.run(async (s) => {
-      const commitments = await s.obligations(owner),
-        keys = commitments.map((c) => c.record_key),
-        times = keys.length
-          ? await s.q<{ record_key: string; occurred_at: string }>(
-              "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
-              [owner, keys],
-            )
-          : [],
-        added = linkThreads({
-          commitments,
-          occurredAt: new Map(
-            times.map((r) => [r.record_key, String(r.occurred_at)]),
-          ),
-          rows: await s.threadRows(owner),
-          overrides: await s.q<ThreadOverride & QueryResultRow>(
-            "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=$1 ORDER BY commitment_id,other_commitment_id",
-            [owner],
-          ),
-          groups: remembered,
-          ...(cosine ? { cosine } : {}),
-          now: s.clock(),
-        });
-      for (const row of added) {
-        await s.q(
-          "INSERT INTO commitment_threads VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-          [owner, row.thread_id, row.created_at],
-        );
-        await s.q(
-          "INSERT INTO commitment_thread_members VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
-          [
-            owner,
-            row.thread_id,
-            row.commitment_id,
-            row.linked_by,
-            row.similarity,
-            row.created_at,
-          ],
-        );
+      await s.q("SAVEPOINT promise_link");
+      try {
+        await s.q(`SET LOCAL statement_timeout = ${OUTREACH_READ_BUDGET_MS}`);
+        const added = await s.linkWithin(owner, remembered, cosine, only);
+        await s.q("SET LOCAL statement_timeout TO DEFAULT");
+        await s.q("RELEASE SAVEPOINT promise_link");
+        return added;
+      } catch {
+        await s.q("ROLLBACK TO SAVEPOINT promise_link");
+        await s.q("RELEASE SAVEPOINT promise_link");
+        return [];
       }
-      return added;
     });
+  }
+  private async linkWithin(
+    owner: string,
+    remembered: readonly VerifiedContactGroup[],
+    cosine: ActionCosine | undefined,
+    only: readonly string[] | undefined,
+  ): Promise<ThreadRow[]> {
+    const commitments = await this.obligations(owner),
+      keys = commitments.map((c) => c.record_key),
+      times = keys.length
+        ? await this.q<{ record_key: string; occurred_at: string }>(
+            "SELECT record_key,occurred_at FROM live_records WHERE owner_id=$1 AND record_key=ANY($2::text[])",
+            [owner, keys],
+          )
+        : [],
+      added = linkThreads({
+        commitments,
+        occurredAt: new Map(
+          times.map((r) => [r.record_key, String(r.occurred_at)]),
+        ),
+        rows: await this.threadRows(owner),
+        overrides: await this.q<ThreadOverride & QueryResultRow>(
+          "SELECT commitment_id,other_commitment_id FROM commitment_thread_overrides WHERE owner_id=$1 ORDER BY commitment_id,other_commitment_id",
+          [owner],
+        ),
+        groups: remembered,
+        ...(cosine ? { cosine } : {}),
+        ...(only ? { only } : {}),
+        now: this.clock(),
+      });
+    for (const row of added) {
+      await this.q(
+        "INSERT INTO commitment_threads VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+        [owner, row.thread_id, row.created_at],
+      );
+      await this.q(
+        "INSERT INTO commitment_thread_members VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+        [
+          owner,
+          row.thread_id,
+          row.commitment_id,
+          row.linked_by,
+          row.similarity,
+          row.created_at,
+        ],
+      );
+    }
+    return added;
   }
   private async separateCommitment(owner: string, id: string): Promise<void> {
     const split = separateFromThread(await this.threadRows(owner), id),
@@ -1833,7 +1856,7 @@ SELECT * FROM live_records WHERE owner_id=$1 AND (record_key IN (SELECT record_k
         evidence_valid: true,
       };
       await s.put(c);
-      await s.linkPromiseThreads(raw.owner_id);
+      await s.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
       return c;
     });
   }

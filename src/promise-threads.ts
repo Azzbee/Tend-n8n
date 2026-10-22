@@ -40,14 +40,19 @@ export const THREAD_TOKEN_THRESHOLD = 0.7;
 export const THREAD_COSINE_THRESHOLD = 0.9;
 export const THREAD_DUE_DAYS = 2;
 export const THREAD_WINDOW_DAYS = 21;
+export const THREAD_PASS_LIMIT = 200;
 
 const stopwords = new Set(
   "a an the to by for of on in at with and or i i'll ill will we we'll you your yours my me our us it this that be is are am just also over up please".split(
     " ",
   ),
 );
+const tokenCache = new Map<string, string[]>();
 export function actionTokens(text: string): string[] {
-  return [
+  const cached = tokenCache.get(text);
+  if (cached) return cached;
+  if (tokenCache.size >= 2000) tokenCache.clear();
+  const tokens = [
     ...new Set(
       text
         .toLowerCase()
@@ -63,6 +68,8 @@ export function actionTokens(text: string): string[] {
         .filter((t) => t.length > 1 && !stopwords.has(t) && !/^\d+$/.test(t)),
     ),
   ];
+  tokenCache.set(text, tokens);
+  return tokens;
 }
 /** Dice coefficient over normalized content tokens. */
 export function tokenSimilarity(a: string, b: string): number {
@@ -127,6 +134,10 @@ export function linkThreads(input: {
   groups?: readonly VerifiedContactGroup[];
   cosine?: ActionCosine;
   now: Date;
+  /** Link only these commitments (for example the one just added); others can still be their partners. */
+  only?: readonly string[];
+  /** At most this many loose commitments are tried per pass, so a backfill is spread over several passes. */
+  limit?: number;
 }): ThreadRow[] {
   const at = (c: Commitment): number =>
     Date.parse(input.occurredAt.get(c.record_key) ?? "") || 0;
@@ -163,8 +174,12 @@ export function linkThreads(input: {
     .sort(
       (a, b) => at(a) - at(b) || a.commitment_id.localeCompare(b.commitment_id),
     );
+  const only = input.only ? new Set(input.only) : null;
+  let budget = input.limit ?? THREAD_PASS_LIMIT;
   for (const c of loose) {
     if (placed.has(c.commitment_id)) continue;
+    if (only && !only.has(c.commitment_id)) continue;
+    if (budget-- <= 0) break;
     let best = null as { id: string; score: number } | null;
     for (const [id, members] of threads) {
       const live = members.filter(open);
@@ -183,19 +198,26 @@ export function linkThreads(input: {
           partner = { other, score };
       }
       if (!partner) continue;
-      // Loose commitments are in time order, so the thread id comes from the earlier one and never changes.
-      const id = `T${c.commitment_id}`;
+      // The thread id comes from the earlier sighting, so it never changes as later ones join.
+      const earlier =
+        at(partner.other) < at(c) ||
+        (at(partner.other) === at(c) &&
+          partner.other.commitment_id < c.commitment_id)
+          ? partner.other
+          : c;
+      const id = `T${earlier.commitment_id}`;
+      const later = earlier === c ? partner.other : c;
       added.push(
         {
           thread_id: id,
-          commitment_id: c.commitment_id,
+          commitment_id: earlier.commitment_id,
           linked_by: "auto",
           similarity: null,
           created_at: created,
         },
         {
           thread_id: id,
-          commitment_id: partner.other.commitment_id,
+          commitment_id: later.commitment_id,
           linked_by: "auto",
           similarity: partner.score,
           created_at: created,

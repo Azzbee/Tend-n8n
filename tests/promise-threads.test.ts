@@ -40,6 +40,8 @@ function link(
     overrides?: { commitment_id: string; other_commitment_id: string }[];
     at?: Map<string, string>;
     cosine?: (a: string, b: string) => number | null;
+    only?: string[];
+    limit?: number;
   } = {},
 ): ThreadRow[] {
   return linkThreads({
@@ -53,6 +55,8 @@ function link(
     overrides: extra.overrides ?? [],
     ...(extra.groups ? { groups: extra.groups } : {}),
     ...(extra.cosine ? { cosine: extra.cosine } : {}),
+    ...(extra.only ? { only: extra.only } : {}),
+    ...(extra.limit !== undefined ? { limit: extra.limit } : {}),
     now,
   });
 }
@@ -198,6 +202,23 @@ describe("linking promise threads", () => {
         { at: far },
       ),
     ).toEqual([]);
+  });
+  it("links only the named new commitment, names the thread after the earlier sighting, and caps each pass", () => {
+    const old1 = commitment("Z1"),
+      old2 = commitment("Z2", { source: "linkedin" }),
+      fresh = commitment("A9", { source: "whatsapp_personal" });
+    const at = times([
+      ["Z1", "2026-10-10T08:00:00Z"],
+      ["Z2", "2026-10-11T08:00:00Z"],
+      ["A9", "2026-10-12T08:00:00Z"],
+    ]);
+    // Only the new one is tried, so the two older loose sightings are not backfilled here.
+    const rows = link([old1, old2, fresh], { at, only: ["A9"] });
+    expect(rows.map((r) => [r.thread_id, r.commitment_id])).toEqual([
+      ["TZ1", "Z1"],
+      ["TZ1", "A9"],
+    ]);
+    expect(link([old1, old2, fresh], { at, limit: 0 })).toEqual([]);
   });
   it("adds a third sighting to the existing thread and never re-links an owner split", () => {
     const a = commitment("A"),

@@ -2677,7 +2677,7 @@ export class TendStore {
           evidence_valid: true,
         };
         this.put(proposed);
-        this.linkPromiseThreads(raw.owner_id);
+        this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
         return proposed;
       }
       if (current.status === "confirmed" && current.evidence_valid === false)
@@ -2703,7 +2703,7 @@ export class TendStore {
     this.db
       .prepare("INSERT INTO commitments VALUES(?,?,?,?)")
       .run(id, c.owner_id, c.record_key, JSON.stringify(c));
-    this.linkPromiseThreads(raw.owner_id);
+    this.linkPromiseThreads(raw.owner_id, undefined, undefined, [id]);
     return c;
   }
   commitments(owner: string): ThreadedCommitment[] {
@@ -2753,6 +2753,7 @@ export class TendStore {
     owner: string,
     groups?: readonly VerifiedContactGroup[],
     cosine?: ActionCosine,
+    only?: readonly string[],
   ): ThreadRow[] {
     this.assertOwner(owner);
     const remembered = rememberThreadGroups(owner, groups);
@@ -2769,6 +2770,7 @@ export class TendStore {
       overrides: this.threadOverrides(owner),
       groups: remembered,
       ...(cosine ? { cosine } : {}),
+      ...(only ? { only } : {}),
       now: this.clock(),
     });
     for (const row of added) {
