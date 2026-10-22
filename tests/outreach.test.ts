@@ -342,6 +342,28 @@ describe("drafts never send without an exact approval", () => {
         .status,
     ).toBe("gmail_draft_created");
   });
+  it("answers a resent /approve with the same approval, never a second one", () => {
+    const { book, load, setNow } = world();
+    book.plan(load());
+    const id = byReason(book, load()).overdue_owed_to_you!.id;
+    const code = codeOf(book, id);
+    const first = book.approve(id, code, load());
+    setNow(
+      new Date(Date.parse(FIXTURE_OUTREACH_CLOCK) + 3600000).toISOString(),
+    );
+    // The private bot's reply was rolled back; the owner sends it again.
+    const again = book.approve(id, code, load());
+    expect(again).toMatchObject({
+      status: "approved",
+      expires_at: first.expires_at,
+    });
+    expect(book.ledger().filter((l) => l.action === "approved")).toHaveLength(
+      1,
+    );
+    expect(() => book.approve(id, "00000000", load())).toThrow(
+      "cannot approve a approved item",
+    );
+  });
   it("flags an approved email whose Gmail receipt never arrived", () => {
     const { book, load, setNow } = world();
     book.plan(load());
