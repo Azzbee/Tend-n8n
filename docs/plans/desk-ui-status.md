@@ -67,6 +67,8 @@ Chrome note for parallel testers: session cookies are scoped by host, not port, 
 - F6 (approving an email promised a Gmail draft with sending off): the outreach service now returns `sending_enabled` (improve/outreach `aef8216`, merged here in `45ab491`). The Desk shows "Sending is switched off: approvals never create Gmail drafts.", gives a matching notice and detail, and offers Copy text on approved emails. With no flag it promises nothing. Checked in Chrome on the private-lane preview (`OUTREACH_ENABLED=false`).
 - F9 (Outreach queue squeezed into the side column at 1440): the queue is now a full-width card grid below the Desk (4 columns at 1440, 1 column at 390). Checked in a real 390 px popup window: 3 cards, no overflow, buttons at least 44 px.
 
+- F12 (approved outreach cards did not say when the approval ends): `54d587d` shows "Approval ends <Paris time>", or "Approval window has ended" once it has passed. tend-verify checked it in Chrome on the real composition: an approved WhatsApp card showed "Approval ends Fri 23 Oct, 11:21", 24 hours after approval.
+
 Full suite after the merge: 1313 passed, 16 skipped; only the two PostgreSQL files fail (sandbox `shmget`).
 
 ## Open items
