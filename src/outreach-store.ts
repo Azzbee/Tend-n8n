@@ -122,12 +122,13 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   private now(): Date {
     return this.clock();
   }
-  private all(): StoredItem[] {
+  // Filters in SQL so expired history is never parsed on a Desk read.
+  private rows(where = "", ...params: string[]): StoredItem[] {
     return this.db
       .prepare(
-        "SELECT data FROM outreach_items WHERE owner_id=? ORDER BY created_at,id",
+        `SELECT data FROM outreach_items WHERE owner_id=?${where} ORDER BY created_at,id`,
       )
-      .all(this.options.owner_id)
+      .all(this.options.owner_id, ...params)
       .map((r) => JSON.parse(String(r.data)) as StoredItem);
   }
   private get(id: string): StoredItem {
@@ -173,9 +174,10 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   // (or the commitment behind them) changed since the draft was written.
   private refresh(snapshot: OutreachSnapshot): StoredItem[] {
     const now = this.now().getTime();
-    const items = this.all();
+    const items = this.rows(
+      " AND json_extract(data,'$.status') IN ('pending','approved')",
+    );
     for (const item of items) {
-      if (item.status !== "pending" && item.status !== "approved") continue;
       const records = item.evidence_keys
         .map((k) => snapshot.interactions.find((r) => r.record_key === k))
         .filter((r) => r !== undefined);
@@ -264,7 +266,9 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
   } {
     this.refresh(snapshot);
     const now = this.now();
-    const prior = this.all().map((i) => ({
+    // Same window as withinRateLimit: only items created in the last 3 days.
+    const since = new Date(now.getTime() - RATE_LIMIT_MS).toISOString();
+    const prior = this.rows(" AND created_at>?", since).map((i) => ({
       item_key: i.item_key,
       created_at: i.created_at,
     }));
@@ -370,12 +374,18 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     this.log(item.id, "model_draft", item.style_basis);
     return { accepted: true, problem: null, item: this.view(item) };
   }
-  list(snapshot: OutreachSnapshot): {
+  list(
+    snapshot: OutreachSnapshot,
+    includeExpired = true,
+  ): {
     items: OutreachItem[];
     sending_enabled: boolean;
   } {
+    this.refresh(snapshot);
     return {
-      items: this.refresh(snapshot).map((i) => this.view(i)),
+      items: this.rows(
+        includeExpired ? "" : " AND json_extract(data,'$.status')<>'expired'",
+      ).map((i) => this.view(i)),
       sending_enabled: this.options.sendingEnabled,
     };
   }
@@ -517,7 +527,7 @@ CREATE TABLE IF NOT EXISTS outreach_ledger(seq INTEGER PRIMARY KEY AUTOINCREMENT
     if (cmd === "outreach" && !rest.trim())
       return {
         outbound_sent: false,
-        outreach: this.list(snapshot).items.filter(
+        outreach: this.list(snapshot, false).items.filter(
           (i) => i.status === "pending" || i.status === "approved",
         ),
       };

@@ -53,7 +53,8 @@ export class OutreachService {
     this.load = load;
   }
   async list(): Promise<ReturnType<OutreachBook["list"]>> {
-    return this.book.list(await this.load());
+    // The Desk: expired drafts are history, not something to act on.
+    return this.book.list(await this.load(), false);
   }
   async approve(id: string, seen: string): Promise<OutreachItem> {
     return this.book.approve(id, seen, await this.load());

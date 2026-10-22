@@ -344,7 +344,7 @@ describe("quiet hours and rate limit", () => {
 });
 
 describe("approval, expiry and recipient checks", () => {
-  it("expires an approval after 24 hours", () => {
+  it("expires an approval after 24 hours", async () => {
     const { book, load, setNow } = world();
     book.plan(load());
     const id = byReason(book, load()).overdue_owed_to_you!.id;
@@ -354,6 +354,12 @@ describe("approval, expiry and recipient checks", () => {
     setNow("2026-10-18T07:00:00Z");
     expect(byReason(book, load()).overdue_owed_to_you!.status).toBe("expired");
     expect(book.approvedEmail(load()).items).toEqual([]);
+    // The Desk and /outreach list only what can still be acted on.
+    const desk = new OutreachService(book, load);
+    const listed = (await desk.list()).items;
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.some((i) => i.id === id)).toBe(false);
+    expect(listed.every((i) => i.status !== "expired")).toBe(true);
     expect(() => book.approve(id, codeOf(book, id), load())).toThrow(/expired/);
   });
   it("expires an approval when its evidence changes", () => {
