@@ -102,3 +102,7 @@ Each is a separate commit; the test in each fails without the fix (checked by re
 - `d1d09c1` H1: gmail.compose-only custom scopes in the re-consent steps and the workflow 26 node note; test in `tests/outreach-workflows.test.ts`.
 - `430c2c3` M2: shared `src/instruction-like.ts` for the Desk and the planner; test in `tests/desk-model.test.ts`.
 - `0fee381` L2: Specification export count (21 → 26). The outreach-status error-workflow line is fixed inside `d1d09c1`.
+
+## Re-review 1: improve/lead at cd5ff58 (22 Oct, 11:00 Paris)
+
+New since 05f7050: workflows 22-26 listed on How it runs (`src/desk-model.ts` `workflowCatalog`), and the Desk preview server now goes through `createLiveServer` with `createPrivateOutreach` (`:memory:` ledger, `OUTREACH_ENABLED=false`, in-memory `InternalAuth`, ports 18767/18768/18769/5678 refused). No new findings. The one merge conflict (imports in `tests/desk-model.test.ts`) was resolved by keeping both imports. On the merged tree: typecheck, lint, build (26 exports, no diff), format pass; 1309 tests passed, 16 skipped; the same 2 Postgres files fail on sandbox shared memory. H2, M1 and M3 are still open.
