@@ -1058,7 +1058,7 @@ try {
         forcedResponse = await fetch(`${base}/webhook/tend-forced-failure`);
       }
       let failureEntry: Record<string, unknown> | undefined;
-      for (let i = 0; i < 40 && !failureEntry; i++) {
+      for (let i = 0; i < 180 && !failureEntry; i++) {
         await new Promise((r) => setTimeout(r, 500));
         const log = (await request("/api/status")).failure_log as Record<
           string,

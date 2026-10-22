@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-22T09:25:17.619Z",
+  "checked_at": "2026-10-22T09:32:23.360Z",
   "workflow_sha256": {
     "01-gmail.json": "d73b089dc73c842be2e0c2e35c68eef27f00347dc30a46e669d005b21ac9cfb5",
     "02-calendar.json": "a19473151eb14ff76deaaeb3a18f24c28dc4bfa9f5f56c51a53f1b22d624f1ba",
@@ -33,7 +33,7 @@
     "server.ts": "45252ed12cf89c5c08ea75db83507744f4ed1440bbe7a348a01edc38d9b087d1",
     "build-workflows.ts": "d6b57867aece44fec26abf412931b659284868b7a09b63384657588fa085bdd0",
     "fixtures.ts": "709737a044fb8fe62e554555716076085d7069d6e55b5680e43d4ff320483d1b",
-    "integration.ts": "ab22791ed717993e236b5a7bca79942dadd692c79f10671169d940024817922c"
+    "integration.ts": "369501100cf66c364c5bb8d5f84c57308d37f1d5f5cb043a88d4784ed0d6ca63"
   },
   "runtime": {
     "node": "v22.17.0",
