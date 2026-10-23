@@ -417,6 +417,181 @@ describe("conservative attribution edge cases", () => {
       }
     },
   );
+  it.each(["gmail", "calendar"])(
+    "preserves optional hidden descendants and raw script/style literals in %s",
+    (source) => {
+      for (const description of [
+        "<div hidden><p>ignored</div><p>I will send the demo by 2026-10-26.</p>",
+        '<script>const s="<b>";</script><p>I will send the demo by 2026-10-26.</p>',
+        "<script><!--ignored--></script><p>I will send the demo by 2026-10-26.</p>",
+        '<SCRIPT>const s="<b>";</ScRiPt ><p>I will send the demo by 2026-10-26.</p>',
+        "<svg/><math/><p>I will send the demo by 2026-10-26.</p>",
+        '<svg><rect visibility="hidden"/></svg><math><mi hidden/></math><p>I will send the demo by 2026-10-26.</p>',
+        '<style>.x::before { content: "<b>"; }</style><p>I will send the demo by 2026-10-26.</p>',
+        '<div><script>const s="</div><p>ignored";</script></div><p>I will send the demo by 2026-10-26.</p>',
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result.kind).toBe("accepted");
+        if (result.kind !== "accepted") throw new Error("not accepted");
+        expect(result.record.body_text).toContain(
+          "I will send the demo by 2026-10-26.",
+        );
+        expect(result.record.body_text).not.toMatch(/ignored|const s|content:/);
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "rejects an ambiguous double-escaped script close in %s",
+    (source) => {
+      const description =
+        "<script><!--<script></script>I will send the demo by 2026-10-26.";
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result).toMatchObject({
+        kind: "quarantined",
+        reason: "malformed_suppressed_html",
+      });
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "rejects self-closing HTML descendants that escape hidden ancestors in %s",
+    (source) => {
+      for (const description of [
+        "<div hidden><div/>ignored</div>I will send the demo by 2026-10-26.",
+        "<div><div hidden><div/>ignored</div>I will send the demo by 2026-10-26.</div>",
+      ]) {
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "malformed_suppressed_html",
+        });
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "excludes inert template contents from visible evidence in %s",
+    (source) => {
+      const description =
+        "<template>I will send confidential notes.</template><p>I will review the demo.</p>";
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.body_text).toContain("I will review the demo.");
+      expect(result.record.body_text).not.toContain("confidential");
+      expect(result.record.authored_text).not.toContain("confidential");
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "rejects ambiguous self-closing suppression roots in %s",
+    (source) => {
+      for (const opening of [
+        "script/",
+        "style/",
+        "div hidden/",
+        'span style="display:none"/',
+      ]) {
+        const description = `<${opening}>I will send the demo by 2026-10-26.`;
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "malformed_suppressed_html",
+        });
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "rejects an ancestor close that escapes unclosed suppressed HTML in %s",
+    (source) => {
+      for (const opening of ["script", "style", "span hidden"]) {
+        const description = `<div><${opening}>ignored</div>I will send the demo by 2026-10-26.`;
+        const input = mail();
+        input.payload.mimeType = "text/html";
+        input.payload.body.data = encoded(description);
+        const result =
+          source === "gmail"
+            ? normalizeGmailMessage(input, context)
+            : normalizeCalendarEvent(
+                { ...event(), description },
+                { ...context, calendar_id: "primary" },
+              );
+        expect(result).toMatchObject({
+          kind: "quarantined",
+          reason: "malformed_suppressed_html",
+        });
+      }
+    },
+  );
+  it.each(["gmail", "calendar"])(
+    "preserves visible text after explicitly closed suppressed HTML in %s",
+    (source) => {
+      const description =
+        "<div><script>ignored</script><style>ignored</style><span hidden>ignored</span></div><p>I will send the demo by 2026-10-26.</p>";
+      const input = mail();
+      input.payload.mimeType = "text/html";
+      input.payload.body.data = encoded(description);
+      const result =
+        source === "gmail"
+          ? normalizeGmailMessage(input, context)
+          : normalizeCalendarEvent(
+              { ...event(), description },
+              { ...context, calendar_id: "primary" },
+            );
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error("not accepted");
+      expect(result.record.body_text).toContain(
+        "I will send the demo by 2026-10-26.",
+      );
+      expect(result.record.body_text).not.toContain("ignored");
+      if (source === "gmail")
+        expect(result.record.authored_text).toBe(
+          "I will send the demo by 2026-10-26.",
+        );
+    },
+  );
   it("preserves comments, declarations, quoted angle brackets and hidden text in valid HTML", () => {
     const input = mail();
     input.payload.mimeType = "text/html";

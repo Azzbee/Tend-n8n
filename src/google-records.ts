@@ -335,7 +335,8 @@ function entities(value: string): string {
 }
 /** Text-only HTML tokenizer. Attributes are never interpreted as URLs or fetched. */
 function htmlText(html: string): string {
-  const stack: { tag: string; suppressed: boolean }[] = [];
+  const stack: { tag: string; suppressed: boolean; ownSuppression: boolean }[] =
+    [];
   const voidTags = new Set([
     "area",
     "base",
@@ -421,12 +422,13 @@ function htmlText(html: string): string {
         if (voidTags.has(tag)) continue;
         throw new Error("malformed_html");
       }
+      if (stack.slice(index + 1).some((s) => s.ownSuppression))
+        throw new Error("malformed_suppressed_html");
       stack.splice(index);
       if (blocks.has(tag) && !stack.some((s) => s.suppressed)) text += "\n";
       continue;
     }
-    const suppressed =
-      parentBlocked ||
+    const ownSuppression =
       [
         "blockquote",
         "script",
@@ -438,16 +440,46 @@ function htmlText(html: string): string {
         "svg",
         "math",
         "noscript",
+        "template",
       ].includes(tag) ||
       /(?:gmail_quote|gmail_attr|gmail_signature|yahoo_quoted|moz-cite-prefix|moz-signature)/i.test(
         attrs,
       ) ||
       /(?:\bhidden\b|display\s*:\s*none|visibility\s*:\s*hidden)/i.test(attrs);
+    const suppressed = parentBlocked || ownSuppression;
+    const selfClosing = /\/\s*$/.test(attrs);
+    if (
+      suppressed &&
+      selfClosing &&
+      !voidTags.has(tag) &&
+      tag !== "svg" &&
+      tag !== "math" &&
+      !stack.some((s) => s.tag === "svg" || s.tag === "math")
+    )
+      throw new Error("malformed_suppressed_html");
     if (!suppressed && (blocks.has(tag) || tag === "br" || tag === "hr"))
       text += "\n";
-    if (!voidTags.has(tag) && !/\/\s*$/.test(attrs))
-      stack.push({ tag, suppressed });
+    if (!voidTags.has(tag) && !selfClosing)
+      stack.push({ tag, suppressed, ownSuppression });
     if (stack.length > 100) throw new Error("html_structure_limit");
+    if (tag === "script" || tag === "style") {
+      const close = new RegExp(`</${tag}(?=[\\t\\n\\f\\r />])`, "gi");
+      close.lastIndex = offset;
+      const match = close.exec(html);
+      if (!match) throw new Error("malformed_suppressed_html");
+      if (tag === "script") {
+        // Double-escaped script data can contain an apparent closing script tag.
+        let escaped = false;
+        for (const marker of html
+          .slice(offset, match.index)
+          .matchAll(/<!--|-->|<script(?=[\t\n\f\r />])/gi)) {
+          if (marker[0] === "<!--") escaped = true;
+          else if (marker[0] === "-->") escaped = false;
+          else if (escaped) throw new Error("malformed_suppressed_html");
+        }
+      }
+      offset = match.index;
+    }
   }
   if (stack.some((s) => s.suppressed))
     throw new Error("malformed_suppressed_html");
